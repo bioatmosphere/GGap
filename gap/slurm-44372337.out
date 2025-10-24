@@ -1,0 +1,250 @@
+
+Lmod is automatically replacing "cudatoolkit/12.4" with "cuda/12.2".
+
+
+Lmod is automatically replacing "cray-mpich/8.1.30" with "openmpi/5.0.7".
+
+/global/cfs/cdirs/m2467/wangb/GGap/.venv/lib/python3.13/site-packages/cupyx/jit/_interface.py:173: FutureWarning: cupyx.jit.rawkernel is experimental. The interface can change in the future.
+  cupy._util.experimental('cupyx.jit.rawkernel')
+============================================================
+GGap Forest Gap Dynamics Model
+GPU-Accelerated UVAFME-based Simulation
+============================================================
+
+Simulation Parameters:
+  Number of trees: 200
+  Forest size: 100.0m x 100.0m
+  Simulation duration: 100 years
+  Neighborhood radius: 10.0m
+  Degree days: 2500.0
+  Drought days: 30.0
+  Base mortality rate: 0.02
+  Report interval: 10 years
+
+Creating initial forest...
+
+--- Year 0 Forest Statistics ---
+Total trees: 200
+Living trees: 200
+Dead trees: 0
+
+Average age: 27.5 years
+Average height: 5.7 m
+Average diameter: 14.2 cm
+Total biomass: 7250.3 kg C
+
+Species distribution:
+  Red Maple: 28
+  Loblolly Pine: 32
+  White Oak: 54
+  Sweetgum: 41
+  Eastern Hemlock: 30
+  Tulip Poplar: 15
+
+Setting up GPU kernels...
+Starting simulation...
+
+
+--- Year 10 Forest Statistics ---
+Total trees: 200
+Living trees: 195
+Dead trees: 5
+
+Average age: 37.4 years
+Average height: 8.0 m
+Average diameter: 22.1 cm
+Total biomass: 19210.2 kg C
+
+Species distribution:
+  Red Maple: 28
+  Loblolly Pine: 29
+  White Oak: 53
+  Sweetgum: 41
+  Eastern Hemlock: 30
+  Tulip Poplar: 14
+
+--- Year 20 Forest Statistics ---
+Total trees: 200
+Living trees: 192
+Dead trees: 8
+
+Average age: 47.7 years
+Average height: 9.8 m
+Average diameter: 29.4 cm
+Total biomass: 38675.4 kg C
+
+Species distribution:
+  Red Maple: 28
+  Loblolly Pine: 29
+  White Oak: 52
+  Sweetgum: 41
+  Eastern Hemlock: 28
+  Tulip Poplar: 14
+
+--- Year 30 Forest Statistics ---
+Total trees: 200
+Living trees: 188
+Dead trees: 12
+
+Average age: 57.6 years
+Average height: 11.4 m
+Average diameter: 36.1 cm
+Total biomass: 65046.4 kg C
+
+Species distribution:
+  Red Maple: 27
+  Loblolly Pine: 29
+  White Oak: 51
+  Sweetgum: 40
+  Eastern Hemlock: 27
+  Tulip Poplar: 14
+
+--- Year 40 Forest Statistics ---
+Total trees: 200
+Living trees: 184
+Dead trees: 16
+
+Average age: 67.6 years
+Average height: 12.9 m
+Average diameter: 42.6 cm
+Total biomass: 98157.7 kg C
+
+Species distribution:
+  Red Maple: 26
+  Loblolly Pine: 29
+  White Oak: 50
+  Sweetgum: 40
+  Eastern Hemlock: 25
+  Tulip Poplar: 14
+
+--- Year 50 Forest Statistics ---
+Total trees: 200
+Living trees: 182
+Dead trees: 18
+
+Average age: 77.5 years
+Average height: 14.0 m
+Average diameter: 48.5 cm
+Total biomass: 136304.8 kg C
+
+Species distribution:
+  Red Maple: 26
+  Loblolly Pine: 29
+  White Oak: 48
+  Sweetgum: 40
+  Eastern Hemlock: 25
+  Tulip Poplar: 14
+
+--- Year 60 Forest Statistics ---
+Total trees: 200
+Living trees: 178
+Dead trees: 22
+
+Average age: 87.5 years
+Average height: 15.1 m
+Average diameter: 53.9 cm
+Total biomass: 176254.8 kg C
+
+Species distribution:
+  Red Maple: 26
+  Loblolly Pine: 28
+  White Oak: 46
+  Sweetgum: 40
+  Eastern Hemlock: 24
+  Tulip Poplar: 14
+
+--- Year 70 Forest Statistics ---
+Total trees: 200
+Living trees: 173
+Dead trees: 27
+
+Average age: 97.5 years
+Average height: 15.9 m
+Average diameter: 59.0 cm
+Total biomass: 215807.4 kg C
+
+Species distribution:
+  Red Maple: 24
+  Loblolly Pine: 27
+  White Oak: 45
+  Sweetgum: 39
+  Eastern Hemlock: 24
+  Tulip Poplar: 14
+
+--- Year 80 Forest Statistics ---
+Total trees: 200
+Living trees: 167
+Dead trees: 33
+
+Average age: 107.2 years
+Average height: 16.7 m
+Average diameter: 63.7 cm
+Total biomass: 254230.0 kg C
+
+Species distribution:
+  Red Maple: 23
+  Loblolly Pine: 26
+  White Oak: 44
+  Sweetgum: 37
+  Eastern Hemlock: 23
+  Tulip Poplar: 14
+
+--- Year 90 Forest Statistics ---
+Total trees: 200
+Living trees: 160
+Dead trees: 40
+
+Average age: 117.5 years
+Average height: 17.5 m
+Average diameter: 68.2 cm
+Total biomass: 291351.3 kg C
+
+Species distribution:
+  Red Maple: 22
+  Loblolly Pine: 26
+  White Oak: 42
+  Sweetgum: 35
+  Eastern Hemlock: 21
+  Tulip Poplar: 14
+
+--- Year 100 Forest Statistics ---
+Total trees: 200
+Living trees: 153
+Dead trees: 47
+
+Average age: 127.5 years
+Average height: 18.1 m
+Average diameter: 72.4 cm
+Total biomass: 324737.1 kg C
+
+Species distribution:
+  Red Maple: 20
+  Loblolly Pine: 25
+  White Oak: 39
+  Sweetgum: 35
+  Eastern Hemlock: 20
+  Tulip Poplar: 14
+
+============================================================
+Simulation Complete
+============================================================
+
+Final Forest State:
+
+--- Forest Statistics ---
+Total trees: 200
+Living trees: 153
+Dead trees: 47
+
+Average age: 127.5 years
+Average height: 18.1 m
+Average diameter: 72.4 cm
+Total biomass: 324737.1 kg C
+
+Species distribution:
+  Red Maple: 20
+  Loblolly Pine: 25
+  White Oak: 39
+  Sweetgum: 35
+  Eastern Hemlock: 20
+  Tulip Poplar: 14

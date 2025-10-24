@@ -14,7 +14,7 @@ if _sagesim_path not in sys.path:
     sys.path.insert(0, _sagesim_path)
 
 from sagesim.model import Model
-from sagesim.space import Space
+from sagesim.space import NetworkSpace
 from gap.tree_breed import TreeBreed
 from gap.tree_species_data import get_species_params, get_all_species_ids
 
@@ -47,7 +47,7 @@ class GAPModel(Model):
             Base annual mortality probability (0-1)
         """
         # Create a simple space (will be enhanced with spatial indexing later)
-        space = Space()
+        space = NetworkSpace()
         super().__init__(space)
 
         # Create and register tree breed
