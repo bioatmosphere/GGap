@@ -52,34 +52,77 @@ def light_step(
     Calculate light availability for each tree based on shading from neighbors.
 
     Taller neighboring trees cast shade, reducing light availability.
-    This implements a simplified version of UVAFME's canopy light model.
+    Uses Beer-Lambert law: light = exp(-k * LAI_above)
 
-    Global parameters:
-    [0] neighborhood_radius: Distance threshold for light competition (meters)
-    [1] deg_days: Annual degree days for temperature response
-    [2] dry_days: Annual drought days
+    In a fully connected gap, all trees are neighbors.
+    A tree is shaded by all neighbors that are taller than it.
     """
-    # Get global parameters
-    neighborhood_radius = globals[0]
+    # Light extinction coefficient (from UVAFME)
+    XT = -0.40
 
     # Get tree properties
     is_alive = int(get_this_agent_data_from_tensor(agent_index, is_alive_tensor))
 
     # Only process living trees
     if is_alive == 1:
-        height = get_this_agent_data_from_tensor(agent_index, forska_ht_tensor)
-        x = get_this_agent_data_from_tensor(agent_index, x_tensor)
-        y = get_this_agent_data_from_tensor(agent_index, y_tensor)
-        species_id = int(get_this_agent_data_from_tensor(agent_index, species_id_tensor))
+        my_height = get_this_agent_data_from_tensor(agent_index, forska_ht_tensor)
+        my_canopy_ht = get_this_agent_data_from_tensor(agent_index, canopy_ht_tensor)
+        my_diam = get_this_agent_data_from_tensor(agent_index, diam_bht_tensor)
 
-        # Start with full light
-        light_available = 1.0
+        # Get neighbor indices for this agent
+        neighbor_indices = locations[agent_index]
 
-        # For initial implementation, use simple light availability
-        # Full model would calculate shading from neighbors
-        light_available = 1.0
+        # Sum LAI from all taller neighbors
+        total_lai_above = 0.0
 
-        # Write light availability (SAGESim handles write buffering)
+        # Loop through neighbors
+        i = 0
+        while i < len(neighbor_indices) and neighbor_indices[i] != -1:
+            neighbor_idx = neighbor_indices[i]
+
+            # Check if neighbor is alive
+            neighbor_alive = int(is_alive_tensor[neighbor_idx])
+
+            if neighbor_alive == 1:
+                neighbor_height = forska_ht_tensor[neighbor_idx]
+                neighbor_canopy_ht = canopy_ht_tensor[neighbor_idx]
+                neighbor_diam = diam_bht_tensor[neighbor_idx]
+
+                # Only count neighbors taller than this tree
+                if neighbor_height > my_height:
+                    # Calculate neighbor's LAI contribution
+                    # Simplified LAI: proportional to crown projection area
+                    # LAI ~ diameter^2 * leafdiam_a (using 0.01 as default leafdiam_a)
+                    # Spread across canopy layers
+                    canopy_depth = neighbor_height - neighbor_canopy_ht
+                    if canopy_depth < 1.0:
+                        canopy_depth = 1.0
+
+                    # LAI per meter of canopy = (diameter^2 * 0.01) / canopy_depth
+                    neighbor_lai = (neighbor_diam * neighbor_diam * 0.01) / canopy_depth
+
+                    # Only count the portion above this tree's height
+                    overlap = neighbor_height - my_height
+                    if overlap > canopy_depth:
+                        overlap = canopy_depth
+
+                    lai_contribution = neighbor_lai * overlap
+                    total_lai_above = total_lai_above + lai_contribution
+
+            i = i + 1
+
+        # Apply Beer-Lambert law to get light availability
+        # light_avail = exp(XT * LAI)
+        # XT is negative, so more LAI = less light
+        light_available = cp.exp(XT * total_lai_above)
+
+        # Clamp to valid range
+        if light_available < 0.0:
+            light_available = 0.0
+        if light_available > 1.0:
+            light_available = 1.0
+
+        # Write light availability
         set_this_agent_data_from_tensor(
             agent_index, light_avail_tensor, light_available
         )

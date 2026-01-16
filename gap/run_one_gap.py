@@ -1,6 +1,6 @@
 """
-Run script for GGap forest gap dynamics model.
-Demonstrates UVAFME-based forest simulation using SAGESim framework.
+Run script for a single gap simulation.
+Uses initialize_plot() to create and connect tree agents in one gap.
 """
 
 import argparse
@@ -30,31 +30,25 @@ rank = comm.Get_rank()
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run GGap forest gap dynamics model"
+        description="Run single gap simulation"
     )
     parser.add_argument(
-        "--num_trees",
+        "--maxtrees",
         type=int,
         default=100,
-        help="Number of trees in forest (default: 100)"
+        help="Number of trees in the gap (default: 100)"
     )
     parser.add_argument(
-        "--forest_size",
-        type=float,
-        default=100.0,
-        help="Size of square forest in meters (default: 100.0)"
+        "--maxheight",
+        type=int,
+        default=60,
+        help="Maximum tree height in meters (default: 60)"
     )
     parser.add_argument(
         "--years",
         type=int,
         default=50,
         help="Number of years to simulate (default: 50)"
-    )
-    parser.add_argument(
-        "--neighborhood_radius",
-        type=float,
-        default=10.0,
-        help="Radius for tree interactions in meters (default: 10.0)"
     )
     parser.add_argument(
         "--deg_days",
@@ -81,70 +75,50 @@ def main():
         help="Years between progress reports (default: 10)"
     )
     parser.add_argument(
-        "--species_dist",
+        "--specieslist",
         type=str,
-        default="equal",
-        help="Species distribution: 'equal', 'mixed', or 'single:ID' (default: equal)"
+        default="input_data/UVAFME2012_specieslist.csv",
+        help="Path to species list CSV file"
     )
 
     args = parser.parse_args()
 
     if rank == 0:
         print("=" * 60)
-        print("GGap Forest Gap Dynamics Model")
-        print("GPU-Accelerated UVAFME-based Simulation")
+        print("GGap Single Gap Simulation")
         print("=" * 60)
         print(f"\nSimulation Parameters:")
-        print(f"  Number of trees: {args.num_trees}")
-        print(f"  Forest size: {args.forest_size}m x {args.forest_size}m")
+        print(f"  Number of trees (maxtrees): {args.maxtrees}")
+        print(f"  Maximum height: {args.maxheight}m")
         print(f"  Simulation duration: {args.years} years")
-        print(f"  Neighborhood radius: {args.neighborhood_radius}m")
         print(f"  Degree days: {args.deg_days}")
         print(f"  Drought days: {args.dry_days}")
         print(f"  Base mortality rate: {args.base_mortality}")
-        print(f"  Report interval: {args.report_interval} years")
+        print(f"  Species list: {args.specieslist}")
         print()
 
     # Create model
     model = GAPModel(
-        neighborhood_radius=args.neighborhood_radius,
         deg_days=args.deg_days,
         dry_days=args.dry_days,
         base_mortality_rate=args.base_mortality,
     )
 
-    # Parse species distribution
-    species_distribution = None
-    if args.species_dist == "equal":
-        species_distribution = None  # Default equal distribution
-    elif args.species_dist == "mixed":
-        # Mixed forest: more mid-successional species
-        species_distribution = {
-            1: 0.15,  # Red Maple
-            2: 0.20,  # Loblolly Pine
-            3: 0.30,  # White Oak (dominant)
-            4: 0.20,  # Sweetgum
-            5: 0.10,  # Eastern Hemlock
-            6: 0.05,  # Tulip Poplar
-        }
-    elif args.species_dist.startswith("single:"):
-        species_id = int(args.species_dist.split(":")[1])
-        species_distribution = {species_id: 1.0}
-
     if rank == 0:
-        print("Creating initial forest...")
+        print("Initializing plot with trees...")
 
-    # Create forest
-    model.create_forest(
-        num_trees=args.num_trees,
-        forest_size=args.forest_size,
-        species_distribution=species_distribution,
+    # Initialize plot - creates trees and connects them (fully connected network)
+    tree_ids = model.initialize_gap(
+        specieslist_file=args.specieslist,
+        maxtrees=args.maxtrees,
+        maxheight=args.maxheight,
         age_range=(5, 50),
         size_range=(3.0, 25.0),
     )
 
     if rank == 0:
-        model.print_forest_statistics(tick=0)
+        print(f"Created {len(tree_ids)} trees (all mutually connected)")
+        model.print_statistics(tick=0)
         print("\nSetting up GPU kernels...")
 
     # Setup model (generates GPU kernels)
@@ -164,14 +138,14 @@ def main():
         # Print statistics
         if rank == 0:
             current_year = year_batch + years_to_run
-            model.print_forest_statistics(tick=current_year)
+            model.print_statistics(tick=current_year)
 
     if rank == 0:
         print("\n" + "=" * 60)
         print("Simulation Complete")
         print("=" * 60)
-        print("\nFinal Forest State:")
-        model.print_forest_statistics()
+        print("\nFinal Gap State:")
+        model.print_statistics()
 
 
 if __name__ == "__main__":
