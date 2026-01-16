@@ -1,33 +1,40 @@
 """
-GAPModel - GPU-accelerated forest gap dynamics model.
-Integrates UVAFME forest processes with SAGESim agent framework.
+GAPModel - GPU-accelerated gap dynamics model.
+Integrates UVAFME processes with SAGESim agent framework.
+
+Structure: Model -> Sites -> Gaps -> Trees (agents)
 """
 
 import sys
 import os
 import random
+import csv
 
-# Add SAGESim to path
-_current_dir = os.path.dirname(os.path.abspath(__file__))
-_sagesim_path = os.path.join(os.path.dirname(_current_dir), "SAGESim")
-if _sagesim_path not in sys.path:
-    sys.path.insert(0, _sagesim_path)
+# Try installed SAGESim first, fall back to submodule
+try:
+    import sagesim  # noqa: F401
+except ImportError:
+    _current_dir = os.path.dirname(os.path.abspath(__file__))
+    _sagesim_path = os.path.join(os.path.dirname(_current_dir), "SAGESim")
+    if _sagesim_path not in sys.path:
+        sys.path.insert(0, _sagesim_path)
 
 from sagesim.model import Model
 from sagesim.space import NetworkSpace
 from gap.tree_breed import TreeBreed
-from gap.tree_species_data import get_species_params, get_all_species_ids
 
 
 class GAPModel(Model):
     """
-    GAPModel class for forest gap dynamics simulation.
+    GAPModel class for gap dynamics simulation.
     Inherits from SAGESim Model class.
+
+    Future structure: Model contains Sites, each Site contains Gaps.
+    Currently supports single gap for testing.
     """
 
     def __init__(
         self,
-        neighborhood_radius=10.0,
         deg_days=2500.0,
         dry_days=30.0,
         base_mortality_rate=0.02,
@@ -37,8 +44,6 @@ class GAPModel(Model):
 
         Parameters:
         -----------
-        neighborhood_radius : float
-            Distance threshold for tree interactions (meters)
         deg_days : float
             Annual degree days for temperature response
         dry_days : float
@@ -46,7 +51,7 @@ class GAPModel(Model):
         base_mortality_rate : float
             Base annual mortality probability (0-1)
         """
-        # Create a simple space (will be enhanced with spatial indexing later)
+        # Create network space for agent connections
         space = NetworkSpace()
         super().__init__(space)
 
@@ -55,7 +60,6 @@ class GAPModel(Model):
         self.register_breed(breed=self._tree_breed)
 
         # Register global environmental properties
-        self.register_global_property("neighborhood_radius", neighborhood_radius)
         self.register_global_property("deg_days", deg_days)
         self.register_global_property("dry_days", dry_days)
         self.register_global_property("base_mortality_rate", base_mortality_rate)
@@ -63,118 +67,31 @@ class GAPModel(Model):
         # Track created trees
         self.tree_ids = []
 
-    def create_tree(
+    def connect_agents(self, agent_0, agent_1):
+        """Connect two agents as neighbors."""
+        self.get_space().connect_agents(agent_0, agent_1)
+
+    def initialize_gap(
         self,
-        species_id=1,
-        age=10.0,
-        diam_bht=5.0,
-        x=0.0,
-        y=0.0,
-        forska_ht=None,
-        canopy_ht=1.3,
-        is_alive=1.0,
-        light_avail=1.0,
-        fc_degday=1.0,
-        fc_drought=1.0,
-        fc_flood=1.0,
+        specieslist_file="input_data/UVAFME2012_specieslist.csv",
+        maxtrees=100,
+        maxheight=60,
+        age_range=(5, 50),
+        size_range=(3.0, 25.0),
     ):
         """
-        Create a tree agent with specified properties.
+        Initialize a gap with random trees from a species list CSV file.
+        All trees in this gap are mutually connected (fully connected network).
+        Follows UVAFME initialize_plot pattern.
 
         Parameters:
         -----------
-        species_id : int
-            Species identifier (1-6)
-        age : float
-            Tree age in years
-        diam_bht : float
-            Diameter at breast height (cm)
-        x : float
-            X coordinate (meters)
-        y : float
-            Y coordinate (meters)
-        forska_ht : float, optional
-            Tree height (meters). If None, calculated from diameter
-        canopy_ht : float
-            Canopy height (meters)
-        is_alive : float
-            Alive status (1.0=alive, 0.0=dead)
-        light_avail : float
-            Available light (0-1)
-        fc_degday : float
-            Temperature response factor (0-1)
-        fc_drought : float
-            Drought response factor (0-1)
-        fc_flood : float
-            Flood response factor (0-1)
-
-        Returns:
-        --------
-        agent_id : int
-            ID of created tree agent
-        """
-        # Get species parameters for height calculation if needed
-        if forska_ht is None:
-            species_params = get_species_params(species_id)
-            STD_HT = 1.3
-            delta_ht = species_params.max_ht - STD_HT
-            forska_ht = STD_HT + delta_ht * (
-                1.0 - (2.71828 ** (-(species_params.arfa_0 * diam_bht / delta_ht)))
-            )
-
-        # Calculate initial biomass (simplified)
-        wood_bulk_dens = 0.54
-        PI = 3.14159265359
-        radius_m = diam_bht / 200.0
-        volume_m3 = PI * radius_m * radius_m * forska_ht
-        biomC = volume_m3 * wood_bulk_dens * 1000.0 * 0.5
-
-        biomN = biomC / 450.0  # C:N ratio of ~450
-        leaf_bm = biomC * 0.1  # Rough estimate
-
-        agent_id = self.create_agent_of_breed(
-            self._tree_breed,
-            species_id=species_id,
-            is_alive=is_alive,
-            age=age,
-            diam_bht=diam_bht,
-            forska_ht=forska_ht,
-            canopy_ht=canopy_ht,
-            biomC=biomC,
-            biomN=biomN,
-            leaf_bm=leaf_bm,
-            x=x,
-            y=y,
-            light_avail=light_avail,
-            fc_degday=fc_degday,
-            fc_drought=fc_drought,
-            fc_flood=fc_flood,
-            growth_factor=1.0,
-        )
-
-        self.tree_ids.append(agent_id)
-        return agent_id
-
-    def create_forest(
-        self,
-        num_trees=100,
-        forest_size=100.0,
-        species_distribution=None,
-        age_range=(10, 50),
-        size_range=(5.0, 20.0),
-    ):
-        """
-        Create a forest with multiple trees.
-
-        Parameters:
-        -----------
-        num_trees : int
-            Number of trees to create
-        forest_size : float
-            Size of square forest area (meters)
-        species_distribution : dict, optional
-            Distribution of species as {species_id: proportion}
-            If None, uses equal distribution
+        specieslist_file : str
+            Path to the species list CSV file
+        maxtrees : int
+            Number of trees to create in this gap
+        maxheight : int
+            Maximum tree height in meters
         age_range : tuple
             (min_age, max_age) for initial tree ages
         size_range : tuple
@@ -185,56 +102,126 @@ class GAPModel(Model):
         tree_ids : list
             List of created tree agent IDs
         """
-        if species_distribution is None:
-            # Default: equal distribution across all species
-            species_ids = get_all_species_ids()
-            species_distribution = {sid: 1.0 / len(species_ids) for sid in species_ids}
+        # Validate inputs (following UVAFME initialize_plot)
+        if maxtrees == 0:
+            raise ValueError("Must allow at least a few trees")
+        if maxheight == 0:
+            raise ValueError("Must have a nonzero maximum height")
 
-        # Normalize distribution
-        total = sum(species_distribution.values())
-        species_distribution = {k: v / total for k, v in species_distribution.items()}
+        num_trees = maxtrees
 
-        # Create trees
+        # Read species from CSV file
+        species_list = []
+        file_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            specieslist_file
+        )
+
+        with open(file_path, 'r') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                species_info = {
+                    'species_id': len(species_list) + 1,  # 1-indexed
+                    'species_code': row['Species_code'],
+                    'common_name': row['Common name'].replace('_', ' ').strip("'"),
+                    'genus': row['Genus'].strip("'"),
+                    'max_age': float(row['AGEmax']),
+                    'max_diam': float(row['DBHmax']),
+                    'max_ht': float(row['Hmax']),
+                    'arfa_0': float(row['s']),
+                    'g': float(row['g']),
+                    'shade_tol': int(row['l']),
+                    'drought_tol': int(row['d']),
+                    'flood_tol': int(row['f']),
+                    'deg_day_min': float(row['DEGDmin']),
+                    'deg_day_opt': float(row['DEGDoptimum']),
+                    'deg_day_max': float(row['DEGDmax']),
+                    'wood_bulk_dens': float(row['bulk']),
+                }
+                species_list.append(species_info)
+
+        num_species = len(species_list)
+        if num_species == 0:
+            raise ValueError(f"No species found in {specieslist_file}")
+
+        # Distribute trees randomly across species
+        random_weights = [random.random() for _ in range(num_species)]
+        total_weight = sum(random_weights)
+        proportions = [w / total_weight for w in random_weights]
+
+        # Calculate number of trees per species
+        trees_per_species = []
+        remaining = num_trees
+        for i, prop in enumerate(proportions[:-1]):
+            count = int(num_trees * prop)
+            trees_per_species.append(count)
+            remaining -= count
+        trees_per_species.append(remaining)  # Last species gets remainder
+
+        # Create trees for each species
         created_trees = []
-        for i in range(num_trees):
-            # Random spatial location
-            x = random.uniform(0, forest_size)
-            y = random.uniform(0, forest_size)
 
-            # Select species based on distribution
-            rand_val = random.random()
-            cumulative = 0.0
-            selected_species = 1
-            for species_id, proportion in species_distribution.items():
-                cumulative += proportion
-                if rand_val <= cumulative:
-                    selected_species = species_id
-                    break
+        for species_idx, species_info in enumerate(species_list):
+            num_trees_this_species = trees_per_species[species_idx]
 
-            # Random age and size
-            age = random.uniform(age_range[0], age_range[1])
-            diam = random.uniform(size_range[0], size_range[1])
+            for _ in range(num_trees_this_species):
+                # Random age and size
+                age = random.uniform(age_range[0], age_range[1])
+                diam = random.uniform(size_range[0], size_range[1])
 
-            # Create tree
-            tree_id = self.create_tree(
-                species_id=selected_species,
-                age=age,
-                diam_bht=diam,
-                x=x,
-                y=y,
-            )
-            created_trees.append(tree_id)
+                # Calculate height using species-specific parameters
+                STD_HT = 1.3
+                delta_ht = species_info['max_ht'] - STD_HT
+                forska_ht = STD_HT + delta_ht * (
+                    1.0 - (2.71828 ** (-(species_info['arfa_0'] * diam / delta_ht)))
+                )
+
+                # Calculate biomass
+                wood_bulk_dens = species_info['wood_bulk_dens']
+                PI = 3.14159265359
+                radius_m = diam / 200.0
+                volume_m3 = PI * radius_m * radius_m * forska_ht
+                biomC = volume_m3 * wood_bulk_dens * 1000.0 * 0.5
+                biomN = biomC / 450.0
+                leaf_bm = biomC * 0.1
+
+                # Create tree agent
+                agent_id = self.create_agent_of_breed(
+                    self._tree_breed,
+                    species_id=species_info['species_id'],
+                    is_alive=1.0,
+                    age=age,
+                    diam_bht=diam,
+                    forska_ht=forska_ht,
+                    canopy_ht=1.3,
+                    biomC=biomC,
+                    biomN=biomN,
+                    leaf_bm=leaf_bm,
+                    light_avail=1.0,
+                    fc_degday=1.0,
+                    fc_drought=1.0,
+                    fc_flood=1.0,
+                    growth_factor=1.0,
+                )
+
+                self.tree_ids.append(agent_id)
+                created_trees.append(agent_id)
+
+        # Connect all trees to each other (fully connected network)
+        for i in range(len(created_trees)):
+            for j in range(i + 1, len(created_trees)):
+                self.connect_agents(created_trees[i], created_trees[j])
 
         return created_trees
 
-    def get_forest_statistics(self):
+    def get_statistics(self):
         """
-        Get current forest statistics.
+        Get current gap statistics.
 
         Returns:
         --------
         stats : dict
-            Dictionary containing forest statistics
+            Dictionary containing gap statistics
         """
         stats = {
             "total_trees": len(self.tree_ids),
@@ -287,14 +274,14 @@ class GAPModel(Model):
 
         return stats
 
-    def print_forest_statistics(self, tick=None):
-        """Print formatted forest statistics."""
-        stats = self.get_forest_statistics()
+    def print_statistics(self, tick=None):
+        """Print formatted gap statistics."""
+        stats = self.get_statistics()
 
         if tick is not None:
-            print(f"\n--- Year {tick} Forest Statistics ---")
+            print(f"\n--- Year {tick} Gap Statistics ---")
         else:
-            print("\n--- Forest Statistics ---")
+            print("\n--- Gap Statistics ---")
 
         print(f"Total trees: {stats['total_trees']}")
         print(f"Living trees: {stats['living_trees']}")
@@ -306,9 +293,5 @@ class GAPModel(Model):
             print(f"Average diameter: {stats['avg_diameter']:.1f} cm")
             print(f"Total biomass: {stats['total_biomass']:.1f} kg C")
 
-            print("\nSpecies distribution:")
-            from gap.tree_species_data import get_species_params
-
-            for species_id, count in sorted(stats["species_counts"].items()):
-                species = get_species_params(species_id)
-                print(f"  {species.common_name}: {count}")
+            if stats["species_counts"]:
+                print(f"\nNumber of species: {len(stats['species_counts'])}")

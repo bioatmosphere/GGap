@@ -6,11 +6,14 @@ Based on UVAFME tree structure with SAGESim agent framework.
 import sys
 import os
 
-# Add SAGESim to path
-_current_dir = os.path.dirname(os.path.abspath(__file__))
-_sagesim_path = os.path.join(os.path.dirname(_current_dir), "SAGESim")
-if _sagesim_path not in sys.path:
-    sys.path.insert(0, _sagesim_path)
+# Try installed SAGESim first, fall back to submodule
+try:
+    import sagesim  # noqa: F401
+except ImportError:
+    _current_dir = os.path.dirname(os.path.abspath(__file__))
+    _sagesim_path = os.path.join(os.path.dirname(_current_dir), "SAGESim")
+    if _sagesim_path not in sys.path:
+        sys.path.insert(0, _sagesim_path)
 
 from sagesim.breed import Breed
 from gap.tree_step_func import growth_step, mortality_step, light_step
