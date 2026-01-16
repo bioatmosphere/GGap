@@ -17,8 +17,10 @@ from cupyx import jit
 from sagesim.utils import (
     get_this_agent_data_from_tensor,
     set_this_agent_data_from_tensor,
-    get_neighbor_data_from_tensor,
 )
+# Note: get_neighbor_data_from_tensor is DEPRECATED in SAGESim v0.3.0+
+# Use direct indexing instead: property_tensor[neighbor_index]
+# The 'locations' property now contains pre-converted indices, not agent IDs
 
 
 @jit.rawkernel(device="cuda")

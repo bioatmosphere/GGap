@@ -5,8 +5,10 @@ from cupyx import jit
 from sagesim.utils import (
     get_this_agent_data_from_tensor,
     set_this_agent_data_from_tensor,
-    get_neighbor_data_from_tensor,
 )
+# Note: get_neighbor_data_from_tensor is DEPRECATED in SAGESim v0.3.0+
+# The 'locations' property now contains pre-converted indices, not agent IDs
+# Use direct indexing instead: property_tensor[neighbor_index]
 
 # Define the step function to be registered for SIRBreed
 @jit.rawkernel(device="cuda")
@@ -66,41 +68,35 @@ def step_func(
     None
         The function updates the `states` list in-place if an agent becomes infected.
     """
-    # Get the list of neighboring agent IDs for the current agent based on network topology
-    neighbor_ids = locations[agent_index]
+    # Get the list of neighboring agent indices for the current agent based on network topology
+    # NOTE: In SAGESim v0.3.0+, locations contains pre-converted indices, not agent IDs
+    neighbor_indices = locations[agent_index]
 
     # Retrieve the global infection and recovery probabilities defined in the model
     p_infection = globals[0]
     p_recovery = globals[1]
 
     # Get the current state of the agent (e.g., susceptible, infected, recovered)
-    agent_state = int(get_this_agent_data_from_tensor(agent_index, state_tensor))
+    agent_state = int(state_tensor[agent_index])
 
     # Get the preventative measures vector for the current agent
-    agent_preventative_measures = get_this_agent_data_from_tensor(
-        agent_index, preventative_measures_tensor
-    )
+    agent_preventative_measures = preventative_measures_tensor[agent_index]
 
-    # If agent is infected and the recovery condition passes, update agent’s state
+    # If agent is infected and the recovery condition passes, update agent's state
     if agent_state == 2 and random() < p_recovery:
-        set_this_agent_data_from_tensor(
-            agent_index, state_tensor, 3
-        )  # Agent becomes infected
+        state_tensor[agent_index] = 3  # Agent recovers
     elif agent_state == 1:
-        # Loop through each neighbor ID
+        # Loop through each neighbor index
+        # NOTE: Invalid neighbor slots are marked with -1, not NaN
         i = 0
-        while i < len(neighbor_ids) and not cp.isnan(neighbor_ids[i]):
-            neighbor_id = neighbor_ids[i]
+        while i < len(neighbor_indices) and neighbor_indices[i] != -1:
+            neighbor_index = int(neighbor_indices[i])
 
-            # Retrieve the state of the neighbor (e.g., susceptible, infected, recovered)
-            neighbor_state = int(
-                get_neighbor_data_from_tensor(agent_ids, neighbor_id, state_tensor)
-            )
+            # Retrieve the state of the neighbor directly using index (O(1) access)
+            neighbor_state = int(state_tensor[neighbor_index])
 
-            # Get the preventative measures vector of the neighbor
-            neighbor_preventative_measures = get_neighbor_data_from_tensor(
-                agent_ids, neighbor_id, preventative_measures_tensor
-            )
+            # Get the preventative measures vector of the neighbor directly
+            neighbor_preventative_measures = preventative_measures_tensor[neighbor_index]
 
             # Initialize cumulative safety score for the interaction
             abs_safety_of_interaction = 0.0
@@ -118,13 +114,11 @@ def step_func(
                 len(agent_preventative_measures) ** 2
             )
 
-            # If neighbor is infected and the infection condition passes, update agent’s state
+            # If neighbor is infected and the infection condition passes, update agent's state
             if neighbor_state == 2 and random() < p_infection * (
                 1 - normalized_safety_of_interaction
             ):
-                set_this_agent_data_from_tensor(
-                    agent_index, state_tensor, 2
-                )  # Agent becomes infected
+                state_tensor[agent_index] = 2  # Agent becomes infected
             i += 1
 
     # Fuctions from UVAFME
