@@ -2,21 +2,11 @@
 Tree step function for GGap model.
 Combined GPU kernel implementing light, growth, and mortality.
 
-Uses consolidated 5-property format:
-- params: species parameters (indices 0-9), site params from Gap neighbor (10-12)
-- state_db: is_alive, diam_bht, forska_ht, canopy_ht (needs double buffer)
-- state: age, biomass, leaf_bm, light_avail, growth factors, etc.
-- output: litter_c, litter_n, n_demand
-- soil: not used by trees
+Property scheme (3 properties):
+- params[20]: species traits (static) + physiology (dynamic internal) - private
+- states[3]: litter output (litter_c, litter_n, n_demand) - public, no buffer
+- states_db[4]: structure (is_alive, diam, height, canopy_ht) - public, double buffered
 """
-
-import sys
-import os
-
-_current_dir = os.path.dirname(os.path.abspath(__file__))
-_sagesim_path = os.path.join(os.path.dirname(_current_dir), "SAGESim")
-if _sagesim_path not in sys.path:
-    sys.path.insert(0, _sagesim_path)
 
 import cupy as cp
 from cupyx import jit
@@ -26,61 +16,52 @@ BREED_TREE = 0
 BREED_GAP = 1
 BREED_SITE = 2
 
-# === params indices ===
-P_SPECIES_ID = 0
-SP_MAX_AGE = 1
-SP_MAX_DIAM = 2
-SP_MAX_HT = 3
-SP_ARFA_0 = 4
-SP_G = 5
-SP_SHADE_TOL = 6
-SP_DEG_DAY_MIN = 7
-SP_DEG_DAY_OPT = 8
-SP_DEG_DAY_MAX = 9
-SITE_DEG_DAYS = 10
-SITE_DRY_DAYS = 11
-SITE_BASE_MORTALITY = 12
+# === Tree params[20] (private) ===
+# Species traits [0-9]:
+TREE_P_SPECIES_ID = 0
+TREE_P_MAX_AGE = 1
+TREE_P_MAX_DIAM = 2
+TREE_P_MAX_HT = 3
+TREE_P_ARFA_0 = 4
+TREE_P_G = 5
+TREE_P_SHADE_TOL = 6
+TREE_P_DEG_DAY_MIN = 7
+TREE_P_DEG_DAY_OPT = 8
+TREE_P_DEG_DAY_MAX = 9
+# Physiology [10-19]:
+TREE_P_AGE = 10
+TREE_P_BIOMC = 11
+TREE_P_BIOMN = 12
+TREE_P_LEAF_BM = 13
+TREE_P_X = 14
+TREE_P_Y = 15
+TREE_P_LIGHT_AVAIL = 16
+TREE_P_FC_DEGDAY = 17
+TREE_P_FC_DROUGHT = 18
+TREE_P_FC_FLOOD = 19
 
-# === state_db indices (double buffered) ===
-DB_IS_ALIVE = 0
-DB_DIAM_BHT = 1
-DB_FORSKA_HT = 2
-DB_CANOPY_HT = 3
+# === Tree states[3] (public, no buffer) ===
+TREE_S_LITTER_C = 0
+TREE_S_LITTER_N = 1
+TREE_S_N_DEMAND = 2
 
-# === state indices ===
-S_AGE = 0
-S_BIOMC = 1
-S_BIOMN = 2
-S_LEAF_BM = 3
-S_X = 4
-S_Y = 5
-S_LIGHT_AVAIL = 6
-S_FC_DEGDAY = 7
-S_FC_DROUGHT = 8
-S_FC_FLOOD = 9
-S_GROWTH_FACTOR = 10
-S_NUTRIENT_FACTOR = 11
-S_AVAIL_N = 12
-S_N_SUPPLY_RATIO = 14
+# === Tree states_db[4] (public, double buffered) ===
+TREE_DB_IS_ALIVE = 0
+TREE_DB_DIAM = 1
+TREE_DB_HEIGHT = 2
+TREE_DB_CANOPY_HT = 3
 
-# === output indices ===
-O_LITTER_C = 0
-O_LITTER_N = 1
-O_N_DEMAND = 2
+# === Gap states[7] (for reading from Gap neighbor) ===
+GAP_S_DEG_DAYS = 0
+GAP_S_DRY_DAYS = 1
+GAP_S_BASE_MORTALITY = 2
+GAP_S_AVAIL_N = 3
+GAP_S_N_SUPPLY_RATIO = 4
 
 # === Constants ===
 PI = 3.14159265359
 STD_HT = 1.3  # Breast height in meters
 XT = -0.40   # Light extinction coefficient
-
-# Light response coefficients by shade tolerance class (1-5)
-# [c1, c2, c3] for each class
-LIGHT_C1 = [1.01, 1.04, 1.11, 1.24, 1.49]
-LIGHT_C2 = [4.62, 3.44, 2.52, 1.78, 1.23]
-LIGHT_C3 = [0.05, 0.06, 0.07, 0.08, 0.09]
-
-# Drought response gamma by tolerance class (1-5)
-DROUGHT_GAMMA = [0.50, 0.45, 0.35, 0.25, 0.15]
 
 # C/N ratios
 STEM_C_N = 450.0
@@ -96,21 +77,19 @@ def tree_step(
     breeds,
     locations,
     params_tensor,
-    state_db_tensor,
-    state_tensor,
-    output_tensor,
-    soil_tensor,
+    states_tensor,
+    states_db_tensor,
 ):
     """
     Combined tree step function: light, growth, mortality, litter.
 
-    Reads site params (deg_days, dry_days, base_mortality) from Gap neighbor.
-    Calculates light availability from neighbor tree heights.
+    Reads site params (deg_days, dry_days, base_mortality) from Gap neighbor states.
+    Calculates light availability from neighbor tree states_db (heights).
     Applies environmental stress and grows tree.
     Checks mortality and outputs litter.
     """
     # ===== GET CURRENT STATE =====
-    is_alive = state_db_tensor[agent_index][DB_IS_ALIVE]
+    is_alive = states_db_tensor[agent_index][TREE_DB_IS_ALIVE]
 
     # Initialize outputs
     litter_c = 0.0
@@ -119,26 +98,28 @@ def tree_step(
 
     # Only process living trees
     if is_alive > 0.5:
-        # Get species parameters
-        max_age = params_tensor[agent_index][SP_MAX_AGE]
-        max_diam = params_tensor[agent_index][SP_MAX_DIAM]
-        max_ht = params_tensor[agent_index][SP_MAX_HT]
-        arfa_0 = params_tensor[agent_index][SP_ARFA_0]
-        g = params_tensor[agent_index][SP_G]
-        shade_tol = int(params_tensor[agent_index][SP_SHADE_TOL])
-        deg_day_min = params_tensor[agent_index][SP_DEG_DAY_MIN]
-        deg_day_opt = params_tensor[agent_index][SP_DEG_DAY_OPT]
-        deg_day_max = params_tensor[agent_index][SP_DEG_DAY_MAX]
+        # Get species parameters from params
+        max_age = params_tensor[agent_index][TREE_P_MAX_AGE]
+        max_diam = params_tensor[agent_index][TREE_P_MAX_DIAM]
+        max_ht = params_tensor[agent_index][TREE_P_MAX_HT]
+        arfa_0 = params_tensor[agent_index][TREE_P_ARFA_0]
+        g = params_tensor[agent_index][TREE_P_G]
+        shade_tol = int(params_tensor[agent_index][TREE_P_SHADE_TOL])
+        deg_day_min = params_tensor[agent_index][TREE_P_DEG_DAY_MIN]
+        deg_day_opt = params_tensor[agent_index][TREE_P_DEG_DAY_OPT]
+        deg_day_max = params_tensor[agent_index][TREE_P_DEG_DAY_MAX]
 
-        # Get current tree state
-        diam = state_db_tensor[agent_index][DB_DIAM_BHT]
-        height = state_db_tensor[agent_index][DB_FORSKA_HT]
-        canopy_ht = state_db_tensor[agent_index][DB_CANOPY_HT]
-        age = state_tensor[agent_index][S_AGE]
-        biomC = state_tensor[agent_index][S_BIOMC]
-        leaf_bm = state_tensor[agent_index][S_LEAF_BM]
+        # Get current tree structure from states_db
+        diam = states_db_tensor[agent_index][TREE_DB_DIAM]
+        height = states_db_tensor[agent_index][TREE_DB_HEIGHT]
+        canopy_ht = states_db_tensor[agent_index][TREE_DB_CANOPY_HT]
 
-        # ===== READ SITE PARAMS FROM GAP NEIGHBOR =====
+        # Get internal physiology from params
+        age = params_tensor[agent_index][TREE_P_AGE]
+        biomC = params_tensor[agent_index][TREE_P_BIOMC]
+        leaf_bm = params_tensor[agent_index][TREE_P_LEAF_BM]
+
+        # ===== READ SITE PARAMS FROM GAP NEIGHBOR STATES =====
         deg_days = 2500.0  # Default
         dry_days = 30.0
         base_mortality = 0.02
@@ -150,12 +131,12 @@ def tree_step(
             neighbor_idx = int(neighbor_indices[i])
             neighbor_breed = int(breeds[neighbor_idx])
             if neighbor_breed == BREED_GAP:
-                # Read site params from Gap
-                deg_days = params_tensor[neighbor_idx][SITE_DEG_DAYS]
-                dry_days = params_tensor[neighbor_idx][SITE_DRY_DAYS]
-                base_mortality = params_tensor[neighbor_idx][SITE_BASE_MORTALITY]
-                # Read N supply ratio from Gap state
-                n_supply_ratio = state_tensor[neighbor_idx][S_N_SUPPLY_RATIO]
+                # Read site params from Gap states
+                deg_days = states_tensor[neighbor_idx][GAP_S_DEG_DAYS]
+                dry_days = states_tensor[neighbor_idx][GAP_S_DRY_DAYS]
+                base_mortality = states_tensor[neighbor_idx][GAP_S_BASE_MORTALITY]
+                # Read N supply ratio from Gap states
+                n_supply_ratio = states_tensor[neighbor_idx][GAP_S_N_SUPPLY_RATIO]
             i = i + 1
 
         # ===== CALCULATE LIGHT AVAILABILITY =====
@@ -168,11 +149,11 @@ def tree_step(
 
             # Only count tree neighbors
             if neighbor_breed == BREED_TREE:
-                neighbor_alive = state_db_tensor[neighbor_idx][DB_IS_ALIVE]
+                neighbor_alive = states_db_tensor[neighbor_idx][TREE_DB_IS_ALIVE]
                 if neighbor_alive > 0.5:
-                    neighbor_height = state_db_tensor[neighbor_idx][DB_FORSKA_HT]
-                    neighbor_canopy_ht = state_db_tensor[neighbor_idx][DB_CANOPY_HT]
-                    neighbor_diam = state_db_tensor[neighbor_idx][DB_DIAM_BHT]
+                    neighbor_height = states_db_tensor[neighbor_idx][TREE_DB_HEIGHT]
+                    neighbor_canopy_ht = states_db_tensor[neighbor_idx][TREE_DB_CANOPY_HT]
+                    neighbor_diam = states_db_tensor[neighbor_idx][TREE_DB_DIAM]
 
                     # Only count taller neighbors
                     if neighbor_height > height:
@@ -368,25 +349,22 @@ def tree_step(
         # Update age
         new_age = age + 1.0
 
-        # ===== WRITE STATE =====
-        # state_db (double buffered)
-        state_db_tensor[agent_index][DB_IS_ALIVE] = is_alive
-        state_db_tensor[agent_index][DB_DIAM_BHT] = new_diam
-        state_db_tensor[agent_index][DB_FORSKA_HT] = new_height
-        state_db_tensor[agent_index][DB_CANOPY_HT] = canopy_ht  # TODO: update canopy height
+        # ===== WRITE TO params (internal physiology) =====
+        params_tensor[agent_index][TREE_P_AGE] = new_age
+        params_tensor[agent_index][TREE_P_BIOMC] = new_biomC
+        params_tensor[agent_index][TREE_P_BIOMN] = new_biomC / STEM_C_N
+        params_tensor[agent_index][TREE_P_LEAF_BM] = new_leaf_bm
+        params_tensor[agent_index][TREE_P_LIGHT_AVAIL] = light_avail
+        params_tensor[agent_index][TREE_P_FC_DEGDAY] = fc_degday
+        params_tensor[agent_index][TREE_P_FC_DROUGHT] = fc_drought
 
-        # state (not double buffered)
-        state_tensor[agent_index][S_AGE] = new_age
-        state_tensor[agent_index][S_BIOMC] = new_biomC
-        state_tensor[agent_index][S_BIOMN] = new_biomC / STEM_C_N
-        state_tensor[agent_index][S_LEAF_BM] = new_leaf_bm
-        state_tensor[agent_index][S_LIGHT_AVAIL] = light_avail
-        state_tensor[agent_index][S_FC_DEGDAY] = fc_degday
-        state_tensor[agent_index][S_FC_DROUGHT] = fc_drought
-        state_tensor[agent_index][S_GROWTH_FACTOR] = growth_factor
-        state_tensor[agent_index][S_NUTRIENT_FACTOR] = nutrient_factor
+        # ===== WRITE TO states_db (structure - double buffered) =====
+        states_db_tensor[agent_index][TREE_DB_IS_ALIVE] = is_alive
+        states_db_tensor[agent_index][TREE_DB_DIAM] = new_diam
+        states_db_tensor[agent_index][TREE_DB_HEIGHT] = new_height
+        states_db_tensor[agent_index][TREE_DB_CANOPY_HT] = canopy_ht
 
-    # ===== WRITE OUTPUTS (always, even for dead trees) =====
-    output_tensor[agent_index][O_LITTER_C] = litter_c
-    output_tensor[agent_index][O_LITTER_N] = litter_n
-    output_tensor[agent_index][O_N_DEMAND] = n_demand
+    # ===== WRITE TO states (litter output - always, even for dead trees) =====
+    states_tensor[agent_index][TREE_S_LITTER_C] = litter_c
+    states_tensor[agent_index][TREE_S_LITTER_N] = litter_n
+    states_tensor[agent_index][TREE_S_N_DEMAND] = n_demand

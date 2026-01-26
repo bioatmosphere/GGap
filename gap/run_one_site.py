@@ -24,12 +24,12 @@ except ImportError:
 from mpi4py import MPI
 from gap.gap_model import (
     GAPModel,
-    # Index constants for accessing consolidated properties
-    S_AVAIL_N,
-    O_SOIL_RESP,
-    SOIL_A0_C, SOIL_A0_N,
-    SOIL_A_C, SOIL_A_N,
-    SOIL_BL_C, SOIL_BL_N,
+    # Site params indices (soil pools are private)
+    SITE_P_A0_C, SITE_P_A0_N,
+    SITE_P_A_C, SITE_P_A_N,
+    SITE_P_BL_C, SITE_P_BL_N,
+    # Site states indices (public: climate + avail_n)
+    SITE_S_AVAIL_N,
 )
 
 comm = MPI.COMM_WORLD
@@ -59,18 +59,6 @@ def main():
         help="Number of years to simulate (default: 50)"
     )
     parser.add_argument(
-        "--deg_days",
-        type=float,
-        default=2500.0,
-        help="Annual degree days (default: 2500.0)"
-    )
-    parser.add_argument(
-        "--dry_days",
-        type=float,
-        default=30.0,
-        help="Annual drought days (default: 30.0)"
-    )
-    parser.add_argument(
         "--base_mortality",
         type=float,
         default=0.02,
@@ -83,10 +71,22 @@ def main():
         help="Years between progress reports (default: 10)"
     )
     parser.add_argument(
-        "--site_csv",
+        "--site_id",
+        type=int,
+        default=0,
+        help="Site ID from UVAFME CSV files (default: 0)"
+    )
+    parser.add_argument(
+        "--data_dir",
         type=str,
-        default="input_data/UVAFME2012_specieslist.csv",
-        help="Path to site species CSV file"
+        default="input_data",
+        help="Directory containing UVAFME CSV files"
+    )
+    parser.add_argument(
+        "--prefix",
+        type=str,
+        default="UVAFME2012",
+        help="File prefix for UVAFME CSV files (default: UVAFME2012)"
     )
 
     args = parser.parse_args()
@@ -100,35 +100,37 @@ def main():
         print(f"  Trees per gap: {args.trees_per_gap}")
         print(f"  Total trees: {args.num_gaps * args.trees_per_gap}")
         print(f"  Simulation duration: {args.years} years")
-        print(f"  Degree days: {args.deg_days}")
-        print(f"  Drought days: {args.dry_days}")
         print(f"  Base mortality rate: {args.base_mortality}")
-        print(f"  Site CSV: {args.site_csv}")
+        print(f"  Data directory: {args.data_dir}")
+        print(f"  File prefix: {args.prefix}")
+        print(f"  Site ID: {args.site_id}")
         print()
 
     # Create model
     model = GAPModel()
 
     if rank == 0:
-        print("Loading site and species data...")
+        print("Initializing site from UVAFME CSV files...")
 
-    # Load site (creates site agent with soil, loads species from CSV)
-    site = model.load_site(
-        site_csv=args.site_csv,
-        deg_days=args.deg_days,
-        dry_days=args.dry_days,
+    # Initialize site (loads from UVAFME CSV files)
+    site = model.initialize_site(
+        site_id=args.site_id,
+        data_dir=args.data_dir,
+        prefix=args.prefix,
         base_mortality_rate=args.base_mortality,
     )
 
     if rank == 0:
+        print(f"Site: {site['site_name']} ({site['latitude']:.2f}°N, {site['longitude']:.2f}°W)")
         print(f"Loaded {len(site['species'])} species for site")
+        print(f"Calculated deg_days: {site['deg_days']:.0f}, dry_days: {site['dry_days']:.1f}")
         print(f"Site agent ID: {site['site_agent_id']}")
         print(f"\nInitializing {args.num_gaps} gap(s) with trees...")
 
-    # Initialize gaps - creates gap agents and trees, connects them
+    # Initialize gaps and trees - creates gap agents and trees, connects them
     total_trees = 0
     for gap_num in range(args.num_gaps):
-        tree_ids = model.initialize_gap(
+        tree_ids = model.initialize_trees(
             site=site,
             maxtrees=args.trees_per_gap,
             age_range=(5, 50),
@@ -145,15 +147,15 @@ def main():
         print(f"  Living trees: {stats['living_trees']}")
         print(f"  Total biomass: {stats['total_biomass']:.1f} kg C")
 
-        # Print initial soil state using consolidated properties
+        # Print initial soil state (soil pools in params, avail_n in states)
         site_agent_id = site['site_agent_id']
-        soil = model.get_agent_property_value(site_agent_id, "soil")
-        state = model.get_agent_property_value(site_agent_id, "state")
+        params = model.get_agent_property_value(site_agent_id, "params")
+        states = model.get_agent_property_value(site_agent_id, "states")
         print(f"\nInitial soil state:")
-        print(f"  A0 layer C: {soil[SOIL_A0_C]:.2f} tn/ha")
-        print(f"  A layer C: {soil[SOIL_A_C]:.2f} tn/ha")
-        print(f"  Base layer C: {soil[SOIL_BL_C]:.2f} tn/ha")
-        print(f"  Available N: {state[S_AVAIL_N]:.4f} tn/ha")
+        print(f"  A0 layer C: {params[SITE_P_A0_C]:.2f} tn/ha")
+        print(f"  A layer C: {params[SITE_P_A_C]:.2f} tn/ha")
+        print(f"  Base layer C: {params[SITE_P_BL_C]:.2f} tn/ha")
+        print(f"  Available N: {states[SITE_S_AVAIL_N]:.4f} tn/ha")
         print("\nSetting up GPU kernels...")
 
     # Setup model (generates GPU kernels)
@@ -162,8 +164,8 @@ def main():
     if rank == 0:
         print("Starting simulation...")
         print()
-        print(f"{'Year':<8} {'Alive':<8} {'Dead':<8} {'Biomass':<12} {'Avail_N':<12} {'Soil_Resp':<12}")
-        print("-" * 60)
+        print(f"{'Year':<8} {'Alive':<8} {'Dead':<8} {'Biomass':<12} {'Avail_N':<12}")
+        print("-" * 50)
 
     # Run simulation
     site_agent_id = site['site_agent_id']
@@ -177,11 +179,9 @@ def main():
         if rank == 0:
             current_year = year_batch + years_to_run
             stats = model.get_statistics()
-            state = model.get_agent_property_value(site_agent_id, "state")
-            output = model.get_agent_property_value(site_agent_id, "output")
-            avail_n = state[S_AVAIL_N] if isinstance(state, list) else state
-            soil_resp = output[O_SOIL_RESP] if isinstance(output, list) else output
-            print(f"{current_year:<8} {stats['living_trees']:<8} {stats['dead_trees']:<8} {stats['total_biomass']:<12.1f} {avail_n:<12.4f} {soil_resp:<12.4f}")
+            states = model.get_agent_property_value(site_agent_id, "states")
+            avail_n = states[SITE_S_AVAIL_N] if isinstance(states, list) else states
+            print(f"{current_year:<8} {stats['living_trees']:<8} {stats['dead_trees']:<8} {stats['total_biomass']:<12.1f} {avail_n:<12.4f}")
 
     if rank == 0:
         print("\n" + "=" * 60)
@@ -193,18 +193,15 @@ def main():
         print(f"  Dead trees: {stats['dead_trees']}")
         print(f"  Total biomass: {stats['total_biomass']:.1f} kg C")
 
-        # Final soil state using consolidated properties
-        soil = model.get_agent_property_value(site_agent_id, "soil")
-        state = model.get_agent_property_value(site_agent_id, "state")
-        output = model.get_agent_property_value(site_agent_id, "output")
-        avail_n = state[S_AVAIL_N] if isinstance(state, list) else state
-        soil_resp = output[O_SOIL_RESP] if isinstance(output, list) else output
+        # Final soil state (soil pools in params, avail_n in states)
+        params = model.get_agent_property_value(site_agent_id, "params")
+        states = model.get_agent_property_value(site_agent_id, "states")
+        avail_n = states[SITE_S_AVAIL_N] if isinstance(states, list) else states
         print(f"\nFinal soil state:")
-        print(f"  A0 layer C: {soil[SOIL_A0_C]:.2f} tn/ha, N: {soil[SOIL_A0_N]:.4f} tn/ha")
-        print(f"  A layer C: {soil[SOIL_A_C]:.2f} tn/ha, N: {soil[SOIL_A_N]:.4f} tn/ha")
-        print(f"  Base layer C: {soil[SOIL_BL_C]:.2f} tn/ha, N: {soil[SOIL_BL_N]:.4f} tn/ha")
+        print(f"  A0 layer C: {params[SITE_P_A0_C]:.2f} tn/ha, N: {params[SITE_P_A0_N]:.4f} tn/ha")
+        print(f"  A layer C: {params[SITE_P_A_C]:.2f} tn/ha, N: {params[SITE_P_A_N]:.4f} tn/ha")
+        print(f"  Base layer C: {params[SITE_P_BL_C]:.2f} tn/ha, N: {params[SITE_P_BL_N]:.4f} tn/ha")
         print(f"  Available N: {avail_n:.4f} tn/ha/yr")
-        print(f"  Soil respiration: {soil_resp:.4f} tn C/ha/yr")
 
 
 if __name__ == "__main__":

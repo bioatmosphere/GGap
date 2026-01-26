@@ -6,5 +6,8 @@ dist/
 wheels/
 *.egg-info
 
+gap/__pycache__
+gap/step_func_code.py
+
 # Virtual environments
 .venv
