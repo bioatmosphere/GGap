@@ -1,12 +1,18 @@
 """
-Tree step functions for GGap model.
-GPU kernels implementing UVAFME-based forest gap dynamics.
+Tree step function for GGap model.
+Combined GPU kernel implementing light, growth, and mortality.
+
+Uses consolidated 5-property format:
+- params: species parameters (indices 0-9), site params from Gap neighbor (10-12)
+- state_db: is_alive, diam_bht, forska_ht, canopy_ht (needs double buffer)
+- state: age, biomass, leaf_bm, light_avail, growth factors, etc.
+- output: litter_c, litter_n, n_demand
+- soil: not used by trees
 """
 
 import sys
 import os
 
-# Add SAGESim to path
 _current_dir = os.path.dirname(os.path.abspath(__file__))
 _sagesim_path = os.path.join(os.path.dirname(_current_dir), "SAGESim")
 if _sagesim_path not in sys.path:
@@ -14,436 +20,373 @@ if _sagesim_path not in sys.path:
 
 import cupy as cp
 from cupyx import jit
-from sagesim.utils import (
-    get_this_agent_data_from_tensor,
-    set_this_agent_data_from_tensor,
-)
-# Note: get_neighbor_data_from_tensor is DEPRECATED in SAGESim v0.3.0+
-# Use direct indexing instead: property_tensor[neighbor_index]
-# The 'locations' property now contains pre-converted indices, not agent IDs
+
+# === Breed IDs ===
+BREED_TREE = 0
+BREED_GAP = 1
+BREED_SITE = 2
+
+# === params indices ===
+P_SPECIES_ID = 0
+SP_MAX_AGE = 1
+SP_MAX_DIAM = 2
+SP_MAX_HT = 3
+SP_ARFA_0 = 4
+SP_G = 5
+SP_SHADE_TOL = 6
+SP_DEG_DAY_MIN = 7
+SP_DEG_DAY_OPT = 8
+SP_DEG_DAY_MAX = 9
+SITE_DEG_DAYS = 10
+SITE_DRY_DAYS = 11
+SITE_BASE_MORTALITY = 12
+
+# === state_db indices (double buffered) ===
+DB_IS_ALIVE = 0
+DB_DIAM_BHT = 1
+DB_FORSKA_HT = 2
+DB_CANOPY_HT = 3
+
+# === state indices ===
+S_AGE = 0
+S_BIOMC = 1
+S_BIOMN = 2
+S_LEAF_BM = 3
+S_X = 4
+S_Y = 5
+S_LIGHT_AVAIL = 6
+S_FC_DEGDAY = 7
+S_FC_DROUGHT = 8
+S_FC_FLOOD = 9
+S_GROWTH_FACTOR = 10
+S_NUTRIENT_FACTOR = 11
+S_AVAIL_N = 12
+S_N_SUPPLY_RATIO = 14
+
+# === output indices ===
+O_LITTER_C = 0
+O_LITTER_N = 1
+O_N_DEMAND = 2
+
+# === Constants ===
+PI = 3.14159265359
+STD_HT = 1.3  # Breast height in meters
+XT = -0.40   # Light extinction coefficient
+
+# Light response coefficients by shade tolerance class (1-5)
+# [c1, c2, c3] for each class
+LIGHT_C1 = [1.01, 1.04, 1.11, 1.24, 1.49]
+LIGHT_C2 = [4.62, 3.44, 2.52, 1.78, 1.23]
+LIGHT_C3 = [0.05, 0.06, 0.07, 0.08, 0.09]
+
+# Drought response gamma by tolerance class (1-5)
+DROUGHT_GAMMA = [0.50, 0.45, 0.35, 0.25, 0.15]
+
+# C/N ratios
+STEM_C_N = 450.0
+LEAF_C_N = 50.0  # Average of conifer (60) and deciduous (40)
 
 
 @jit.rawkernel(device="cuda")
-def light_step(
+def tree_step(
     tick,
     agent_index,
-    globals,
+    globals_data,
     agent_ids,
     breeds,
     locations,
-    species_id_tensor,
-    is_alive_tensor,
-    age_tensor,
-    diam_bht_tensor,
-    forska_ht_tensor,
-    canopy_ht_tensor,
-    biomC_tensor,
-    biomN_tensor,
-    leaf_bm_tensor,
-    x_tensor,
-    y_tensor,
-    light_avail_tensor,
-    fc_degday_tensor,
-    fc_drought_tensor,
-    fc_flood_tensor,
-    growth_factor_tensor
+    params_tensor,
+    state_db_tensor,
+    state_tensor,
+    output_tensor,
+    soil_tensor,
 ):
     """
-    Calculate light availability for each tree based on shading from neighbors.
+    Combined tree step function: light, growth, mortality, litter.
 
-    Taller neighboring trees cast shade, reducing light availability.
-    Uses Beer-Lambert law: light = exp(-k * LAI_above)
-
-    In a fully connected gap, all trees are neighbors.
-    A tree is shaded by all neighbors that are taller than it.
+    Reads site params (deg_days, dry_days, base_mortality) from Gap neighbor.
+    Calculates light availability from neighbor tree heights.
+    Applies environmental stress and grows tree.
+    Checks mortality and outputs litter.
     """
-    # Light extinction coefficient (from UVAFME)
-    XT = -0.40
+    # ===== GET CURRENT STATE =====
+    is_alive = state_db_tensor[agent_index][DB_IS_ALIVE]
 
-    # Get tree properties
-    is_alive = int(get_this_agent_data_from_tensor(agent_index, is_alive_tensor))
+    # Initialize outputs
+    litter_c = 0.0
+    litter_n = 0.0
+    n_demand = 0.0
 
     # Only process living trees
-    if is_alive == 1:
-        my_height = get_this_agent_data_from_tensor(agent_index, forska_ht_tensor)
-        my_canopy_ht = get_this_agent_data_from_tensor(agent_index, canopy_ht_tensor)
-        my_diam = get_this_agent_data_from_tensor(agent_index, diam_bht_tensor)
+    if is_alive > 0.5:
+        # Get species parameters
+        max_age = params_tensor[agent_index][SP_MAX_AGE]
+        max_diam = params_tensor[agent_index][SP_MAX_DIAM]
+        max_ht = params_tensor[agent_index][SP_MAX_HT]
+        arfa_0 = params_tensor[agent_index][SP_ARFA_0]
+        g = params_tensor[agent_index][SP_G]
+        shade_tol = int(params_tensor[agent_index][SP_SHADE_TOL])
+        deg_day_min = params_tensor[agent_index][SP_DEG_DAY_MIN]
+        deg_day_opt = params_tensor[agent_index][SP_DEG_DAY_OPT]
+        deg_day_max = params_tensor[agent_index][SP_DEG_DAY_MAX]
 
-        # Get neighbor indices for this agent
+        # Get current tree state
+        diam = state_db_tensor[agent_index][DB_DIAM_BHT]
+        height = state_db_tensor[agent_index][DB_FORSKA_HT]
+        canopy_ht = state_db_tensor[agent_index][DB_CANOPY_HT]
+        age = state_tensor[agent_index][S_AGE]
+        biomC = state_tensor[agent_index][S_BIOMC]
+        leaf_bm = state_tensor[agent_index][S_LEAF_BM]
+
+        # ===== READ SITE PARAMS FROM GAP NEIGHBOR =====
+        deg_days = 2500.0  # Default
+        dry_days = 30.0
+        base_mortality = 0.02
+        n_supply_ratio = 1.0
+
         neighbor_indices = locations[agent_index]
-
-        # Sum LAI from all taller neighbors
-        total_lai_above = 0.0
-
-        # Loop through neighbors
         i = 0
         while i < len(neighbor_indices) and neighbor_indices[i] != -1:
-            neighbor_idx = neighbor_indices[i]
-
-            # Check if neighbor is alive
-            neighbor_alive = int(is_alive_tensor[neighbor_idx])
-
-            if neighbor_alive == 1:
-                neighbor_height = forska_ht_tensor[neighbor_idx]
-                neighbor_canopy_ht = canopy_ht_tensor[neighbor_idx]
-                neighbor_diam = diam_bht_tensor[neighbor_idx]
-
-                # Only count neighbors taller than this tree
-                if neighbor_height > my_height:
-                    # Calculate neighbor's LAI contribution
-                    # Simplified LAI: proportional to crown projection area
-                    # LAI ~ diameter^2 * leafdiam_a (using 0.01 as default leafdiam_a)
-                    # Spread across canopy layers
-                    canopy_depth = neighbor_height - neighbor_canopy_ht
-                    if canopy_depth < 1.0:
-                        canopy_depth = 1.0
-
-                    # LAI per meter of canopy = (diameter^2 * 0.01) / canopy_depth
-                    neighbor_lai = (neighbor_diam * neighbor_diam * 0.01) / canopy_depth
-
-                    # Only count the portion above this tree's height
-                    overlap = neighbor_height - my_height
-                    if overlap > canopy_depth:
-                        overlap = canopy_depth
-
-                    lai_contribution = neighbor_lai * overlap
-                    total_lai_above = total_lai_above + lai_contribution
-
+            neighbor_idx = int(neighbor_indices[i])
+            neighbor_breed = int(breeds[neighbor_idx])
+            if neighbor_breed == BREED_GAP:
+                # Read site params from Gap
+                deg_days = params_tensor[neighbor_idx][SITE_DEG_DAYS]
+                dry_days = params_tensor[neighbor_idx][SITE_DRY_DAYS]
+                base_mortality = params_tensor[neighbor_idx][SITE_BASE_MORTALITY]
+                # Read N supply ratio from Gap state
+                n_supply_ratio = state_tensor[neighbor_idx][S_N_SUPPLY_RATIO]
             i = i + 1
 
-        # Apply Beer-Lambert law to get light availability
-        # light_avail = exp(XT * LAI)
-        # XT is negative, so more LAI = less light
-        light_available = cp.exp(XT * total_lai_above)
+        # ===== CALCULATE LIGHT AVAILABILITY =====
+        total_lai_above = 0.0
 
-        # Clamp to valid range
-        if light_available < 0.0:
-            light_available = 0.0
-        if light_available > 1.0:
-            light_available = 1.0
+        i = 0
+        while i < len(neighbor_indices) and neighbor_indices[i] != -1:
+            neighbor_idx = int(neighbor_indices[i])
+            neighbor_breed = int(breeds[neighbor_idx])
 
-        # Write light availability
-        set_this_agent_data_from_tensor(
-            agent_index, light_avail_tensor, light_available
-        )
+            # Only count tree neighbors
+            if neighbor_breed == BREED_TREE:
+                neighbor_alive = state_db_tensor[neighbor_idx][DB_IS_ALIVE]
+                if neighbor_alive > 0.5:
+                    neighbor_height = state_db_tensor[neighbor_idx][DB_FORSKA_HT]
+                    neighbor_canopy_ht = state_db_tensor[neighbor_idx][DB_CANOPY_HT]
+                    neighbor_diam = state_db_tensor[neighbor_idx][DB_DIAM_BHT]
 
+                    # Only count taller neighbors
+                    if neighbor_height > height:
+                        canopy_depth = neighbor_height - neighbor_canopy_ht
+                        if canopy_depth < 1.0:
+                            canopy_depth = 1.0
 
-@jit.rawkernel(device="cuda")
-def growth_step(
-    tick,
-    agent_index,
-    globals,
-    agent_ids,
-    breeds,
-    locations,
-    species_id_tensor,
-    is_alive_tensor,
-    age_tensor,
-    diam_bht_tensor,
-    forska_ht_tensor,
-    canopy_ht_tensor,
-    biomC_tensor,
-    biomN_tensor,
-    leaf_bm_tensor,
-    x_tensor,
-    y_tensor,
-    light_avail_tensor,
-    fc_degday_tensor,
-    fc_drought_tensor,
-    fc_flood_tensor,
-    growth_factor_tensor
-):
-    """
-    Calculate tree growth based on UVAFME equations.
+                        # LAI contribution
+                        neighbor_lai = (neighbor_diam * neighbor_diam * 0.01) / canopy_depth
+                        overlap = neighbor_height - height
+                        if overlap > canopy_depth:
+                            overlap = canopy_depth
 
-    Growth is modulated by:
-    - Species-specific growth rates
-    - Environmental factors (temperature, drought, flood)
-    - Light availability
-    - Asymptotic approach to maximum size
+                        total_lai_above = total_lai_above + neighbor_lai * overlap
+            i = i + 1
 
-    Global parameters:
-    [0] neighborhood_radius
-    [1] deg_days: Annual degree days
-    [2] dry_days: Annual drought days
-    """
-    # Get global environmental parameters
-    deg_days = globals[1]
-    dry_days = globals[2]
+        # Beer-Lambert light attenuation
+        light_avail = cp.exp(XT * total_lai_above)
+        if light_avail < 0.01:
+            light_avail = 0.01
+        if light_avail > 1.0:
+            light_avail = 1.0
 
-    # Get tree properties
-    is_alive = int(get_this_agent_data_from_tensor(agent_index, is_alive_tensor))
+        # ===== CALCULATE ENVIRONMENTAL STRESS FACTORS =====
 
-    if is_alive == 1:
-        species_id = int(get_this_agent_data_from_tensor(agent_index, species_id_tensor))
-        age = get_this_agent_data_from_tensor(agent_index, age_tensor)
-        diam = get_this_agent_data_from_tensor(agent_index, diam_bht_tensor)
-        height = get_this_agent_data_from_tensor(agent_index, forska_ht_tensor)
-        light_avail = get_this_agent_data_from_tensor(agent_index, light_avail_tensor)
-        fc_degday = get_this_agent_data_from_tensor(agent_index, fc_degday_tensor)
-        fc_drought = get_this_agent_data_from_tensor(agent_index, fc_drought_tensor)
-
-        # Species-specific parameters
-        # Format: max_age, max_diam, max_ht, arfa_0, g, shade_tol
-        max_age = 150.0
-        max_diam = 90.0
-        max_ht = 25.0
-        arfa_0 = 0.35
-        g = 100.0
-        shade_tol = 3
-        deg_day_min = 600.0
-        deg_day_opt = 2500.0
-        deg_day_max = 4500.0
-
-        if species_id == 1:  # Red Maple
-            max_age = 150.0
-            max_diam = 90.0
-            max_ht = 25.0
-            arfa_0 = 0.35
-            g = 100.0
-            shade_tol = 3
-            deg_day_min = 600.0
-            deg_day_opt = 2500.0
-            deg_day_max = 4500.0
-        elif species_id == 2:  # Loblolly Pine
-            max_age = 200.0
-            max_diam = 120.0
-            max_ht = 35.0
-            arfa_0 = 0.40
-            g = 120.0
-            shade_tol = 2
-            deg_day_min = 1200.0
-            deg_day_opt = 3000.0
-            deg_day_max = 5000.0
-        elif species_id == 3:  # White Oak
-            max_age = 300.0
-            max_diam = 150.0
-            max_ht = 30.0
-            arfa_0 = 0.30
-            g = 80.0
-            shade_tol = 3
-            deg_day_min = 800.0
-            deg_day_opt = 2800.0
-            deg_day_max = 4800.0
-        elif species_id == 4:  # Sweetgum
-            max_age = 200.0
-            max_diam = 120.0
-            max_ht = 28.0
-            arfa_0 = 0.38
-            g = 95.0
-            shade_tol = 2
-            deg_day_min = 1000.0
-            deg_day_opt = 2900.0
-            deg_day_max = 5200.0
-        elif species_id == 5:  # Eastern Hemlock
-            max_age = 400.0
-            max_diam = 140.0
-            max_ht = 32.0
-            arfa_0 = 0.28
-            g = 70.0
-            shade_tol = 5
-            deg_day_min = 300.0
-            deg_day_opt = 2000.0
-            deg_day_max = 3500.0
-        elif species_id == 6:  # Tulip Poplar
-            max_age = 200.0
-            max_diam = 150.0
-            max_ht = 35.0
-            arfa_0 = 0.42
-            g = 130.0
-            shade_tol = 1
-            deg_day_min = 900.0
-            deg_day_opt = 2700.0
-            deg_day_max = 4800.0
-
-        # Calculate temperature response factor (parabolic response)
-        fc_temp = 0.0
-        if deg_days >= deg_day_max or deg_days <= deg_day_min:
-            fc_temp = 0.0
-        else:
+        # Temperature response (parabolic)
+        fc_degday = 0.0
+        if deg_days > deg_day_min and deg_days < deg_day_max:
             a = (deg_day_opt - deg_day_min) / (deg_day_max - deg_day_min)
             b = (deg_day_max - deg_day_opt) / (deg_day_max - deg_day_min)
             tmp1 = (deg_days - deg_day_min) / (deg_day_opt - deg_day_min)
             tmp2 = (deg_day_max - deg_days) / (deg_day_max - deg_day_opt)
-            fc_temp = (tmp1 ** a) * (tmp2 ** b)
+            if tmp1 > 0.0 and tmp2 > 0.0:
+                fc_degday = (tmp1 ** a) * (tmp2 ** b)
 
-        # Calculate light response factor (exponential saturation)
-        # Based on UVAFME light_rsp function
-        light_c1 = 1.11
-        light_c2 = 2.52
-        light_c3 = 0.07
+        # Drought response (inverse sqrt)
+        fc_drought = 1.0
+        shade_idx = shade_tol - 1
+        if shade_idx < 0:
+            shade_idx = 0
+        if shade_idx > 4:
+            shade_idx = 4
 
-        if shade_tol == 1:
-            light_c1 = 1.01
-            light_c2 = 4.62
-            light_c3 = 0.05
-        elif shade_tol == 2:
-            light_c1 = 1.04
-            light_c2 = 3.44
-            light_c3 = 0.06
-        elif shade_tol == 3:
-            light_c1 = 1.11
-            light_c2 = 2.52
-            light_c3 = 0.07
-        elif shade_tol == 4:
-            light_c1 = 1.24
-            light_c2 = 1.78
-            light_c3 = 0.08
-        elif shade_tol == 5:
-            light_c1 = 1.49
-            light_c2 = 1.23
-            light_c3 = 0.09
+        gamma = 0.35  # Default for shade_tol=3
+        if shade_idx == 0:
+            gamma = 0.50
+        elif shade_idx == 1:
+            gamma = 0.45
+        elif shade_idx == 2:
+            gamma = 0.35
+        elif shade_idx == 3:
+            gamma = 0.25
+        elif shade_idx == 4:
+            gamma = 0.15
 
-        fc_light = light_c1 * (1.0 - cp.exp(-light_c2 * (light_avail - light_c3)))
+        if dry_days < gamma * 365.0:
+            tmp = (gamma * 365.0 - dry_days) / (gamma * 365.0)
+            if tmp > 0.0:
+                fc_drought = tmp ** 0.5
+        else:
+            fc_drought = 0.0
+
+        # Light response
+        c1 = 1.11
+        c2 = 2.52
+        c3 = 0.07
+        if shade_idx == 0:
+            c1 = 1.01
+            c2 = 4.62
+            c3 = 0.05
+        elif shade_idx == 1:
+            c1 = 1.04
+            c2 = 3.44
+            c3 = 0.06
+        elif shade_idx == 2:
+            c1 = 1.11
+            c2 = 2.52
+            c3 = 0.07
+        elif shade_idx == 3:
+            c1 = 1.24
+            c2 = 1.78
+            c3 = 0.08
+        elif shade_idx == 4:
+            c1 = 1.49
+            c2 = 1.23
+            c3 = 0.09
+
+        fc_light = c1 * (1.0 - cp.exp(-c2 * (light_avail - c3)))
         if fc_light < 0.0:
             fc_light = 0.0
         if fc_light > 1.0:
             fc_light = 1.0
 
         # Combined growth factor
-        growth_factor = fc_temp * fc_drought * fc_light
+        growth_factor = fc_degday * fc_drought * fc_light
         if growth_factor < 0.0:
             growth_factor = 0.0
         if growth_factor > 1.0:
             growth_factor = 1.0
 
-        # Diameter growth (UVAFME equation)
-        # Growth rate scaled by environmental factors and approach to max size
-        diam_increment = 0.0
-        if diam < max_diam:
-            # Basic growth rate
-            base_growth = g * growth_factor / 100.0  # cm per year
+        # Nutrient limitation from N supply
+        nutrient_factor = n_supply_ratio
+        if nutrient_factor > 1.0:
+            nutrient_factor = 1.0
+        if nutrient_factor < 0.1:
+            nutrient_factor = 0.1
 
-            # Asymptotic approach to maximum diameter
-            size_factor = 1.0 - (diam / max_diam)
+        # ===== CALCULATE GROWTH =====
 
-            diam_increment = base_growth * size_factor
+        # Maximum diameter increment (UVAFME equation)
+        diam_max = 0.0
+        if diam < max_diam and height < max_ht:
+            delta_ht = max_ht - STD_HT
+            exp_term = cp.exp(-arfa_0 * diam / delta_ht)
+            denom = 2.0 * height + arfa_0 * exp_term * diam
+            if denom > 0.001:
+                diam_max = g * diam * (1.0 - diam * height / (max_diam * max_ht)) / denom
 
+        # Apply stress factors
+        diam_increment = diam_max * growth_factor * nutrient_factor
+        if diam_increment < 0.0:
+            diam_increment = 0.0
+
+        # Minimum viable growth threshold
+        pp = max_diam / max_age * 0.1
+        if pp > 0.05:
+            pp = 0.05
+
+        # Check for growth stress mortality marker
+        mort_marker = 0.0
+        if diam_increment <= pp or growth_factor * nutrient_factor <= 0.05:
+            mort_marker = 1.0
+
+        # Update diameter
         new_diam = diam + diam_increment
         if new_diam > max_diam:
             new_diam = max_diam
 
-        # Height calculation using Forska equation
-        # h = STD_HT + (h_max - STD_HT) * (1 - exp(-arfa_0 * d / (h_max - STD_HT)))
-        STD_HT = 1.3  # Standard height (breast height)
+        # Update height (Forska equation)
         delta_ht = max_ht - STD_HT
+        new_height = STD_HT + delta_ht * (1.0 - cp.exp(-arfa_0 * new_diam / delta_ht))
 
-        new_height = STD_HT + delta_ht * (1.0 - cp.exp(-(arfa_0 * new_diam / delta_ht)))
-
-        # Biomass calculation (simplified)
-        # In full UVAFME, this involves stem shape calculations
-        # Here we use allometric relationships
-        # biomC ~ wood_bulk_dens * volume
-        # Assuming cylindrical approximation: V = pi * (d/200)^2 * h
-        PI = 3.14159265359
-        wood_bulk_dens = 0.54  # g/cm3, varies by species
-
-        radius_m = new_diam / 200.0  # Convert cm to meters, then diameter to radius
+        # Update biomass
+        radius_m = new_diam / 200.0
         volume_m3 = PI * radius_m * radius_m * new_height
+        wood_bulk_dens = 0.54
+        new_biomC = volume_m3 * wood_bulk_dens * 1000.0 * 0.5
 
-        # Convert to biomass (rough approximation)
-        # wood_bulk_dens is in g/cm3, need kg/m3
-        biomass_kg = volume_m3 * wood_bulk_dens * 1000.0
+        # Leaf biomass (10% of stem)
+        new_leaf_bm = new_biomC * 0.1
 
-        # Carbon content is approximately 50% of dry biomass
-        new_biomC = biomass_kg * 0.5
+        # N demand for growth
+        biomC_increment = new_biomC - biomC
+        if biomC_increment < 0.0:
+            biomC_increment = 0.0
+        leaf_increment = new_leaf_bm - leaf_bm
+        if leaf_increment < 0.0:
+            leaf_increment = 0.0
 
-        # Age increment
+        n_demand = biomC_increment / STEM_C_N + leaf_increment / LEAF_C_N
+
+        # ===== CHECK MORTALITY =====
+
+        # Age-based mortality
+        age_mort_prob = 4.605 / max_age  # From UVAFME age_tol=1
+
+        # Stress-based mortality (only if mort_marker set)
+        stress_mort_prob = 0.0
+        if mort_marker > 0.5:
+            stress_mort_prob = 0.37  # From UVAFME stress_tol=3
+
+        # Combined mortality probability
+        total_mort_prob = age_mort_prob + stress_mort_prob * (1.0 - age_mort_prob)
+        if total_mort_prob > 1.0:
+            total_mort_prob = 1.0
+
+        # Pseudo-random check (deterministic based on tick and agent_index)
+        rand_val = ((tick * 997 + agent_index * 991) % 1000) / 1000.0
+
+        # ===== APPLY UPDATES =====
+
+        if rand_val < total_mort_prob:
+            # Tree dies - all biomass becomes litter
+            is_alive = 0.0
+            litter_c = new_biomC
+            litter_n = new_biomC / STEM_C_N
+        else:
+            # Tree survives - annual leaf litter (assume deciduous, 100% leaf drop)
+            is_alive = 1.0
+            litter_c = new_leaf_bm * 0.5  # 50% of leaves as litter
+            litter_n = litter_c / LEAF_C_N
+
+        # Update age
         new_age = age + 1.0
 
-        # Write updates (SAGESim handles write buffering)
-        set_this_agent_data_from_tensor(agent_index, age_tensor, new_age)
-        set_this_agent_data_from_tensor(agent_index, diam_bht_tensor, new_diam)
-        set_this_agent_data_from_tensor(agent_index, forska_ht_tensor, new_height)
-        set_this_agent_data_from_tensor(agent_index, biomC_tensor, new_biomC)
-        set_this_agent_data_from_tensor(agent_index, growth_factor_tensor, growth_factor)
+        # ===== WRITE STATE =====
+        # state_db (double buffered)
+        state_db_tensor[agent_index][DB_IS_ALIVE] = is_alive
+        state_db_tensor[agent_index][DB_DIAM_BHT] = new_diam
+        state_db_tensor[agent_index][DB_FORSKA_HT] = new_height
+        state_db_tensor[agent_index][DB_CANOPY_HT] = canopy_ht  # TODO: update canopy height
 
+        # state (not double buffered)
+        state_tensor[agent_index][S_AGE] = new_age
+        state_tensor[agent_index][S_BIOMC] = new_biomC
+        state_tensor[agent_index][S_BIOMN] = new_biomC / STEM_C_N
+        state_tensor[agent_index][S_LEAF_BM] = new_leaf_bm
+        state_tensor[agent_index][S_LIGHT_AVAIL] = light_avail
+        state_tensor[agent_index][S_FC_DEGDAY] = fc_degday
+        state_tensor[agent_index][S_FC_DROUGHT] = fc_drought
+        state_tensor[agent_index][S_GROWTH_FACTOR] = growth_factor
+        state_tensor[agent_index][S_NUTRIENT_FACTOR] = nutrient_factor
 
-@jit.rawkernel(device="cuda")
-def mortality_step(
-    tick,
-    agent_index,
-    globals,
-    agent_ids,
-    breeds,
-    locations,
-    species_id_tensor,
-    is_alive_tensor,
-    age_tensor,
-    diam_bht_tensor,
-    forska_ht_tensor,
-    canopy_ht_tensor,
-    biomC_tensor,
-    biomN_tensor,
-    leaf_bm_tensor,
-    x_tensor,
-    y_tensor,
-    light_avail_tensor,
-    fc_degday_tensor,
-    fc_drought_tensor,
-    fc_flood_tensor,
-    growth_factor_tensor
-):
-    """
-    Calculate tree mortality based on age and environmental stress.
-
-    Mortality increases with:
-    - Age (approaching max age)
-    - Environmental stress (poor growing conditions)
-    - Suppression (low growth factor)
-
-    Global parameters:
-    [0] neighborhood_radius
-    [1] deg_days
-    [2] dry_days
-    [3] base_mortality_rate: Base annual mortality probability
-    """
-    # Get parameters
-    base_mortality = globals[3]
-
-    # Get tree properties
-    is_alive = int(get_this_agent_data_from_tensor(agent_index, is_alive_tensor))
-
-    if is_alive == 1:
-        species_id = int(get_this_agent_data_from_tensor(agent_index, species_id_tensor))
-        age = get_this_agent_data_from_tensor(agent_index, age_tensor)
-        growth_factor = get_this_agent_data_from_tensor(agent_index, growth_factor_tensor)
-
-        # Get species max age
-        max_age = 150.0
-        if species_id == 1:
-            max_age = 150.0
-        elif species_id == 2:
-            max_age = 200.0
-        elif species_id == 3:
-            max_age = 300.0
-        elif species_id == 4:
-            max_age = 200.0
-        elif species_id == 5:
-            max_age = 400.0
-        elif species_id == 6:
-            max_age = 200.0
-
-        # Age-related mortality (increases as tree approaches max age)
-        age_factor = age / max_age
-        age_mortality = base_mortality * age_factor
-
-        # Stress-related mortality (poor growth conditions)
-        stress_factor = 1.0 - growth_factor
-        stress_mortality = base_mortality * stress_factor * 2.0  # Stress has double impact
-
-        # Total mortality probability
-        total_mortality = age_mortality + stress_mortality
-        if total_mortality > 1.0:
-            total_mortality = 1.0
-
-        # Random mortality check
-        # Note: random() in GPU context needs special handling
-        # For now, use a deterministic threshold based on tick and agent_index
-        # In production, would use proper random number generation
-        rand_val = cp.float32((tick * 997 + agent_index * 991) % 1000) / 1000.0
-
-        if rand_val < total_mortality:
-            set_this_agent_data_from_tensor(agent_index, is_alive_tensor, 0.0)
-        else:
-            set_this_agent_data_from_tensor(agent_index, is_alive_tensor, 1.0)
+    # ===== WRITE OUTPUTS (always, even for dead trees) =====
+    output_tensor[agent_index][O_LITTER_C] = litter_c
+    output_tensor[agent_index][O_LITTER_N] = litter_n
+    output_tensor[agent_index][O_N_DEMAND] = n_demand

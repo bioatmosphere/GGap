@@ -1,10 +1,10 @@
 """
-TreeBreed for GGap model.
-Based on UVAFME tree structure with SAGESim agent framework.
+SiteBreed for GGap model.
+Site agent holds soil biogeochemistry state and environmental parameters.
 
 All breeds register the SAME 5 properties:
 - params: static parameters (no double buffer)
-- state_db: state needing double buffer (is_alive, diam, heights)
+- state_db: state needing double buffer
 - state: state NOT needing double buffer
 - output: outputs (no double buffer)
 - soil: soil state (no double buffer)
@@ -22,25 +22,22 @@ except ImportError:
         sys.path.insert(0, _sagesim_path)
 
 from sagesim.breed import Breed
-from gap.tree_step_func import tree_step
+from gap.site_step_func import site_soil_step
 
 
-class TreeBreed(Breed):
+class SiteBreed(Breed):
     """
-    TreeBreed - registered first (breed_id = 0).
+    SiteBreed - registered third (breed_id = 2).
 
-    Tree-specific data layout:
-    - params[0]: species_id
-    - params[1:10]: species_params (max_age, max_diam, max_ht, arfa_0, g,
-                                    shade_tol, deg_day_min, deg_day_opt, deg_day_max)
-    - state_db[0:4]: is_alive, diam_bht, forska_ht, canopy_ht
-    - state[0:11]: age, biomC, biomN, leaf_bm, x, y, light_avail,
-                   fc_degday, fc_drought, fc_flood, growth_factor, nutrient_factor
-    - output[0:3]: litter_c, litter_n, n_demand
+    Site-specific data:
+    - params[10:13]: site_params (deg_days, dry_days, base_mortality)
+    - state[12]: avail_n (written for Gap to read)
+    - output[5]: soil_resp
+    - soil[0:9]: soil_pools and soil_water
     """
 
     def __init__(self) -> None:
-        super().__init__("Tree")
+        super().__init__("Site")
 
         # All breeds register the SAME 5 properties
         self.register_property("params", [0.0] * 15, neighbor_visible=True)
@@ -49,11 +46,11 @@ class TreeBreed(Breed):
         self.register_property("output", [0.0] * 8, neighbor_visible=True)
         self.register_property("soil", [0.0] * 10, neighbor_visible=False)
 
-        # Register tree step function (priority 0)
-        # state_db needs double buffer (trees read neighbors' is_alive, diam, height)
+        # Register soil decomposition step function (priority 2)
+        # Reads litter from Gap neighbors, updates soil pools and avail_n
         self.register_step_func(
-            tree_step,
-            "tree_step_func.py",
-            priority=0,
+            site_soil_step,
+            "site_step_func.py",
+            priority=2,
             no_double_buffer=["params", "state", "output", "soil"],
         )

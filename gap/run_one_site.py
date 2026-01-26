@@ -1,7 +1,6 @@
 """
-Run script for GGap forest gap dynamics model.
-Demonstrates UVAFME-based forest simulation using SAGESim framework.
-Uses Site -> Gap -> Trees agent hierarchy with soil biogeochemistry.
+Run script for a single site simulation.
+Uses Site -> Gap(s) -> Trees agent hierarchy with soil biogeochemistry.
 """
 
 import argparse
@@ -39,7 +38,7 @@ rank = comm.Get_rank()
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run GGap forest gap dynamics model"
+        description="Run single site simulation with soil biogeochemistry"
     )
     parser.add_argument(
         "--num_gaps",
@@ -94,8 +93,7 @@ def main():
 
     if rank == 0:
         print("=" * 60)
-        print("GGap Forest Gap Dynamics Model")
-        print("GPU-Accelerated UVAFME-based Simulation")
+        print("GGap Single Site Simulation (with Soil)")
         print("=" * 60)
         print(f"\nSimulation Parameters:")
         print(f"  Number of gaps: {args.num_gaps}")
@@ -114,7 +112,7 @@ def main():
     if rank == 0:
         print("Loading site and species data...")
 
-    # Load site (creates site agent, loads species from CSV)
+    # Load site (creates site agent with soil, loads species from CSV)
     site = model.load_site(
         site_csv=args.site_csv,
         deg_days=args.deg_days,
@@ -124,22 +122,24 @@ def main():
 
     if rank == 0:
         print(f"Loaded {len(site['species'])} species for site")
-        print(f"Unique species in model: {model.get_species_count()}")
-        print(f"\nCreating {args.num_gaps} gaps with {args.trees_per_gap} trees each...")
+        print(f"Site agent ID: {site['site_agent_id']}")
+        print(f"\nInitializing {args.num_gaps} gap(s) with trees...")
 
-    # Create gaps and trees
-    for gap_idx in range(args.num_gaps):
+    # Initialize gaps - creates gap agents and trees, connects them
+    total_trees = 0
+    for gap_num in range(args.num_gaps):
         tree_ids = model.initialize_gap(
             site=site,
             maxtrees=args.trees_per_gap,
             age_range=(5, 50),
             size_range=(3.0, 25.0),
         )
-        if rank == 0 and args.num_gaps <= 10:
-            print(f"  Gap {gap_idx}: {len(tree_ids)} trees")
+        total_trees += len(tree_ids)
+        if rank == 0:
+            print(f"  Gap {gap_num + 1}: {len(tree_ids)} trees")
 
     if rank == 0:
-        print(f"\nTotal agents: {len(model.site_agents)} sites, {len(model.gap_agents)} gaps, {len(model.tree_ids)} trees")
+        print(f"\nTotal agents: {len(model.site_agents)} site, {len(model.gap_agents)} gaps, {len(model.tree_ids)} trees")
         stats = model.get_statistics()
         print(f"\nInitial state:")
         print(f"  Living trees: {stats['living_trees']}")
@@ -188,7 +188,7 @@ def main():
         print("Simulation Complete")
         print("=" * 60)
         stats = model.get_statistics()
-        print(f"\nFinal Forest State:")
+        print(f"\nFinal Site State:")
         print(f"  Living trees: {stats['living_trees']}")
         print(f"  Dead trees: {stats['dead_trees']}")
         print(f"  Total biomass: {stats['total_biomass']:.1f} kg C")
