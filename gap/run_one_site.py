@@ -166,8 +166,11 @@ def main():
     if rank == 0:
         print("Starting simulation...")
         print()
-        print(f"{'Year':<8} {'Alive':<8} {'Dead':<8} {'Biomass':<12} {'Avail_N':<12}")
-        print("-" * 50)
+        print(f"{'Year':<6} {'Alive':<7} {'Seedlings':<10} {'Dormant':<8} {'NetChg':<8} {'Biomass':<10} {'Avail_N':<10}")
+        print("-" * 70)
+
+    # Track living trees for net change calculation
+    prev_alive = total_alive
 
     # Run simulation
     site_agent_id = site['site_agent_id']
@@ -183,17 +186,25 @@ def main():
             stats = model.get_statistics()
             states = model.get_agent_property_value(site_agent_id, "states")
             avail_n = states[SITE_S_AVAIL_N] if isinstance(states, list) else states
-            print(f"{current_year:<8} {stats['living_trees']:<8} {stats['dead_trees']:<8} {stats['total_biomass']:<12.1f} {avail_n:<12.4f}")
+
+            # Calculate net change (positive = more recruited than died)
+            net_change = stats['living_trees'] - prev_alive
+            net_str = f"+{net_change}" if net_change >= 0 else str(net_change)
+            prev_alive = stats['living_trees']
+
+            print(f"{current_year:<6} {stats['living_trees']:<7} {stats['seedlings']:<10} {stats['dormant_slots']:<8} {net_str:<8} {stats['total_biomass']:<10.1f} {avail_n:<10.4f}")
 
     if rank == 0:
-        print("\n" + "=" * 60)
+        print("\n" + "=" * 70)
         print("Simulation Complete")
-        print("=" * 60)
+        print("=" * 70)
         stats = model.get_statistics()
-        print(f"\nFinal Site State:")
+        print(f"\nFinal Tree Statistics:")
         print(f"  Living trees: {stats['living_trees']}")
-        print(f"  Dead trees: {stats['dead_trees']}")
+        print(f"  Seedlings (age <= 2): {stats['seedlings']}")
+        print(f"  Dormant slots: {stats['dormant_slots']}")
         print(f"  Total biomass: {stats['total_biomass']:.1f} kg C")
+        print(f"  Net change from start: {stats['living_trees'] - total_alive:+d}")
 
         # Final soil state (soil pools in params, avail_n in states)
         params = model.get_agent_property_value(site_agent_id, "params")

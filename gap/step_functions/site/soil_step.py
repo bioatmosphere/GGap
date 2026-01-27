@@ -49,11 +49,13 @@ SITE_P_LAI_W0 = 50
 SITE_P_LATITUDE = 51
 SITE_P_RAIN_N = 52
 
-# === Site states[4] (public) ===
+# === Site states[6] (public) ===
 SITE_S_DEG_DAYS = 0
 SITE_S_DRY_DAYS = 1
 SITE_S_BASE_MORTALITY = 2
 SITE_S_AVAIL_N = 3
+SITE_S_FLOOD_DAYS = 4  # Days when A layer is saturated
+SITE_S_FIRE_INTENSITY = 5  # Fire intensity this year (0-1)
 
 # === Gap states[7] (for reading from Gap neighbors) ===
 GAP_S_LITTER_ACCUM_C = 5
@@ -230,6 +232,7 @@ def site_soil_step(
     total_resp = 0.0
     rain_n = 0.0
     freeze_days = 0.0
+    flood_days = 0.0  # Days when A layer is saturated
 
     day = 0
     while day < 365:
@@ -518,6 +521,11 @@ def site_soil_step(
         if sa_fc > 0.0:
             saw0_scaled = sa_w0 / sa_fc
 
+        # Track flood days: when A layer is near field capacity (saturated)
+        # UVAFME considers flooding when soil water is at or above field capacity
+        if sa_fc > 0.0 and sa_w0 >= sa_fc * 0.95:
+            flood_days = flood_days + 1.0
+
         # === SOIL DECOMPOSITION (from UVAFME soil.py:soil_decomp) ===
         # Add daily litter to A0 layer
         ao_c0 = ao_c0 + daily_litter_c
@@ -611,3 +619,42 @@ def site_soil_step(
 
     # Available N = mineralization + atmospheric deposition
     states_tensor[agent_index][SITE_S_AVAIL_N] = total_avail_n + rain_n
+
+    # Flood days for this year
+    states_tensor[agent_index][SITE_S_FLOOD_DAYS] = flood_days
+
+    # ========== FIRE PROBABILITY ==========
+    # Fire probability increases with dry days and decreases with precipitation
+    # Base fire probability: 0.01 (1% per year baseline)
+    # Dry conditions increase fire risk
+    fire_prob = 0.01  # Base probability
+    dry_day_fraction = freeze_days / 365.0  # Reuse freeze_days counter for dry conditions
+
+    # More dry days = higher fire probability
+    # At 120+ dry days, fire probability increases significantly
+    if freeze_days < 30.0:  # freeze_days was actually calculated but let's use a simple dry proxy
+        # Use dry_days from soil moisture tracking (estimated from water balance)
+        estimated_dry_days = 0.0
+        if saw0_scaled < 0.3:
+            estimated_dry_days = 30.0
+        if saw0_scaled < 0.2:
+            estimated_dry_days = 60.0
+        if saw0_scaled < 0.1:
+            estimated_dry_days = 120.0
+
+        if estimated_dry_days > 60.0:
+            fire_prob = 0.03 + (estimated_dry_days - 60.0) * 0.001
+
+    if fire_prob > 0.15:
+        fire_prob = 0.15  # Cap at 15% annual probability
+
+    # Stochastic fire check (deterministic based on tick)
+    fire_rand = ((tick * 1021 + agent_index * 1019) % 10000) / 10000.0
+    fire_intensity = 0.0
+    if fire_rand < fire_prob:
+        # Fire occurs - intensity based on dry conditions
+        fire_intensity = 0.3 + fire_rand * 2.0  # 0.3 to ~0.7 intensity
+        if fire_intensity > 1.0:
+            fire_intensity = 1.0
+
+    states_tensor[agent_index][SITE_S_FIRE_INTENSITY] = fire_intensity

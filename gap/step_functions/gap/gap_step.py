@@ -8,7 +8,7 @@ Two step functions:
 
 Property scheme (3 properties):
 - params[2]: gap_id, total_n_demand (private internal)
-- states[9]: climate + nutrients + litter_pool + recruitment (public, no buffer)
+- states[12]: climate + nutrients + litter_pool + recruitment + flood_days + seed_bank + fire (public, no buffer)
 - states_db[1]: placeholder (public, double buffered but unused)
 """
 
@@ -24,7 +24,7 @@ BREED_SITE = 2
 GAP_P_GAP_ID = 0
 GAP_P_TOTAL_N_DEMAND = 1
 
-# === Gap states[9] (public, no buffer) ===
+# === Gap states[12] (public, no buffer) ===
 GAP_S_DEG_DAYS = 0
 GAP_S_DRY_DAYS = 1
 GAP_S_BASE_MORTALITY = 2
@@ -34,6 +34,9 @@ GAP_S_LITTER_ACCUM_C = 5
 GAP_S_LITTER_ACCUM_N = 6
 GAP_S_NUM_TO_RECRUIT = 7
 GAP_S_RECRUIT_RAND_SEED = 8
+GAP_S_FLOOD_DAYS = 9
+GAP_S_SEED_BANK = 10
+GAP_S_FIRE_INTENSITY = 11
 
 # === Tree params[23] (for reading invader/seed) ===
 TREE_P_INVADER = 10
@@ -47,11 +50,13 @@ TREE_S_N_DEMAND = 2
 # === Tree states_db[4] (for checking alive status) ===
 TREE_DB_IS_ALIVE = 0
 
-# === Site states[4] (for reading from Site neighbor) ===
+# === Site states[6] (for reading from Site neighbor) ===
 SITE_S_DEG_DAYS = 0
 SITE_S_DRY_DAYS = 1
 SITE_S_BASE_MORTALITY = 2
 SITE_S_AVAIL_N = 3
+SITE_S_FLOOD_DAYS = 4
+SITE_S_FIRE_INTENSITY = 5
 
 
 @jit.rawkernel(device="cuda")
@@ -119,19 +124,35 @@ def gap_aggregate_step(
 
         i = i + 1
 
+    # Read existing seed bank (accumulated from previous years)
+    seed_bank = states_tensor[agent_index][GAP_S_SEED_BANK]
+
+    # Total available seeds = current production + seed bank
+    total_available_seeds = total_seed_production + seed_bank
+
     # Calculate number of seedlings to recruit this tick
     # Based on UVAFME: seedling establishment depends on seed availability and space
     num_to_recruit = 0.0
-    if dormant_tree_count > 0.5 and total_seed_production > 0.1:
+    seeds_used = 0.0
+    if dormant_tree_count > 0.5 and total_available_seeds > 0.1:
         # Recruitment rate: proportional to seeds, limited by available slots
         # UVAFME uses: seedling = invader * 10 + sprout * avail_spec
         # Simplified: recruit based on seed production, capped by dormant slots
-        potential_recruits = total_seed_production * 0.5  # Scale factor
+        potential_recruits = total_available_seeds * 0.3  # 30% germination rate
         if potential_recruits > dormant_tree_count:
             potential_recruits = dormant_tree_count
         if potential_recruits > 10.0:
             potential_recruits = 10.0  # Cap per tick to avoid explosive growth
         num_to_recruit = potential_recruits
+        seeds_used = num_to_recruit * 2.0  # Each recruit uses ~2 seeds worth
+
+    # Update seed bank: add new production, subtract used, apply decay
+    # Seeds decay at 30% per year (seed longevity)
+    new_seed_bank = (total_available_seeds - seeds_used) * 0.7  # 30% decay
+    if new_seed_bank < 0.0:
+        new_seed_bank = 0.0
+    if new_seed_bank > 100.0:
+        new_seed_bank = 100.0  # Cap seed bank to prevent unbounded accumulation
 
     # Generate a pseudo-random seed for species selection in tree_step
     recruit_rand_seed = float((tick * 997 + agent_index * 991) % 10000)
@@ -144,6 +165,7 @@ def gap_aggregate_step(
     states_tensor[agent_index][GAP_S_LITTER_ACCUM_N] = total_litter_n
     states_tensor[agent_index][GAP_S_NUM_TO_RECRUIT] = num_to_recruit
     states_tensor[agent_index][GAP_S_RECRUIT_RAND_SEED] = recruit_rand_seed
+    states_tensor[agent_index][GAP_S_SEED_BANK] = new_seed_bank
 
 
 @jit.rawkernel(device="cuda")
@@ -162,17 +184,20 @@ def gap_sync_step(
     Gap sync step (priority 3).
 
     Reads from site neighbor:
-    - states: deg_days, dry_days, base_mortality, avail_n
+    - states: deg_days, dry_days, base_mortality, avail_n, flood_days
 
     Writes to own states:
     - climate: copied from Site (for dynamic climate support)
     - n_supply_ratio: avail_n / total_n_demand
+    - flood_days: relayed from Site
     """
-    # Find Site neighbor and read climate + avail_n
+    # Find Site neighbor and read climate + avail_n + flood_days + fire
     site_deg_days = 2500.0  # Default
     site_dry_days = 30.0
     site_base_mortality = 0.02
     site_avail_n = 0.1
+    site_flood_days = 0.0
+    site_fire_intensity = 0.0
 
     neighbor_indices = locations[agent_index]
     i = 0
@@ -186,6 +211,8 @@ def gap_sync_step(
             site_dry_days = states_tensor[neighbor_idx][SITE_S_DRY_DAYS]
             site_base_mortality = states_tensor[neighbor_idx][SITE_S_BASE_MORTALITY]
             site_avail_n = states_tensor[neighbor_idx][SITE_S_AVAIL_N]
+            site_flood_days = states_tensor[neighbor_idx][SITE_S_FLOOD_DAYS]
+            site_fire_intensity = states_tensor[neighbor_idx][SITE_S_FIRE_INTENSITY]
 
         i = i + 1
 
@@ -194,6 +221,8 @@ def gap_sync_step(
     states_tensor[agent_index][GAP_S_DRY_DAYS] = site_dry_days
     states_tensor[agent_index][GAP_S_BASE_MORTALITY] = site_base_mortality
     states_tensor[agent_index][GAP_S_AVAIL_N] = site_avail_n
+    states_tensor[agent_index][GAP_S_FLOOD_DAYS] = site_flood_days
+    states_tensor[agent_index][GAP_S_FIRE_INTENSITY] = site_fire_intensity
 
     # Calculate N supply/demand ratio
     total_n_dem = params_tensor[agent_index][GAP_P_TOTAL_N_DEMAND]
