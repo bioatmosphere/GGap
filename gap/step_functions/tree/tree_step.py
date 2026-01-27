@@ -1,9 +1,9 @@
 """
 Tree step function for GGap model.
-Combined GPU kernel implementing light, growth, and mortality.
+Combined GPU kernel implementing light, growth, mortality, and recruitment.
 
 Property scheme (3 properties):
-- params[20]: species traits (static) + physiology (dynamic internal) - private
+- params[23]: species traits (static) + physiology (dynamic internal) - private
 - states[3]: litter output (litter_c, litter_n, n_demand) - public, no buffer
 - states_db[4]: structure (is_alive, diam, height, canopy_ht) - public, double buffered
 """
@@ -16,8 +16,8 @@ BREED_TREE = 0
 BREED_GAP = 1
 BREED_SITE = 2
 
-# === Tree params[20] (private) ===
-# Species traits [0-9]:
+# === Tree params[23] (private) ===
+# Species traits [0-12]:
 TREE_P_SPECIES_ID = 0
 TREE_P_MAX_AGE = 1
 TREE_P_MAX_DIAM = 2
@@ -28,17 +28,20 @@ TREE_P_SHADE_TOL = 6
 TREE_P_DEG_DAY_MIN = 7
 TREE_P_DEG_DAY_OPT = 8
 TREE_P_DEG_DAY_MAX = 9
-# Physiology [10-19]:
-TREE_P_AGE = 10
-TREE_P_BIOMC = 11
-TREE_P_BIOMN = 12
-TREE_P_LEAF_BM = 13
-TREE_P_X = 14
-TREE_P_Y = 15
-TREE_P_LIGHT_AVAIL = 16
-TREE_P_FC_DEGDAY = 17
-TREE_P_FC_DROUGHT = 18
-TREE_P_FC_FLOOD = 19
+TREE_P_INVADER = 10
+TREE_P_SEED = 11
+TREE_P_SPROUT = 12
+# Physiology [13-22]:
+TREE_P_AGE = 13
+TREE_P_BIOMC = 14
+TREE_P_BIOMN = 15
+TREE_P_LEAF_BM = 16
+TREE_P_X = 17
+TREE_P_Y = 18
+TREE_P_LIGHT_AVAIL = 19
+TREE_P_FC_DEGDAY = 20
+TREE_P_FC_DROUGHT = 21
+TREE_P_FC_FLOOD = 22
 
 # === Tree states[3] (public, no buffer) ===
 TREE_S_LITTER_C = 0
@@ -51,12 +54,16 @@ TREE_DB_DIAM = 1
 TREE_DB_HEIGHT = 2
 TREE_DB_CANOPY_HT = 3
 
-# === Gap states[7] (for reading from Gap neighbor) ===
+# === Gap states[9] (for reading from Gap neighbor) ===
 GAP_S_DEG_DAYS = 0
 GAP_S_DRY_DAYS = 1
 GAP_S_BASE_MORTALITY = 2
 GAP_S_AVAIL_N = 3
 GAP_S_N_SUPPLY_RATIO = 4
+GAP_S_LITTER_ACCUM_C = 5
+GAP_S_LITTER_ACCUM_N = 6
+GAP_S_NUM_TO_RECRUIT = 7
+GAP_S_RECRUIT_RAND_SEED = 8
 
 # === Constants ===
 PI = 3.14159265359
@@ -66,6 +73,10 @@ XT = -0.40   # Light extinction coefficient
 # C/N ratios
 STEM_C_N = 450.0
 LEAF_C_N = 50.0  # Average of conifer (60) and deciduous (40)
+
+# Seedling initial size
+SEEDLING_DIAM = 1.0  # cm
+SEEDLING_AGE = 1.0   # years
 
 
 @jit.rawkernel(device="cuda")
@@ -87,6 +98,8 @@ def tree_step(
     Calculates light availability from neighbor tree states_db (heights).
     Applies environmental stress and grows tree.
     Checks mortality and outputs litter.
+
+    For dormant trees: checks recruitment first, then grows if activated.
     """
     # ===== GET CURRENT STATE =====
     is_alive = states_db_tensor[agent_index][TREE_DB_IS_ALIVE]
@@ -96,7 +109,101 @@ def tree_step(
     litter_n = 0.0
     n_demand = 0.0
 
-    # Only process living trees
+    # ===== RECRUITMENT: Check if dormant slot should activate (BEFORE growth) =====
+    if is_alive < 0.5:
+        # Read recruitment info from Gap neighbor
+        num_to_recruit = 0.0
+        recruit_rand_seed = 0.0
+
+        neighbor_indices = locations[agent_index]
+        i = 0
+        while i < len(neighbor_indices) and neighbor_indices[i] != -1:
+            neighbor_idx = int(neighbor_indices[i])
+            neighbor_breed = int(breeds[neighbor_idx])
+            if neighbor_breed == BREED_GAP:
+                num_to_recruit = states_tensor[neighbor_idx][GAP_S_NUM_TO_RECRUIT]
+                recruit_rand_seed = states_tensor[neighbor_idx][GAP_S_RECRUIT_RAND_SEED]
+            i = i + 1
+
+        # Determine if this dormant slot should be recruited
+        if num_to_recruit > 0.5:
+            # Hash agent_index with rand_seed to get selection priority
+            slot_priority = ((agent_index * 997 + int(recruit_rand_seed)) % 10000) / 10000.0
+            # Lower priority values get recruited first
+            recruit_threshold = num_to_recruit / 100.0  # Assume max ~100 dormant slots
+            if recruit_threshold > 1.0:
+                recruit_threshold = 1.0
+
+            if slot_priority < recruit_threshold:
+                # Find a living tree neighbor to copy species from
+                total_weight = 0.0
+                selected_neighbor_idx = -1
+
+                i = 0
+                while i < len(neighbor_indices) and neighbor_indices[i] != -1:
+                    neighbor_idx = int(neighbor_indices[i])
+                    neighbor_breed = int(breeds[neighbor_idx])
+                    if neighbor_breed == BREED_TREE:
+                        neighbor_alive = states_db_tensor[neighbor_idx][TREE_DB_IS_ALIVE]
+                        if neighbor_alive > 0.5:
+                            # Get species weight
+                            neighbor_invader = params_tensor[neighbor_idx][TREE_P_INVADER]
+                            neighbor_seed = params_tensor[neighbor_idx][TREE_P_SEED]
+                            weight = neighbor_invader * neighbor_seed
+                            if weight < 0.01:
+                                weight = 0.01
+                            total_weight = total_weight + weight
+
+                            # Probabilistic selection using running sum
+                            rand_val = ((agent_index * 991 + int(recruit_rand_seed) * 7 + i) % 1000) / 1000.0
+                            select_prob = weight / (total_weight + 0.001)
+                            if rand_val < select_prob:
+                                selected_neighbor_idx = neighbor_idx
+                    i = i + 1
+
+                # If we found a parent tree, copy its species traits and initialize as seedling
+                if selected_neighbor_idx >= 0:
+                    # Copy species traits [0-12] from parent
+                    params_tensor[agent_index][TREE_P_SPECIES_ID] = params_tensor[selected_neighbor_idx][TREE_P_SPECIES_ID]
+                    params_tensor[agent_index][TREE_P_MAX_AGE] = params_tensor[selected_neighbor_idx][TREE_P_MAX_AGE]
+                    params_tensor[agent_index][TREE_P_MAX_DIAM] = params_tensor[selected_neighbor_idx][TREE_P_MAX_DIAM]
+                    params_tensor[agent_index][TREE_P_MAX_HT] = params_tensor[selected_neighbor_idx][TREE_P_MAX_HT]
+                    params_tensor[agent_index][TREE_P_ARFA_0] = params_tensor[selected_neighbor_idx][TREE_P_ARFA_0]
+                    params_tensor[agent_index][TREE_P_G] = params_tensor[selected_neighbor_idx][TREE_P_G]
+                    params_tensor[agent_index][TREE_P_SHADE_TOL] = params_tensor[selected_neighbor_idx][TREE_P_SHADE_TOL]
+                    params_tensor[agent_index][TREE_P_DEG_DAY_MIN] = params_tensor[selected_neighbor_idx][TREE_P_DEG_DAY_MIN]
+                    params_tensor[agent_index][TREE_P_DEG_DAY_OPT] = params_tensor[selected_neighbor_idx][TREE_P_DEG_DAY_OPT]
+                    params_tensor[agent_index][TREE_P_DEG_DAY_MAX] = params_tensor[selected_neighbor_idx][TREE_P_DEG_DAY_MAX]
+                    params_tensor[agent_index][TREE_P_INVADER] = params_tensor[selected_neighbor_idx][TREE_P_INVADER]
+                    params_tensor[agent_index][TREE_P_SEED] = params_tensor[selected_neighbor_idx][TREE_P_SEED]
+                    params_tensor[agent_index][TREE_P_SPROUT] = params_tensor[selected_neighbor_idx][TREE_P_SPROUT]
+
+                    # Initialize physiology as seedling
+                    params_tensor[agent_index][TREE_P_AGE] = SEEDLING_AGE
+                    params_tensor[agent_index][TREE_P_BIOMC] = 0.1  # Minimal initial biomass
+                    params_tensor[agent_index][TREE_P_BIOMN] = 0.1 / STEM_C_N
+                    params_tensor[agent_index][TREE_P_LEAF_BM] = 0.01
+                    params_tensor[agent_index][TREE_P_LIGHT_AVAIL] = 1.0
+                    params_tensor[agent_index][TREE_P_FC_DEGDAY] = 1.0
+                    params_tensor[agent_index][TREE_P_FC_DROUGHT] = 1.0
+                    params_tensor[agent_index][TREE_P_FC_FLOOD] = 1.0
+
+                    # Calculate initial height from seedling diameter
+                    max_ht = params_tensor[agent_index][TREE_P_MAX_HT]
+                    arfa_0 = params_tensor[agent_index][TREE_P_ARFA_0]
+                    delta_ht = max_ht - STD_HT
+                    seedling_ht = STD_HT + delta_ht * (1.0 - cp.exp(-arfa_0 * SEEDLING_DIAM / delta_ht))
+
+                    # Set structure for seedling
+                    states_db_tensor[agent_index][TREE_DB_DIAM] = SEEDLING_DIAM
+                    states_db_tensor[agent_index][TREE_DB_HEIGHT] = seedling_ht
+                    states_db_tensor[agent_index][TREE_DB_CANOPY_HT] = STD_HT
+
+                    # Activate the seedling - update local variable so it falls through to growth
+                    is_alive = 1.0
+                    states_db_tensor[agent_index][TREE_DB_IS_ALIVE] = 1.0
+
+    # ===== GROWTH: Process living trees (including just-recruited seedlings) =====
     if is_alive > 0.5:
         # Get species parameters from params
         max_age = params_tensor[agent_index][TREE_P_MAX_AGE]
@@ -364,7 +471,7 @@ def tree_step(
         states_db_tensor[agent_index][TREE_DB_HEIGHT] = new_height
         states_db_tensor[agent_index][TREE_DB_CANOPY_HT] = canopy_ht
 
-    # ===== WRITE TO states (litter output - always, even for dead trees) =====
+    # ===== WRITE TO states (litter output - always, even for dead/dormant trees) =====
     states_tensor[agent_index][TREE_S_LITTER_C] = litter_c
     states_tensor[agent_index][TREE_S_LITTER_N] = litter_n
     states_tensor[agent_index][TREE_S_N_DEMAND] = n_demand

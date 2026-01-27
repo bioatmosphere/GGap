@@ -74,8 +74,10 @@ Data Flow by Priority:
       - states: climate (copied from Site), n_supply_ratio
 
 Property Arrays by Breed:
-  Tree: params[20], states[3], states_db[4]
-  Gap:  params[2],  states[7], states_db[1]
+  Tree: params[23], states[3], states_db[4]
+        (params includes species traits[13] + physiology[10])
+  Gap:  params[2],  states[9], states_db[1]
+        (states includes climate[5] + litter[2] + recruitment[2])
   Site: params[53], states[4], states_db[1]
         (params includes soil pools[9] + monthly climate[36] + site properties[8])
 """
@@ -111,8 +113,8 @@ CURRENT_DIR = Path(__file__).resolve().parent
 # ============================================================
 
 # --- Tree breed ---
-# params[20]: species traits (static) + physiology (dynamic internal)
-#   Species traits [0-9]:
+# params[23]: species traits (static) + physiology (dynamic internal)
+#   Species traits [0-12]:
 TREE_P_SPECIES_ID = 0
 TREE_P_MAX_AGE = 1
 TREE_P_MAX_DIAM = 2
@@ -123,17 +125,20 @@ TREE_P_SHADE_TOL = 6
 TREE_P_DEG_DAY_MIN = 7
 TREE_P_DEG_DAY_OPT = 8
 TREE_P_DEG_DAY_MAX = 9
-#   Physiology (internal) [10-19]:
-TREE_P_AGE = 10
-TREE_P_BIOMC = 11
-TREE_P_BIOMN = 12
-TREE_P_LEAF_BM = 13
-TREE_P_X = 14
-TREE_P_Y = 15
-TREE_P_LIGHT_AVAIL = 16
-TREE_P_FC_DEGDAY = 17
-TREE_P_FC_DROUGHT = 18
-TREE_P_FC_FLOOD = 19
+TREE_P_INVADER = 10      # Colonization ability (for recruitment weighting)
+TREE_P_SEED = 11         # Seed production rate
+TREE_P_SPROUT = 12       # Sprouting ability
+#   Physiology (internal) [13-22]:
+TREE_P_AGE = 13
+TREE_P_BIOMC = 14
+TREE_P_BIOMN = 15
+TREE_P_LEAF_BM = 16
+TREE_P_X = 17
+TREE_P_Y = 18
+TREE_P_LIGHT_AVAIL = 19
+TREE_P_FC_DEGDAY = 20
+TREE_P_FC_DROUGHT = 21
+TREE_P_FC_FLOOD = 22
 
 # states[3]: litter output (public, Gap reads at P1)
 TREE_S_LITTER_C = 0
@@ -151,7 +156,7 @@ TREE_DB_CANOPY_HT = 3
 GAP_P_GAP_ID = 0
 GAP_P_TOTAL_N_DEMAND = 1
 
-# states[7]: climate + nutrients + litter_pool (public)
+# states[9]: climate + nutrients + litter_pool + recruitment (public)
 #   Trees read climate at P0, Site reads litter at P2
 GAP_S_DEG_DAYS = 0
 GAP_S_DRY_DAYS = 1
@@ -160,6 +165,9 @@ GAP_S_AVAIL_N = 3
 GAP_S_N_SUPPLY_RATIO = 4
 GAP_S_LITTER_ACCUM_C = 5
 GAP_S_LITTER_ACCUM_N = 6
+#   Recruitment info (dormant trees read at P0 next tick)
+GAP_S_NUM_TO_RECRUIT = 7    # Number of dormant slots to activate this tick
+GAP_S_RECRUIT_RAND_SEED = 8 # Random seed for species selection
 
 # states_db[1]: placeholder (not used, but keeps uniform signature)
 GAP_DB_PLACEHOLDER = 0
@@ -234,8 +242,8 @@ class GAPModel(Model):
 
         # === Create Tree breed (breed_id = 0) ===
         self._tree_breed = Breed("Tree")
-        # params[20]: species traits + internal physiology (private)
-        self._tree_breed.register_property("params", [0.0] * 20, neighbor_visible=False)
+        # params[23]: species traits + internal physiology (private)
+        self._tree_breed.register_property("params", [0.0] * 23, neighbor_visible=False)
         # states[3]: litter output (public, Gap reads at P1)
         self._tree_breed.register_property("states", [0.0] * 3, neighbor_visible=True)
         # states_db[4]: structure (public, other Trees read at P0)
@@ -255,8 +263,8 @@ class GAPModel(Model):
         self._gap_breed = Breed("Gap")
         # params[2]: internal only (private)
         self._gap_breed.register_property("params", [0.0] * 2, neighbor_visible=False)
-        # states[7]: climate + nutrients + litter_pool (public)
-        self._gap_breed.register_property("states", [0.0] * 7, neighbor_visible=True)
+        # states[9]: climate + nutrients + litter_pool + recruitment (public)
+        self._gap_breed.register_property("states", [0.0] * 9, neighbor_visible=True)
         # states_db[1]: placeholder (public but unused)
         self._gap_breed.register_property("states_db", [0.0] * 1, neighbor_visible=True)
         self._gap_breed.register_step_func(
@@ -417,6 +425,9 @@ class GAPModel(Model):
                         'deg_day_opt': float(row['DEGDoptimum']),
                         'deg_day_max': float(row['DEGDmax']),
                         'wood_bulk_dens': float(row['bulk']),
+                        'invader': float(row['invader']),  # Colonization ability
+                        'seed': float(row['seed']),        # Seed production rate
+                        'sprout': float(row['sprout']),    # Sprouting ability
                     }
 
                 site_species.append(self.unique_species[species_code])
@@ -530,19 +541,27 @@ class GAPModel(Model):
         self,
         site,
         gap_agent_id=None,
-        maxtrees=100,
-        age_range=(5, 50),
-        size_range=(3.0, 25.0),
+        maxtrees=1000,
+        initial_size_range=(5.0, 30.0),
     ):
         """
         Initialize trees in a gap (matches UVAFME initialize_forest).
 
+        Pre-allocates maxtrees slots for the gap. Initial tree count is calculated
+        using UVAFME formula: n_initial = max(1, int(2 * invader + 1)) per species.
+        Remaining slots are dormant (is_alive = 0) for future recruitment.
+
         If gap_agent_id is None, creates a new gap first via initialize_gap().
         Trees connect bidirectionally to gap and to each other.
-        Trees read climate from gap neighbor (not stored on tree).
+
+        :param site: Site info dict from initialize_site()
+        :param gap_agent_id: Optional existing gap agent ID
+        :param maxtrees: Maximum tree slots to pre-allocate (default 1000)
+        :param initial_size_range: DBH range for initial trees (default 5-30 cm)
+        :return: Tuple of (all_tree_ids, initial_alive_count)
         """
         if maxtrees == 0:
-            raise ValueError("Must have at least one tree")
+            raise ValueError("Must have at least one tree slot")
 
         # Create gap if not provided
         if gap_agent_id is None:
@@ -554,99 +573,148 @@ class GAPModel(Model):
         if num_species == 0:
             raise ValueError("Site has no species")
 
-        # Distribute trees across species
-        random_weights = [random.random() for _ in range(num_species)]
-        total_weight = sum(random_weights)
-        proportions = [w / total_weight for w in random_weights]
+        # Calculate initial tree count per species using UVAFME formula
+        # n_initial = max(1, int(2 * invader + 1))
+        initial_per_species = []
+        total_initial = 0
+        for species_info in site_species:
+            invader = species_info.get('invader', 0.01)
+            n_initial = max(1, int(2 * invader + 1))
+            initial_per_species.append(n_initial)
+            total_initial += n_initial
 
-        trees_per_species = []
-        remaining = maxtrees
-        for prop in proportions[:-1]:
-            count = int(maxtrees * prop)
-            trees_per_species.append(count)
-            remaining -= count
-        trees_per_species.append(remaining)
+        # Cap total initial to maxtrees
+        if total_initial > maxtrees:
+            # Scale down proportionally
+            scale = maxtrees / total_initial
+            initial_per_species = [max(1, int(n * scale)) for n in initial_per_species]
+            total_initial = sum(initial_per_species)
 
         created_trees = []
+        initial_alive_count = 0
 
+        # === Create initial alive trees (distributed across species) ===
         for species_idx, species_info in enumerate(site_species):
-            num_trees = trees_per_species[species_idx]
+            num_initial = initial_per_species[species_idx]
 
-            for _ in range(num_trees):
-                age = random.uniform(age_range[0], age_range[1])
-                diam = random.uniform(size_range[0], size_range[1])
+            for _ in range(num_initial):
+                # Random initial size (mature trees)
+                diam = random.uniform(initial_size_range[0], initial_size_range[1])
+                age = random.uniform(10, 50)  # Established trees
 
-                # Calculate height
-                STD_HT = 1.3
-                delta_ht = species_info['max_ht'] - STD_HT
-                forska_ht = STD_HT + delta_ht * (
-                    1.0 - (2.71828 ** (-(species_info['arfa_0'] * diam / delta_ht)))
+                agent_id = self._create_tree_agent(
+                    gap_agent_id, species_info, diam, age, is_alive=True
                 )
-
-                # Calculate biomass
-                wood_bulk_dens = species_info['wood_bulk_dens']
-                PI = 3.14159265359
-                radius_m = diam / 200.0
-                volume_m3 = PI * radius_m * radius_m * forska_ht
-                biomC = volume_m3 * wood_bulk_dens * 1000.0 * 0.5
-                biomN = biomC / 450.0
-                leaf_bm = biomC * 0.1
-
-                # Build params[20] for Tree (species traits + physiology)
-                params = [0.0] * 20
-                # Species traits [0-9]
-                params[TREE_P_SPECIES_ID] = float(species_info['global_id'])
-                params[TREE_P_MAX_AGE] = float(species_info['max_age'])
-                params[TREE_P_MAX_DIAM] = float(species_info['max_diam'])
-                params[TREE_P_MAX_HT] = float(species_info['max_ht'])
-                params[TREE_P_ARFA_0] = float(species_info['arfa_0'])
-                params[TREE_P_G] = float(species_info['g'])
-                params[TREE_P_SHADE_TOL] = float(species_info['shade_tol'])
-                params[TREE_P_DEG_DAY_MIN] = float(species_info['deg_day_min'])
-                params[TREE_P_DEG_DAY_OPT] = float(species_info['deg_day_opt'])
-                params[TREE_P_DEG_DAY_MAX] = float(species_info['deg_day_max'])
-                # Physiology [10-19]
-                params[TREE_P_AGE] = age
-                params[TREE_P_BIOMC] = biomC
-                params[TREE_P_BIOMN] = biomN
-                params[TREE_P_LEAF_BM] = leaf_bm
-                params[TREE_P_X] = 0.0
-                params[TREE_P_Y] = 0.0
-                params[TREE_P_LIGHT_AVAIL] = 1.0
-                params[TREE_P_FC_DEGDAY] = 1.0
-                params[TREE_P_FC_DROUGHT] = 1.0
-                params[TREE_P_FC_FLOOD] = 1.0
-
-                # Build states[3] for Tree (litter output)
-                states = [0.0] * 3
-
-                # Build states_db[4] for Tree (structure)
-                states_db = [0.0] * 4
-                states_db[TREE_DB_IS_ALIVE] = 1.0
-                states_db[TREE_DB_DIAM] = diam
-                states_db[TREE_DB_HEIGHT] = forska_ht
-                states_db[TREE_DB_CANOPY_HT] = 1.3
-
-                # Create tree agent
-                agent_id = self.create_agent_of_breed(
-                    self._tree_breed,
-                    params=params,
-                    states=states,
-                    states_db=states_db,
-                )
-
-                self.tree_ids.append(agent_id)
                 created_trees.append(agent_id)
+                initial_alive_count += 1
 
-                # Bidirectional connection: gap <-> tree
-                self.connect_agents(gap_agent_id, agent_id)
+        # === Create dormant tree slots (for future recruitment) ===
+        dormant_count = maxtrees - initial_alive_count
+        if dormant_count > 0:
+            # Use first species as placeholder for dormant slots
+            # (will be reinitialized when recruited)
+            placeholder_species = site_species[0]
+
+            for _ in range(dormant_count):
+                agent_id = self._create_tree_agent(
+                    gap_agent_id, placeholder_species, diam=0.0, age=0.0, is_alive=False
+                )
+                created_trees.append(agent_id)
 
         # Connect all trees to each other (within gap)
         for i in range(len(created_trees)):
             for j in range(i + 1, len(created_trees)):
                 self.connect_agents(created_trees[i], created_trees[j])
 
-        return created_trees
+        return created_trees, initial_alive_count
+
+    def _create_tree_agent(self, gap_agent_id, species_info, diam, age, is_alive=True):
+        """
+        Create a single tree agent with given species and size.
+
+        :param gap_agent_id: Gap agent to connect to
+        :param species_info: Species dict with traits
+        :param diam: Diameter at breast height (cm)
+        :param age: Tree age (years)
+        :param is_alive: Whether tree starts alive (False = dormant slot)
+        :return: agent_id
+        """
+        STD_HT = 1.3
+        PI = 3.14159265359
+
+        if is_alive and diam > 0:
+            # Calculate height from diameter
+            delta_ht = species_info['max_ht'] - STD_HT
+            forska_ht = STD_HT + delta_ht * (
+                1.0 - (2.71828 ** (-(species_info['arfa_0'] * diam / delta_ht)))
+            )
+
+            # Calculate biomass
+            wood_bulk_dens = species_info['wood_bulk_dens']
+            radius_m = diam / 200.0
+            volume_m3 = PI * radius_m * radius_m * forska_ht
+            biomC = volume_m3 * wood_bulk_dens * 1000.0 * 0.5
+            biomN = biomC / 450.0
+            leaf_bm = biomC * 0.1
+        else:
+            # Dormant slot - minimal values
+            forska_ht = 0.0
+            biomC = 0.0
+            biomN = 0.0
+            leaf_bm = 0.0
+
+        # Build params[23] for Tree (species traits + physiology)
+        params = [0.0] * 23
+        # Species traits [0-12]
+        params[TREE_P_SPECIES_ID] = float(species_info['global_id'])
+        params[TREE_P_MAX_AGE] = float(species_info['max_age'])
+        params[TREE_P_MAX_DIAM] = float(species_info['max_diam'])
+        params[TREE_P_MAX_HT] = float(species_info['max_ht'])
+        params[TREE_P_ARFA_0] = float(species_info['arfa_0'])
+        params[TREE_P_G] = float(species_info['g'])
+        params[TREE_P_SHADE_TOL] = float(species_info['shade_tol'])
+        params[TREE_P_DEG_DAY_MIN] = float(species_info['deg_day_min'])
+        params[TREE_P_DEG_DAY_OPT] = float(species_info['deg_day_opt'])
+        params[TREE_P_DEG_DAY_MAX] = float(species_info['deg_day_max'])
+        params[TREE_P_INVADER] = float(species_info['invader'])
+        params[TREE_P_SEED] = float(species_info['seed'])
+        params[TREE_P_SPROUT] = float(species_info['sprout'])
+        # Physiology [13-22]
+        params[TREE_P_AGE] = age
+        params[TREE_P_BIOMC] = biomC
+        params[TREE_P_BIOMN] = biomN
+        params[TREE_P_LEAF_BM] = leaf_bm
+        params[TREE_P_X] = 0.0
+        params[TREE_P_Y] = 0.0
+        params[TREE_P_LIGHT_AVAIL] = 1.0
+        params[TREE_P_FC_DEGDAY] = 1.0
+        params[TREE_P_FC_DROUGHT] = 1.0
+        params[TREE_P_FC_FLOOD] = 1.0
+
+        # Build states[3] for Tree (litter output)
+        states = [0.0] * 3
+
+        # Build states_db[4] for Tree (structure)
+        states_db = [0.0] * 4
+        states_db[TREE_DB_IS_ALIVE] = 1.0 if is_alive else 0.0
+        states_db[TREE_DB_DIAM] = diam
+        states_db[TREE_DB_HEIGHT] = forska_ht
+        states_db[TREE_DB_CANOPY_HT] = STD_HT if is_alive else 0.0
+
+        # Create tree agent
+        agent_id = self.create_agent_of_breed(
+            self._tree_breed,
+            params=params,
+            states=states,
+            states_db=states_db,
+        )
+
+        self.tree_ids.append(agent_id)
+
+        # Bidirectional connection: gap <-> tree
+        self.connect_agents(gap_agent_id, agent_id)
+
+        return agent_id
 
     def connect_agents(self, agent_0, agent_1):
         """Connect two agents bidirectionally."""

@@ -129,19 +129,21 @@ def main():
 
     # Initialize gaps and trees - creates gap agents and trees, connects them
     total_trees = 0
+    total_alive = 0
     for gap_num in range(args.num_gaps):
-        tree_ids = model.initialize_trees(
+        tree_ids, initial_alive = model.initialize_trees(
             site=site,
             maxtrees=args.trees_per_gap,
-            age_range=(5, 50),
-            size_range=(3.0, 25.0),
+            initial_size_range=(3.0, 25.0),
         )
         total_trees += len(tree_ids)
+        total_alive += initial_alive
         if rank == 0:
-            print(f"  Gap {gap_num + 1}: {len(tree_ids)} trees")
+            print(f"  Gap {gap_num + 1}: {initial_alive} alive / {len(tree_ids)} slots")
 
     if rank == 0:
-        print(f"\nTotal agents: {len(model.site_agents)} site, {len(model.gap_agents)} gaps, {len(model.tree_ids)} trees")
+        print(f"\nTotal agents: {len(model.site_agents)} site, {len(model.gap_agents)} gaps, {len(model.tree_ids)} tree slots")
+        print(f"  Initial alive: {total_alive}, Dormant slots: {total_trees - total_alive}")
         stats = model.get_statistics()
         print(f"\nInitial state:")
         print(f"  Living trees: {stats['living_trees']}")
