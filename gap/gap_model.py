@@ -45,9 +45,11 @@ Data Flow by Priority:
 
   Priority 0 - Tree Step (tree_step):
     Reads from Gap neighbor:
-      - states: deg_days, dry_days, base_mortality, n_supply_ratio
+      - states: deg_days, dry_days, base_mortality, n_supply_ratio,
+                flood_days, fire_intensity, num_to_recruit
     Reads from Tree neighbors:
       - states_db: is_alive, diam, height, canopy_ht (for light competition)
+      - params: species traits (for recruitment, static data)
     Writes to own:
       - params: age, biomass, growth factors (internal)
       - states: litter_c, litter_n, n_demand
@@ -56,22 +58,32 @@ Data Flow by Priority:
   Priority 1 - Gap Aggregate Step (gap_aggregate_step):
     Reads from Tree neighbors:
       - states: litter_c, litter_n, n_demand
+      - states_db: is_alive (count living/dormant)
+      - params: invader, seed (for seed production)
     Writes to own:
       - params: total_n_demand (internal)
-      - states: litter_accum_c, litter_accum_n
+      - states: litter_accum_c/n, num_to_recruit, seed_bank
 
   Priority 2 - Site Soil Step (site_soil_step):
     Reads from Gap neighbors:
       - states: litter_accum_c, litter_accum_n
     Writes to own:
       - params: soil pools (A0/A/BL carbon, nitrogen, moisture)
-      - states: avail_n
+      - states: avail_n, flood_days, fire_intensity
 
   Priority 3 - Gap Sync Step (gap_sync_step):
     Reads from Site neighbor:
-      - states: deg_days, dry_days, base_mortality, avail_n
+      - states: deg_days, dry_days, base_mortality, avail_n,
+                flood_days, fire_intensity
+    Reads from own:
+      - params: total_n_demand
     Writes to own:
       - states: climate (copied from Site), n_supply_ratio
+    Clears:
+      - states: litter_accum_c/n, num_to_recruit (consumed)
+
+See docs/agent_properties.md for detailed property indices.
+See docs/implementation_logic.md for step function details.
 
 Property Arrays by Breed:
   Tree: params[29], states[3], states_db[4]
@@ -574,6 +586,21 @@ class GAPModel(Model):
         using UVAFME formula: n_initial = max(1, int(2 * invader + 1)) per species.
         Remaining slots are dormant (is_alive = 0) for future recruitment.
 
+        IMPORTANT - Template Trees (Species Pool Preservation):
+            This function creates "template" trees (is_alive = -1) for each species
+            in the site's species list. Templates are connected to the gap and other
+            trees but never grow, die, or produce litter. They serve as permanent
+            species trait references for the recruitment step function.
+
+            Without templates, if all trees of a species die, that species would be
+            permanently lost because:
+            1. Dormant slots don't preserve species diversity (all use placeholder)
+            2. Recruitment only copies traits from neighbor trees
+            3. GPU kernels cannot access Python-side species data
+
+            Template trees ensure the full species pool from CSV initialization
+            remains available for recruitment throughout the simulation.
+
         If gap_agent_id is None, creates a new gap first via initialize_gap().
         Trees connect bidirectionally to gap and to each other.
 
@@ -614,7 +641,17 @@ class GAPModel(Model):
             total_initial = sum(initial_per_species)
 
         created_trees = []
+        template_trees = []
         initial_alive_count = 0
+
+        # === Create template trees (one per species - permanent species references) ===
+        # Templates have is_alive = -1, never grow/die, serve as species trait sources
+        # for recruitment. This preserves the full species pool from CSV.
+        for species_info in site_species:
+            agent_id = self._create_tree_agent(
+                gap_agent_id, species_info, diam=0.0, age=0.0, is_alive=-1.0
+            )
+            template_trees.append(agent_id)
 
         # === Create initial alive trees (distributed across species) ===
         for species_idx, species_info in enumerate(site_species):
@@ -626,7 +663,7 @@ class GAPModel(Model):
                 age = random.uniform(10, 50)  # Established trees
 
                 agent_id = self._create_tree_agent(
-                    gap_agent_id, species_info, diam, age, is_alive=True
+                    gap_agent_id, species_info, diam, age, is_alive=1.0
                 )
                 created_trees.append(agent_id)
                 initial_alive_count += 1
@@ -635,23 +672,25 @@ class GAPModel(Model):
         dormant_count = maxtrees - initial_alive_count
         if dormant_count > 0:
             # Use first species as placeholder for dormant slots
-            # (will be reinitialized when recruited)
+            # (species traits will be copied from template/living tree when recruited)
             placeholder_species = site_species[0]
 
             for _ in range(dormant_count):
                 agent_id = self._create_tree_agent(
-                    gap_agent_id, placeholder_species, diam=0.0, age=0.0, is_alive=False
+                    gap_agent_id, placeholder_species, diam=0.0, age=0.0, is_alive=0.0
                 )
                 created_trees.append(agent_id)
 
         # Connect all trees to each other (within gap)
-        for i in range(len(created_trees)):
-            for j in range(i + 1, len(created_trees)):
-                self.connect_agents(created_trees[i], created_trees[j])
+        # Include templates so they appear in neighbor lists for recruitment
+        all_trees = template_trees + created_trees
+        for i in range(len(all_trees)):
+            for j in range(i + 1, len(all_trees)):
+                self.connect_agents(all_trees[i], all_trees[j])
 
         return created_trees, initial_alive_count
 
-    def _create_tree_agent(self, gap_agent_id, species_info, diam, age, is_alive=True):
+    def _create_tree_agent(self, gap_agent_id, species_info, diam, age, is_alive=1.0):
         """
         Create a single tree agent with given species and size.
 
@@ -659,13 +698,16 @@ class GAPModel(Model):
         :param species_info: Species dict with traits
         :param diam: Diameter at breast height (cm)
         :param age: Tree age (years)
-        :param is_alive: Whether tree starts alive (False = dormant slot)
+        :param is_alive: Tree state marker:
+            -1.0 = template (species reference, never grows/dies)
+             0.0 = dormant slot (available for recruitment)
+             1.0 = alive (active tree)
         :return: agent_id
         """
         STD_HT = 1.3
         PI = 3.14159265359
 
-        if is_alive and diam > 0:
+        if is_alive > 0.5 and diam > 0:
             # Calculate height from diameter
             delta_ht = species_info['max_ht'] - STD_HT
             forska_ht = STD_HT + delta_ht * (
@@ -725,10 +767,10 @@ class GAPModel(Model):
 
         # Build states_db[4] for Tree (structure)
         states_db = [0.0] * 4
-        states_db[TREE_DB_IS_ALIVE] = 1.0 if is_alive else 0.0
+        states_db[TREE_DB_IS_ALIVE] = float(is_alive)  # -1=template, 0=dormant, 1=alive
         states_db[TREE_DB_DIAM] = diam
         states_db[TREE_DB_HEIGHT] = forska_ht
-        states_db[TREE_DB_CANOPY_HT] = STD_HT if is_alive else 0.0
+        states_db[TREE_DB_CANOPY_HT] = STD_HT if is_alive > 0.5 else 0.0
 
         # Create tree agent
         agent_id = self.create_agent_of_breed(
@@ -757,6 +799,7 @@ class GAPModel(Model):
             "total_slots": len(self.tree_ids),
             "living_trees": 0,
             "dormant_slots": 0,
+            "template_trees": 0,  # Species reference trees (is_alive = -1)
             "seedlings": 0,  # Trees with age <= 2 (recently recruited)
             "total_biomass": 0.0,
         }
@@ -766,6 +809,7 @@ class GAPModel(Model):
             states_db = self.get_agent_property_value(tree_id, "states_db")
             alive = states_db[TREE_DB_IS_ALIVE] if isinstance(states_db, list) else states_db
             if alive > 0.5:
+                # Living tree (is_alive = 1)
                 stats["living_trees"] += 1
                 # Access params for biomC and age
                 params = self.get_agent_property_value(tree_id, "params")
@@ -775,7 +819,11 @@ class GAPModel(Model):
                 # Count seedlings (recently recruited trees)
                 if age <= 2.0:
                     stats["seedlings"] += 1
+            elif alive < -0.5:
+                # Template tree (is_alive = -1) - species reference, not counted as active
+                stats["template_trees"] += 1
             else:
+                # Dormant slot (is_alive = 0) - available for recruitment
                 stats["dormant_slots"] += 1
 
         return stats

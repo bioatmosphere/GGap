@@ -2,9 +2,38 @@
 Gap step functions for GGap model.
 GPU kernels for Gap agent data relay between Trees and Site.
 
+Gap serves as an intermediary to:
+1. Keep neighbor lists short (Site has ~10 gaps, not 1000+ trees)
+2. Aggregate data (collect litter from trees before passing to Site)
+3. Enable future gap-to-gap interactions (seed dispersal, edge effects)
+
 Two step functions:
-- gap_aggregate_step (priority 1): Read litter from trees, calculate recruitment, store in own states
-- gap_sync_step (priority 3): Read climate+avail_n from site, store for trees to read
+
+gap_aggregate_step (Priority 1):
+    Executes AFTER tree_step (P0), reads tree outputs.
+
+    Execution Flow:
+    1. Loop through Tree neighbors
+    2. Sum litter_c, litter_n, n_demand from living trees
+    3. Count living trees and dormant slots
+    4. Accumulate seed production (invader * seed)
+    5. Manage seed bank (add production, apply 30% decay)
+    6. Calculate recruitment count (seeds * 0.3 germination, cap by slots)
+    7. Generate random seed for species selection
+
+    Writes: litter_accum, num_to_recruit, seed_bank
+
+gap_sync_step (Priority 3):
+    Executes AFTER site_soil_step (P2), relays Site outputs to Trees.
+
+    Execution Flow:
+    1. Read climate and avail_n from Site neighbor
+    2. Calculate n_supply_ratio = avail_n / total_n_demand
+    3. Copy all values to own states (Trees read next tick)
+    4. Clear accumulators (litter, recruitment consumed)
+
+    Writes: climate values, n_supply_ratio
+    Clears: litter_accum, num_to_recruit
 
 Property scheme (3 properties):
 - params[2]: gap_id, total_n_demand (private internal)
@@ -38,7 +67,7 @@ GAP_S_FLOOD_DAYS = 9
 GAP_S_SEED_BANK = 10
 GAP_S_FIRE_INTENSITY = 11
 
-# === Tree params[23] (for reading invader/seed) ===
+# === Tree params[29] (for reading invader/seed - static species traits) ===
 TREE_P_INVADER = 10
 TREE_P_SEED = 11
 

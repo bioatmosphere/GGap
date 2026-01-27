@@ -1,5 +1,5 @@
 """
-Site step function for GGap model.
+Site step function for GGap model (Priority 2).
 GPU kernel implementing UVAFME soil biogeochemistry.
 
 Matches UVAFME's bio_geo_climate() and process_soil_biogeochemistry():
@@ -7,12 +7,55 @@ Matches UVAFME's bio_geo_climate() and process_soil_biogeochemistry():
 - Soil water balance (soil_water function)
 - Three-layer decomposition (A0 -> A -> Base)
 - Atmospheric N deposition from precipitation
+- Fire probability calculation
 
-Priority 2: Reads litter_accum from Gap neighbors, does decomposition.
+Execution Flow:
+    1. READ LITTER FROM GAPS
+       - Sum litter_accum_c/n from all Gap neighbors
+       - Convert to daily inputs (/ 365)
+
+    2. DAILY LOOP (365 iterations)
+       For each day:
+
+       a. Climate Interpolation
+          - Determine month from day of year
+          - Get daily tmin, tmax, precip from monthly values
+          - Track freeze days
+          - Accumulate atmospheric N from rain
+
+       b. Potential Evapotranspiration (Hamon method)
+          - Calculate solar declination
+          - Calculate day length from latitude
+          - Calculate PET from temperature and day length
+
+       c. Soil Water Balance
+          - Route precipitation: canopy -> A0 -> A -> Base
+          - Apply slope runoff
+          - Evapotranspiration draws from pools
+          - Track flood days (A layer saturated)
+
+       d. Soil Decomposition
+          - A0 respiration -> transfer to A layer
+          - A layer respiration -> N mineralization (avail_n)
+          - A layer transfer to Base layer
+          - Base layer respiration
+          - Temperature and moisture adjustments
+
+    3. FIRE PROBABILITY
+       - Base 1% annual probability
+       - Increases with dry soil moisture
+       - Cap at 15%
+       - Stochastic fire occurrence
+       - Fire intensity 0.3-1.0
+
+Soil Layers:
+    A0 (Litter):  Fresh organic matter, fast decomposition
+    A  (Humus):   Decomposed organic matter, N mineralization source
+    Base:         Stable organic matter, slow turnover
 
 Property scheme (3 properties):
 - params[53]: soil pools + monthly climate + site properties - private
-- states[4]: climate + available (deg_days, dry_days, base_mortality, avail_n) - public
+- states[6]: climate + avail_n + flood_days + fire_intensity - public
 - states_db[1]: placeholder (public, double buffered but unused)
 """
 

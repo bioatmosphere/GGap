@@ -171,12 +171,21 @@ states_tensor[agent_index][TREE_S_HEIGHT_COPY] = new_height
 
 | Property | Array | Contents |
 |----------|-------|----------|
-| `params[20]` | Private | Species traits [0-9] + Internal physiology [10-19] |
+| `params[29]` | Private | Species traits [0-14] + Internal physiology [15-28] |
 | `states[3]` | Public | Litter output: litter_c, litter_n, n_demand |
 | `states_db[4]` | Public, buffered | Structure: is_alive, diameter, height, canopy_height |
 
+**params breakdown:**
+- `[0-14]` Species traits: max_age, max_diam, max_ht, g, dd_min, dd_opt, dd_max, shade_tol, drought_tol, lownutr_tol, invader, seed, sprout_prob, evergreen, fire_tol
+- `[15-28]` Internal physiology: age, biomC, biomN, leafC, leafN, rootC, rootN, stemC, stemN, fc_degday, fc_drought, fc_light, fc_nutrient, fc_flood
+
+**Template trees:**
+- Templates have `is_alive = -1` in states_db
+- They preserve species pool for recruitment even if all living trees of a species die
+- Not counted in statistics, not connected to other trees
+
 **Why this assignment?**
-- Species traits (max_age, shade_tolerance, etc.) are never read by neighbors → `params`
+- Species traits (max_age, shade_tolerance, fire_tol, etc.) are never read by neighbors → `params`
 - Internal physiology (age, biomass, growth factors) are never read by neighbors → `params`
 - Litter output is read by Gap at priority 1 (after Trees finish at priority 0) → `states`
 - Structure is read by other Trees at priority 0 (same priority) → `states_db`
@@ -186,12 +195,18 @@ states_tensor[agent_index][TREE_S_HEIGHT_COPY] = new_height
 | Property | Array | Contents |
 |----------|-------|----------|
 | `params[2]` | Private | gap_id, total_n_demand |
-| `states[7]` | Public | Climate + nutrients + litter: deg_days, dry_days, base_mortality, avail_n, n_supply_ratio, litter_accum_c, litter_accum_n |
+| `states[12]` | Public | Climate + nutrients + litter + recruitment + disturbance |
 | `states_db[1]` | Public, buffered | Placeholder (not used) |
+
+**states breakdown:**
+- `[0-4]` Climate/nutrients: deg_days, dry_days, base_mortality, avail_n, n_supply_ratio
+- `[5-6]` Litter accumulators: litter_accum_c, litter_accum_n
+- `[7-8]` Recruitment: num_to_recruit, recruit_rand_seed
+- `[9-11]` Disturbance: flood_days, seed_bank, fire_intensity
 
 **Why this assignment?**
 - total_n_demand is an intermediate calculation, not read by neighbors → `params`
-- Trees (priority 0) read climate and n_supply_ratio from Gap → `states`
+- Trees (priority 0) read climate, n_supply_ratio, flood_days, fire_intensity from Gap → `states`
 - Site (priority 2) reads litter_accum from Gap → `states`
 - No same-priority reads → `states_db` unused
 
@@ -200,45 +215,54 @@ states_tensor[agent_index][TREE_S_HEIGHT_COPY] = new_height
 | Property | Array | Contents |
 |----------|-------|----------|
 | `params[53]` | Private | Soil pools [0-8] + Monthly climate [9-44] + Site properties [45-52] |
-| `states[4]` | Public | Climate + available: deg_days, dry_days, base_mortality, avail_n |
+| `states[6]` | Public | Climate + nutrients + disturbance |
 | `states_db[1]` | Public, buffered | Placeholder (not used) |
 
-**Site params breakdown:**
+**params breakdown:**
 - `[0-8]` Soil pools: A0_c, A0_n, A_c, A_n, BL_c, BL_n, A0_w, A_w, BL_w
 - `[9-20]` Monthly tmin (12 months)
 - `[21-32]` Monthly tmax (12 months)
 - `[33-44]` Monthly precipitation (12 months)
 - `[45-52]` Site properties: field_cap, perm_wp, slope, sigma, lai, lai_w0, latitude, rain_n
 
+**states breakdown:**
+- `[0-3]` Climate: deg_days, dry_days, base_mortality, avail_n
+- `[4-5]` Disturbance: flood_days, fire_intensity
+
 **Why this assignment?**
 - Soil pool dynamics are internal to Site → `params`
 - Monthly climate is used for daily interpolation in site_soil_step → `params`
-- Gap (priority 3) reads climate and avail_n from Site → `states`
+- Gap (priority 3) reads climate, avail_n, flood_days, fire_intensity from Site → `states`
 - No same-priority reads → `states_db` unused
 
 ## Data Flow Diagram
 
 ```
 Priority 0: Tree Step
-    Reads:  Gap.states (climate, n_supply_ratio)
+    Reads:  Gap.states (climate, n_supply_ratio, flood_days, fire_intensity)
+            Gap.states (num_to_recruit, recruit_rand_seed) - for dormant trees
             Tree.states_db (neighbor heights for light)  ← SAME PRIORITY, needs buffer
-    Writes: Tree.params (internal physiology)
-            Tree.states (litter output)
-            Tree.states_db (updated structure)
+    Writes: Tree.params (internal physiology: age, biomass, growth factors)
+            Tree.states (litter output: litter_c, litter_n, n_demand)
+            Tree.states_db (updated structure: is_alive, diam, height)
 
 Priority 1: Gap Aggregate Step
-    Reads:  Tree.states (litter)  ← DIFFERENT PRIORITY, no buffer needed
+    Reads:  Tree.states (litter_c, litter_n, n_demand)  ← DIFFERENT PRIORITY
+            Tree.states_db (is_alive to filter living vs dormant)
+            Tree.params (invader, seed for recruitment calc)
     Writes: Gap.params (total_n_demand)
-            Gap.states (litter_accum)
+            Gap.states (litter_accum_c/n, num_to_recruit, seed_bank)
 
 Priority 2: Site Soil Step
-    Reads:  Gap.states (litter_accum)  ← DIFFERENT PRIORITY
-    Writes: Site.params (soil pools)
-            Site.states (avail_n)
+    Reads:  Gap.states (litter_accum_c/n)  ← DIFFERENT PRIORITY
+    Writes: Site.params (soil pools: A0/A/BL carbon, nitrogen, water)
+            Site.states (deg_days, dry_days, avail_n, flood_days, fire_intensity)
 
 Priority 3: Gap Sync Step
-    Reads:  Site.states (climate, avail_n)  ← DIFFERENT PRIORITY
+    Reads:  Site.states (climate, avail_n, flood_days, fire_intensity)  ← DIFFERENT PRIORITY
+            Gap.params (total_n_demand for n_supply_ratio calc)
     Writes: Gap.states (climate copy, n_supply_ratio)
+            Gap.states (clears litter_accum and num_to_recruit)
 ```
 
 ## Adding New Variables

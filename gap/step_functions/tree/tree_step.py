@@ -1,11 +1,49 @@
 """
-Tree step function for GGap model.
-Combined GPU kernel implementing light, growth, mortality, and recruitment.
+Tree step function for GGap model (Priority 0).
+Combined GPU kernel implementing light competition, growth, mortality, and recruitment.
+
+Execution Flow:
+    1. RECRUITMENT (dormant slots only):
+       - Check if Gap signals recruitment (num_to_recruit > 0)
+       - Select species from living trees or templates
+       - Copy species traits, initialize as seedling
+
+    2. GROWTH (living trees only):
+       - Read climate from Gap (deg_days, dry_days, etc.)
+       - Calculate light availability from neighbor heights
+       - Apply environmental response functions (UVAFME)
+       - Update diameter, height, biomass
+
+    3. MORTALITY:
+       - Calculate combined mortality probability
+       - Check for death (random based on tick)
+       - Handle sprout regeneration if applicable
+
+    4. OUTPUT:
+       - Write litter to states (for Gap to aggregate)
+       - Write updated structure to states_db (double buffered)
 
 Property scheme (3 properties):
 - params[29]: species traits (static) + physiology (dynamic internal) - private
 - states[3]: litter output (litter_c, litter_n, n_demand) - public, no buffer
 - states_db[4]: structure (is_alive, diam, height, canopy_ht) - public, double buffered
+
+Tree states (is_alive values):
+- is_alive = -1: Template tree (species reference, never grows/dies)
+- is_alive =  0: Dormant slot (available for recruitment)
+- is_alive =  1: Living tree (active, participates in growth/mortality)
+
+Template Trees:
+    Templates preserve the full species pool from CSV initialization. Without them,
+    if all trees of a species die, that species cannot be recruited because GPU
+    kernels cannot access Python-side species data. Templates appear in neighbor
+    lists so recruitment can copy species traits from them, ensuring species
+    diversity is never permanently lost.
+
+Double Buffering:
+    states_db is double buffered because trees read neighbor heights at P0 while
+    simultaneously updating their own heights. Without double buffering, race
+    conditions would cause inconsistent light calculations.
 """
 
 import cupy as cp
@@ -55,7 +93,7 @@ TREE_S_LITTER_N = 1
 TREE_S_N_DEMAND = 2
 
 # === Tree states_db[4] (public, double buffered) ===
-TREE_DB_IS_ALIVE = 0
+TREE_DB_IS_ALIVE = 0   # -1=template, 0=dormant, 1=alive
 TREE_DB_DIAM = 1
 TREE_DB_HEIGHT = 2
 TREE_DB_CANOPY_HT = 3
@@ -146,7 +184,9 @@ def tree_step(
                 recruit_threshold = 1.0
 
             if slot_priority < recruit_threshold:
-                # Find a living tree neighbor to copy species from
+                # Find a species source (living tree OR template) to copy species from
+                # Templates (is_alive = -1) preserve full species pool from CSV
+                # Living trees (is_alive = 1) represent current forest composition
                 total_weight = 0.0
                 selected_neighbor_idx = -1
 
@@ -156,7 +196,8 @@ def tree_step(
                     neighbor_breed = int(breeds[neighbor_idx])
                     if neighbor_breed == BREED_TREE:
                         neighbor_alive = states_db_tensor[neighbor_idx][TREE_DB_IS_ALIVE]
-                        if neighbor_alive > 0.5:
+                        # Include living trees (>0.5) AND templates (<-0.5) as species sources
+                        if neighbor_alive > 0.5 or neighbor_alive < -0.5:
                             # Get species weight
                             neighbor_invader = params_tensor[neighbor_idx][TREE_P_INVADER]
                             neighbor_seed = params_tensor[neighbor_idx][TREE_P_SEED]
