@@ -1,10 +1,10 @@
 """
 GGap - GPU-accelerated Forest Gap Dynamics Model
 Integrates UVAFME forest processes with SAGESim agent framework.
-"""
 
-# Import species data (no GPU dependencies)
-from gap.tree_species_data import SPECIES_DATA, get_species_params, get_all_species_ids
+Species data is loaded from CSV file when GAPModel is initialized.
+Access via model.species_list after creating the model.
+"""
 
 __version__ = "0.1.0"
 
@@ -30,7 +30,4 @@ def __getattr__(name):
 __all__ = [
     "GAPModel",
     "TreeBreed",
-    "SPECIES_DATA",
-    "get_species_params",
-    "get_all_species_ids",
 ]
