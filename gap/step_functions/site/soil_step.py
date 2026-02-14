@@ -1,5 +1,5 @@
 """
-Site step function for GGap model (Priority 2).
+Site step function for GGap model (Priority 1).
 GPU kernel implementing UVAFME soil biogeochemistry.
 
 Matches UVAFME's bio_geo_climate() and process_soil_biogeochemistry():
@@ -55,7 +55,7 @@ Soil Layers:
 
 Property scheme (3 properties):
 - params[53]: soil pools + monthly climate + site properties - private
-- states[6]: climate + avail_n + flood_days + fire_intensity - public
+- states[7]: climate + avail_n + flood_days + fire_intensity + n_supply_ratio - public
 - states_db[1]: placeholder (public, double buffered but unused)
 """
 
@@ -92,7 +92,7 @@ SITE_P_LAI_W0 = 50
 SITE_P_LATITUDE = 51
 SITE_P_RAIN_N = 52
 
-# === Site states[6] (public) ===
+# === Site states[7] (public) ===
 SITE_S_DEG_DAYS = 0
 SITE_S_DRY_DAYS = 1
 SITE_S_BASE_MORTALITY = 2
@@ -100,9 +100,11 @@ SITE_S_AVAIL_N = 3
 SITE_S_FLOOD_DAYS = 4  # Days when A layer is saturated
 SITE_S_FIRE_INTENSITY = 5  # Fire intensity this year (0-1)
 
-# === Gap states[7] (for reading from Gap neighbors) ===
-GAP_S_LITTER_ACCUM_C = 5
+# === Gap states[15] (for reading from Gap neighbors) ===
+GAP_S_LITTER_ACCUM_C = 5       # Above-ground litter -> A0 layer
 GAP_S_LITTER_ACCUM_N = 6
+GAP_S_LITTER_ACCUM_C_BG = 13   # Below-ground litter -> A layer (roots)
+GAP_S_LITTER_ACCUM_N_BG = 14
 
 # === UVAFME Constants (from soil.py) ===
 AO_CN_0 = 30.0
@@ -153,7 +155,7 @@ def site_soil_step(
     states_db_tensor,
 ):
     """
-    Soil biogeochemistry step function (priority 2).
+    Soil biogeochemistry step function (priority 1).
 
     Implements UVAFME's complete soil model:
     1. Reads litter from Gap neighbors
@@ -173,8 +175,10 @@ def site_soil_step(
     - states: avail_n (for Gap to read)
     """
     # ========== READ LITTER FROM GAP NEIGHBORS ==========
-    total_litter_c = 0.0
+    total_litter_c = 0.0       # Above-ground -> A0 layer
     total_litter_n = 0.0
+    total_litter_c_bg = 0.0    # Below-ground -> A layer (roots)
+    total_litter_n_bg = 0.0
 
     neighbor_indices = locations[agent_index]
     i = 0
@@ -188,11 +192,18 @@ def site_soil_step(
             total_litter_c = total_litter_c + gap_litter_c
             total_litter_n = total_litter_n + gap_litter_n
 
+            gap_litter_c_bg = states_tensor[neighbor_idx][GAP_S_LITTER_ACCUM_C_BG]
+            gap_litter_n_bg = states_tensor[neighbor_idx][GAP_S_LITTER_ACCUM_N_BG]
+            total_litter_c_bg = total_litter_c_bg + gap_litter_c_bg
+            total_litter_n_bg = total_litter_n_bg + gap_litter_n_bg
+
         i = i + 1
 
     # Convert annual litter to daily inputs
-    daily_litter_c = total_litter_c / 365.0
+    daily_litter_c = total_litter_c / 365.0        # Above-ground daily
     daily_litter_n = total_litter_n / 365.0
+    daily_litter_c_bg = total_litter_c_bg / 365.0  # Below-ground daily
+    daily_litter_n_bg = total_litter_n_bg / 365.0
 
     # ========== READ CURRENT SOIL STATE ==========
     ao_c0 = params_tensor[agent_index][SITE_P_A0_C]
@@ -570,7 +581,7 @@ def site_soil_step(
             flood_days = flood_days + 1.0
 
         # === SOIL DECOMPOSITION (from UVAFME soil.py:soil_decomp) ===
-        # Add daily litter to A0 layer
+        # Add above-ground daily litter to A0 layer
         ao_c0 = ao_c0 + daily_litter_c
         ao_n0 = ao_n0 + daily_litter_n
 
@@ -595,8 +606,11 @@ def site_soil_step(
 
         # A0 layer respiration
         resp1 = tadjst * aofunc * AO_RESP * ao_c0
-        yxdn = resp1 / ao_cn
-        yxdc = yxdn * AO_CN_0
+        yxdn = 0.0
+        yxdc = 0.0
+        if ao_cn > 0.001:
+            yxdn = resp1 / ao_cn
+            yxdc = yxdn * AO_CN_0
         ao_c0 = ao_c0 - yxdc - resp1
         ao_n0 = ao_n0 - yxdn
         if ao_c0 < 0.0:
@@ -604,9 +618,9 @@ def site_soil_step(
         if ao_n0 < 0.0:
             ao_n0 = 0.0
 
-        # Soil A layer
-        sa_c0 = sa_c0 + yxdc
-        sa_n0 = sa_n0 + yxdn
+        # Soil A layer (receives A0 decomposition + below-ground root litter)
+        sa_c0 = sa_c0 + yxdc + daily_litter_c_bg
+        sa_n0 = sa_n0 + yxdn + daily_litter_n_bg
         sa_cn = SA_CN_0
         if sa_n0 > 0.0001:
             sa_cn = sa_c0 / sa_n0
@@ -620,12 +634,15 @@ def site_soil_step(
 
         # N mineralization from A layer
         tosb = resp2 / SB_CN_0
-        n_efficiency = (sa_cn - SA_CN_0) / sa_cn
-        if n_efficiency < 0.5:
-            n_efficiency = 0.5
-        avail_n_day = resp2 / sa_cn * n_efficiency
-        if avail_n_day < 0.0:
-            avail_n_day = 0.0
+        n_efficiency = 0.5
+        avail_n_day = 0.0
+        if sa_cn > 0.001:
+            n_efficiency = (sa_cn - SA_CN_0) / sa_cn
+            if n_efficiency < 0.5:
+                n_efficiency = 0.5
+            avail_n_day = resp2 / sa_cn * n_efficiency
+            if avail_n_day < 0.0:
+                avail_n_day = 0.0
 
         sa_c0 = sa_c0 - resp2 - tosb
         sa_n0 = sa_n0 - avail_n_day
