@@ -29,11 +29,19 @@ from gap.gap_model import (
     SITE_P_A_C, SITE_P_A_N,
     SITE_P_BL_C, SITE_P_BL_N,
     # Site states indices (public: climate + avail_n)
-    SITE_S_AVAIL_N,
+    SITE_S_DEG_DAYS, SITE_S_DRY_DAYS,
+    SITE_S_BASE_MORTALITY, SITE_S_AVAIL_N,
 )
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
+num_workers = comm.Get_size()
+
+if num_workers > 1:
+    if rank == 0:
+        print("ERROR: Multi-rank MPI not yet supported (cross-priority data flow")
+        print("requires all agents on same rank). Run with: python run_one_site.py")
+    comm.Abort(1)
 
 
 def main():
@@ -57,6 +65,18 @@ def main():
         type=int,
         default=50,
         help="Number of years to simulate (default: 50)"
+    )
+    parser.add_argument(
+        "--deg_days",
+        type=float,
+        default=None,
+        help="Override annual degree days (default: calculated from CSV)"
+    )
+    parser.add_argument(
+        "--dry_days",
+        type=float,
+        default=None,
+        help="Override annual drought days (default: calculated from CSV)"
     )
     parser.add_argument(
         "--base_mortality",
@@ -101,6 +121,10 @@ def main():
         print(f"  Total trees: {args.num_gaps * args.trees_per_gap}")
         print(f"  Simulation duration: {args.years} years")
         print(f"  Base mortality rate: {args.base_mortality}")
+        if args.deg_days is not None:
+            print(f"  Degree days override: {args.deg_days}")
+        if args.dry_days is not None:
+            print(f"  Dry days override: {args.dry_days}")
         print(f"  Data directory: {args.data_dir}")
         print(f"  File prefix: {args.prefix}")
         print(f"  Site ID: {args.site_id}")
@@ -120,10 +144,25 @@ def main():
         base_mortality_rate=args.base_mortality,
     )
 
+    # Apply CLI overrides for climate (after CSV calculation)
+    site_agent_id = site['site_agent_id']
+    if args.deg_days is not None:
+        site['deg_days'] = args.deg_days
+        states = model.get_agent_property_value(site_agent_id, "states")
+        states[SITE_S_DEG_DAYS] = args.deg_days
+        model.set_agent_property_value(site_agent_id, "states", states)
+    if args.dry_days is not None:
+        site['dry_days'] = args.dry_days
+        states = model.get_agent_property_value(site_agent_id, "states")
+        states[SITE_S_DRY_DAYS] = args.dry_days
+        model.set_agent_property_value(site_agent_id, "states", states)
+
     if rank == 0:
         print(f"Site: {site['site_name']} ({site['latitude']:.2f}°N, {site['longitude']:.2f}°W)")
         print(f"Loaded {len(site['species'])} species for site")
-        print(f"Calculated deg_days: {site['deg_days']:.0f}, dry_days: {site['dry_days']:.1f}")
+        deg_src = "override" if args.deg_days is not None else "CSV"
+        dry_src = "override" if args.dry_days is not None else "CSV"
+        print(f"  deg_days: {site['deg_days']:.0f} ({deg_src}), dry_days: {site['dry_days']:.1f} ({dry_src})")
         print(f"Site agent ID: {site['site_agent_id']}")
         print(f"\nInitializing {args.num_gaps} gap(s) with trees...")
 
@@ -134,30 +173,29 @@ def main():
         tree_ids, initial_alive = model.initialize_trees(
             site=site,
             maxtrees=args.trees_per_gap,
-            initial_size_range=(3.0, 25.0),
         )
         total_trees += len(tree_ids)
         total_alive += initial_alive
         if rank == 0:
-            print(f"  Gap {gap_num + 1}: {initial_alive} alive / {len(tree_ids)} slots")
+            print(f"  Gap {gap_num + 1}: {len(tree_ids)} dormant slots (empty start, renewal fills forest)")
+
+    # All ranks must participate in get_statistics/get_agent_property_value (MPI bcast)
+    stats = model.get_statistics()
+    site_params = model.get_agent_property_value(site_agent_id, "params")
+    site_states = model.get_agent_property_value(site_agent_id, "states")
 
     if rank == 0:
         print(f"\nTotal agents: {len(model.site_agents)} site, {len(model.gap_agents)} gaps, {len(model.tree_ids)} tree slots")
         print(f"  Initial alive: {total_alive}, Dormant slots: {total_trees - total_alive}")
-        stats = model.get_statistics()
         print(f"\nInitial state:")
         print(f"  Living trees: {stats['living_trees']}")
         print(f"  Total biomass: {stats['total_biomass']:.1f} kg C")
 
-        # Print initial soil state (soil pools in params, avail_n in states)
-        site_agent_id = site['site_agent_id']
-        params = model.get_agent_property_value(site_agent_id, "params")
-        states = model.get_agent_property_value(site_agent_id, "states")
         print(f"\nInitial soil state:")
-        print(f"  A0 layer C: {params[SITE_P_A0_C]:.2f} tn/ha")
-        print(f"  A layer C: {params[SITE_P_A_C]:.2f} tn/ha")
-        print(f"  Base layer C: {params[SITE_P_BL_C]:.2f} tn/ha")
-        print(f"  Available N: {states[SITE_S_AVAIL_N]:.4f} tn/ha")
+        print(f"  A0 layer C: {site_params[SITE_P_A0_C]:.2f} tn/ha")
+        print(f"  A layer C: {site_params[SITE_P_A_C]:.2f} tn/ha")
+        print(f"  Base layer C: {site_params[SITE_P_BL_C]:.2f} tn/ha")
+        print(f"  Available N: {site_states[SITE_S_AVAIL_N]:.4f} tn/ha")
         print("\nSetting up GPU kernels...")
 
     # Setup model (generates GPU kernels)
@@ -180,12 +218,13 @@ def main():
         # Simulate
         model.simulate(ticks=years_to_run, sync_workers_every_n_ticks=1)
 
-        # Print statistics
+        # All ranks must participate in MPI collective calls
+        stats = model.get_statistics()
+        site_states = model.get_agent_property_value(site_agent_id, "states")
+
         if rank == 0:
             current_year = year_batch + years_to_run
-            stats = model.get_statistics()
-            states = model.get_agent_property_value(site_agent_id, "states")
-            avail_n = states[SITE_S_AVAIL_N] if isinstance(states, list) else states
+            avail_n = site_states[SITE_S_AVAIL_N] if isinstance(site_states, list) else site_states
 
             # Calculate net change (positive = more recruited than died)
             net_change = stats['living_trees'] - prev_alive
@@ -194,11 +233,15 @@ def main():
 
             print(f"{current_year:<6} {stats['living_trees']:<7} {stats['seedlings']:<10} {stats['dormant_slots']:<8} {net_str:<8} {stats['total_biomass']:<10.1f} {avail_n:<10.4f}")
 
+    # All ranks must participate in MPI collective calls
+    stats = model.get_statistics()
+    site_params = model.get_agent_property_value(site_agent_id, "params")
+    site_states = model.get_agent_property_value(site_agent_id, "states")
+
     if rank == 0:
         print("\n" + "=" * 70)
         print("Simulation Complete")
         print("=" * 70)
-        stats = model.get_statistics()
         print(f"\nFinal Tree Statistics:")
         print(f"  Living trees: {stats['living_trees']}")
         print(f"  Seedlings (age <= 2): {stats['seedlings']}")
@@ -206,14 +249,11 @@ def main():
         print(f"  Total biomass: {stats['total_biomass']:.1f} kg C")
         print(f"  Net change from start: {stats['living_trees'] - total_alive:+d}")
 
-        # Final soil state (soil pools in params, avail_n in states)
-        params = model.get_agent_property_value(site_agent_id, "params")
-        states = model.get_agent_property_value(site_agent_id, "states")
-        avail_n = states[SITE_S_AVAIL_N] if isinstance(states, list) else states
+        avail_n = site_states[SITE_S_AVAIL_N] if isinstance(site_states, list) else site_states
         print(f"\nFinal soil state:")
-        print(f"  A0 layer C: {params[SITE_P_A0_C]:.2f} tn/ha, N: {params[SITE_P_A0_N]:.4f} tn/ha")
-        print(f"  A layer C: {params[SITE_P_A_C]:.2f} tn/ha, N: {params[SITE_P_A_N]:.4f} tn/ha")
-        print(f"  Base layer C: {params[SITE_P_BL_C]:.2f} tn/ha, N: {params[SITE_P_BL_N]:.4f} tn/ha")
+        print(f"  A0 layer C: {site_params[SITE_P_A0_C]:.2f} tn/ha, N: {site_params[SITE_P_A0_N]:.4f} tn/ha")
+        print(f"  A layer C: {site_params[SITE_P_A_C]:.2f} tn/ha, N: {site_params[SITE_P_A_N]:.4f} tn/ha")
+        print(f"  Base layer C: {site_params[SITE_P_BL_C]:.2f} tn/ha, N: {site_params[SITE_P_BL_N]:.4f} tn/ha")
         print(f"  Available N: {avail_n:.4f} tn/ha/yr")
 
 

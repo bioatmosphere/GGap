@@ -19,34 +19,44 @@ Each agent type (Tree, Gap, Site) stores its data in **three property arrays**:
 Each step function is assigned a **priority** (lower numbers run first). SAGESim executes priorities sequentially with synchronization barriers between them.
 
 **How it works:**
-1. All agents with step functions at priority 0 run **in parallel** on the GPU
-2. A **synchronization barrier** waits for ALL agents to complete priority 0
-3. Then all agents with step functions at priority 1 run in parallel
-4. Another barrier waits for completion
-5. This continues through all priorities
-6. After ALL priorities complete, double-buffered data is swapped
+1. All agents with step functions at priority N run **in parallel** on the GPU
+2. A **synchronization barrier** waits for ALL agents to complete priority N
+3. Then all agents with step functions at priority N+1 run in parallel
+4. This continues through all priorities
+5. After ALL priorities complete, double-buffered data is swapped
 
 ```
 Tick N:
   ┌─────────────────────────────────────────────────────────────┐
-  │ Priority 0: All Trees run in parallel                       │
-  │   (Tree A, Tree B, Tree C, ... all execute simultaneously)  │
+  │ Priority 0: All Gaps run (litter aggregate)                  │
   └─────────────────────────────────────────────────────────────┘
-                              ↓ BARRIER (wait for all)
+                              ↓ BARRIER
   ┌─────────────────────────────────────────────────────────────┐
-  │ Priority 1: All Gaps run in parallel                        │
+  │ Priority 1: All Sites run (soil biogeochemistry)             │
   └─────────────────────────────────────────────────────────────┘
-                              ↓ BARRIER (wait for all)
+                              ↓ BARRIER
   ┌─────────────────────────────────────────────────────────────┐
-  │ Priority 2: All Sites run in parallel                       │
+  │ Priority 2: All Trees run (potential growth, light comp.)    │
   └─────────────────────────────────────────────────────────────┘
-                              ↓ BARRIER (wait for all)
+                              ↓ BARRIER
   ┌─────────────────────────────────────────────────────────────┐
-  │ Priority 3: All Gaps run in parallel (second step function) │
+  │ Priority 3: All Gaps run (N demand aggregate)                │
   └─────────────────────────────────────────────────────────────┘
-                              ↓ BARRIER (wait for all)
+                              ↓ BARRIER
   ┌─────────────────────────────────────────────────────────────┐
-  │ Swap double-buffered data (states_db write → read)          │
+  │ Priority 4: All Sites run (nutrient allocation)              │
+  └─────────────────────────────────────────────────────────────┘
+                              ↓ BARRIER
+  ┌─────────────────────────────────────────────────────────────┐
+  │ Priority 5: All Gaps run (sync climate + clear accumulators) │
+  └─────────────────────────────────────────────────────────────┘
+                              ↓ BARRIER
+  ┌─────────────────────────────────────────────────────────────┐
+  │ Priority 6: All Trees run (actual growth + renewal + recruit)│
+  └─────────────────────────────────────────────────────────────┘
+                              ↓ BARRIER
+  ┌─────────────────────────────────────────────────────────────┐
+  │ Swap double-buffered data (states_db write → read)           │
   └─────────────────────────────────────────────────────────────┘
 Tick N+1: ...
 ```
@@ -55,7 +65,7 @@ Tick N+1: ...
 - Within a priority: agents run in parallel, may have race conditions → use `states_db` for same-priority reads
 - Across priorities: execution is sequential, earlier priorities complete before later ones start → use `states` for cross-priority reads
 - Multiple breeds can share the same priority number (they run together in parallel)
-- One breed can have multiple step functions at different priorities (like Gap at P1 and P3)
+- One breed can have multiple step functions at different priorities (Gap has steps at P0, P3, P5)
 
 ### Neighbor Visibility
 
@@ -80,23 +90,6 @@ self._property_name_2_neighbor_visible[property_name] = (
 )
 ```
 
-**Example:**
-```python
-# Tree breed registers states as visible
-tree_breed.register_property("states", [0.0] * 3, neighbor_visible=True)
-
-# Site breed registers states as NOT visible (perhaps it doesn't need neighbors to read its states)
-site_breed.register_property("states", [0.0] * 4, neighbor_visible=False)
-
-# Result: states is neighbor_visible=True for BOTH breeds
-# Because Tree set it to True, Site's False is ignored
-```
-
-**Why OR logic?**
-- **Conservative approach**: If any breed needs a property to be visible, it must be synchronized across MPI ranks
-- **Simplifies implementation**: One visibility setting per property name across all breeds
-- **Prevents subtle bugs**: Ensures data is available when any agent might need to read it
-
 **Practical implication**: When designing properties, assume that if ANY breed needs a property to be visible, ALL breeds will have that property visible. This affects MPI synchronization overhead.
 
 ### Double Buffering
@@ -106,7 +99,7 @@ Double buffering prevents **race conditions** when multiple agents read and writ
 **When is it needed?**
 - When agents of the **same type** read each other's data at the **same priority**
 
-**Example**: All Trees run at priority 0. Tree A needs to read Tree B's height to calculate light competition, while Tree B simultaneously reads Tree A's height. Without double buffering, one tree might read partially-updated data.
+**Example**: All Trees run at P2. Tree A needs to read Tree B's height to calculate light competition, while Tree B simultaneously reads Tree A's height. Without double buffering, one tree might read partially-updated data.
 
 **How it works**:
 - SAGESim maintains two copies: a "read buffer" and a "write buffer"
@@ -117,24 +110,20 @@ Double buffering prevents **race conditions** when multiple agents read and writ
 **Critical Implication for Cross-Priority Reads**:
 
 Because buffers swap only after ALL priorities finish, if a property is double-buffered:
-- Changes written at priority 1 are **NOT visible** to readers at priority 3 within the same tick
-- Priority 3 will read the value from the **start of the tick**, not the updated value
+- Changes written at priority 2 are **NOT visible** to readers at priority 6 within the same tick
+- Priority 6 will read the value from the **start of the tick**, not the updated value
 
 **When double buffering must be DISABLED (`no_double_buffer`)**:
 - When a later priority needs to read changes made by an earlier priority **within the same tick**
-- Example: Gap writes `litter_accum` at P1, Site reads it at P2. If double-buffered, Site would see the old value. Therefore `states` (which contains `litter_accum`) is in `no_double_buffer`.
-
-**When double buffering is NOT needed**:
-- When the reader runs **before** the writer (reader at P0, writer at P1) - reader sees start-of-tick value anyway
-- When readers and writers are at **different priorities** and cross-tick visibility is acceptable
+- Example: Gap writes `litter_accum` at P0, Site reads it at P1. If double-buffered, Site would see the old value. Therefore `states` is in `no_double_buffer`.
 
 **Summary Table**:
 
 | Scenario | Reader Priority | Writer Priority | Need Double Buffer? | Why |
 |----------|----------------|-----------------|---------------------|-----|
-| Same-priority parallel reads | P0 | P0 | **YES** | Prevent race conditions |
-| Later priority reads earlier write (same tick) | P3 | P1 | **NO** | Must see updated value |
-| Earlier priority reads later write | P0 | P1 | No (doesn't matter) | Reader runs first anyway |
+| Same-priority parallel reads | P2 | P2 | **YES** | Prevent race conditions |
+| Later priority reads earlier write (same tick) | P4 | P1 | **NO** | Must see updated value |
+| Earlier priority reads later write | P0 | P6 | No (doesn't matter) | Reader runs first anyway |
 
 **Special Case: Property Needs BOTH Behaviors**
 
@@ -142,28 +131,7 @@ What if a property is read by same-type agents at the same priority (needs buffe
 
 Since `no_double_buffer` applies at the property level (not per-priority), you cannot have both behaviors for one property. **Solution: Duplicate the data into two properties.**
 
-```python
-# Example: Tree height needed by both Trees (P0) and Gap (P1)
-
-# states_db - double buffered (Trees read each other at P0)
-TREE_DB_HEIGHT = 2
-
-# states - NOT buffered (Gap reads at P1, needs updated value)
-TREE_S_HEIGHT_COPY = 3  # duplicate for cross-priority reads
-
-# In tree_step, write to BOTH:
-states_db_tensor[agent_index][TREE_DB_HEIGHT] = new_height
-states_tensor[agent_index][TREE_S_HEIGHT_COPY] = new_height
-```
-
-**Trade-offs:**
-- Extra memory for duplicate data
-- Extra write operations
-- But ensures correct behavior for both use cases
-
-**In GGap currently:** This situation doesn't arise because:
-- Tree structure (`states_db`) is only read by other Trees at P0
-- Gap doesn't need to read individual tree heights (it reads aggregated litter from `states`)
+**In GGap currently:** Tree `states_db` is double-buffered (Trees read each other's heights at P2 for light competition). Tree structure written at P6 is visible to other Trees at P2 of the **next tick** via the buffer swap.
 
 ## Property Assignments by Agent Type
 
@@ -171,43 +139,66 @@ states_tensor[agent_index][TREE_S_HEIGHT_COPY] = new_height
 
 | Property | Array | Contents |
 |----------|-------|----------|
-| `params[29]` | Private | Species traits [0-14] + Internal physiology [15-28] |
-| `states[3]` | Public | Litter output: litter_c, litter_n, n_demand |
-| `states_db[4]` | Public, buffered | Structure: is_alive, diameter, height, canopy_height |
+| `params[38]` | Private | Species traits [0-21] + Physiology [22-31] + Intermediates [32-33] + Renewal [34-37] |
+| `states[5]` | Public | Litter output: litter_c, litter_n, n_demand, litter_c_bg, litter_n_bg |
+| `states_db[5]` | Public, buffered | Structure: is_alive, diam, height, canopy_ht, seedling_weight |
 
 **params breakdown:**
-- `[0-14]` Species traits: max_age, max_diam, max_ht, g, dd_min, dd_opt, dd_max, shade_tol, drought_tol, lownutr_tol, invader, seed, sprout_prob, evergreen, fire_tol
-- `[15-28]` Internal physiology: age, biomC, biomN, leafC, leafN, rootC, rootN, stemC, stemN, fc_degday, fc_drought, fc_light, fc_nutrient, fc_flood
+- `[0-21]` Species traits: species_id, max_age, max_diam, max_ht, arfa_0, g, shade_tol, deg_day_min/opt/max, invader, seed, sprout, wood_bulk_dens, lownutr_tol, flood_tol, drought_tol, evergreen, fire_tol, rootdepth, stress_tol, age_tol
+- `[22-31]` Internal physiology: age, biomC, biomN, leaf_bm, x, y, light_avail, fc_degday, fc_drought, fc_flood
+- `[32-33]` Intermediates: env_stress (P2→P6), diam_max_calc (P2→P6)
+- `[34-37]` Renewal (template-only): seed_surv, seedling_lg, seedbank, seedling
+
+**states breakdown:**
+- `[0-1]` Above-ground litter: litter_c, litter_n
+- `[2]` Nitrogen demand: n_demand
+- `[3-4]` Below-ground litter: litter_c_bg, litter_n_bg
+
+**states_db breakdown:**
+- `[0-3]` Structure: is_alive, diam, height, canopy_ht
+- `[4]` Renewal: seedling_weight (templates write at P6, dormant reads at P6)
+
+**Three tree states (encoded in is_alive):**
+- `is_alive = 1.0`: Living tree (grows, produces litter, can die)
+- `is_alive = 0.0`: Dormant slot (available for recruitment)
+- `is_alive = -1.0`: Template (permanent per-species reference, computes renewal state)
 
 **Template trees:**
-- Templates have `is_alive = -1` in states_db
-- They preserve species pool for recruitment even if all living trees of a species die
-- Not counted in statistics, not connected to other trees
+- One per species per gap, preserving species pool for recruitment
+- Hold persistent seedbank/seedling state in params[36-37]
+- Compute environmental response (regrowth) and write seedling_weight to states_db[4]
+- Not counted in statistics, connected to Gap and all Trees in the gap
 
 **Why this assignment?**
-- Species traits (max_age, shade_tolerance, fire_tol, etc.) are never read by neighbors → `params`
-- Internal physiology (age, biomass, growth factors) are never read by neighbors → `params`
-- Litter output is read by Gap at priority 1 (after Trees finish at priority 0) → `states`
-- Structure is read by other Trees at priority 0 (same priority) → `states_db`
+- Species traits and physiology are never read by neighbors → `params`
+- Litter output is read by Gap at P0 (after Trees finish at P6 of prev tick) → `states`
+- N demand is read by Gap at P3 (after Trees write at P2) → `states`
+- Structure is read by other Trees at P2 (same priority) for light competition → `states_db`
+- Seedling weight is written by templates at P6, read by dormant slots at P6 (same priority) → `states_db`
 
 ### Gap Agent
 
 | Property | Array | Contents |
 |----------|-------|----------|
 | `params[2]` | Private | gap_id, total_n_demand |
-| `states[12]` | Public | Climate + nutrients + litter + recruitment + disturbance |
+| `states[15]` | Public | Climate + nutrients + litter + recruitment + disturbance + n_demand + bg_litter |
 | `states_db[1]` | Public, buffered | Placeholder (not used) |
 
 **states breakdown:**
 - `[0-4]` Climate/nutrients: deg_days, dry_days, base_mortality, avail_n, n_supply_ratio
-- `[5-6]` Litter accumulators: litter_accum_c, litter_accum_n
+- `[5-6]` Above-ground litter accumulators: litter_accum_c, litter_accum_n
 - `[7-8]` Recruitment: num_to_recruit, recruit_rand_seed
-- `[9-11]` Disturbance: flood_days, seed_bank, fire_intensity
+- `[9]` Flood days
+- `[10]` Seed bank (legacy, unused in current renewal)
+- `[11]` Fire intensity
+- `[12]` Total N demand (public, Site reads at P4)
+- `[13-14]` Below-ground litter accumulators: litter_accum_c_bg, litter_accum_n_bg
 
 **Why this assignment?**
-- total_n_demand is an intermediate calculation, not read by neighbors → `params`
-- Trees (priority 0) read climate, n_supply_ratio, flood_days, fire_intensity from Gap → `states`
-- Site (priority 2) reads litter_accum from Gap → `states`
+- total_n_demand internal copy → `params`
+- Trees read climate/n_supply_ratio from Gap at P2 and P6 → `states`
+- Site reads litter_accum from Gap at P1 → `states`
+- Site reads total_n_demand from Gap at P4 → `states`
 - No same-priority reads → `states_db` unused
 
 ### Site Agent
@@ -215,7 +206,7 @@ states_tensor[agent_index][TREE_S_HEIGHT_COPY] = new_height
 | Property | Array | Contents |
 |----------|-------|----------|
 | `params[53]` | Private | Soil pools [0-8] + Monthly climate [9-44] + Site properties [45-52] |
-| `states[6]` | Public | Climate + nutrients + disturbance |
+| `states[7]` | Public | Climate + nutrients + disturbance + n_supply_ratio |
 | `states_db[1]` | Public, buffered | Placeholder (not used) |
 
 **params breakdown:**
@@ -228,41 +219,65 @@ states_tensor[agent_index][TREE_S_HEIGHT_COPY] = new_height
 **states breakdown:**
 - `[0-3]` Climate: deg_days, dry_days, base_mortality, avail_n
 - `[4-5]` Disturbance: flood_days, fire_intensity
+- `[6]` Nutrient: n_supply_ratio (computed at P4, Gap reads at P5)
 
 **Why this assignment?**
-- Soil pool dynamics are internal to Site → `params`
-- Monthly climate is used for daily interpolation in site_soil_step → `params`
-- Gap (priority 3) reads climate, avail_n, flood_days, fire_intensity from Site → `states`
+- Soil pool dynamics and monthly climate are internal to Site → `params`
+- Gap reads climate, avail_n, flood_days, fire_intensity, n_supply_ratio from Site at P5 → `states`
 - No same-priority reads → `states_db` unused
 
 ## Data Flow Diagram
 
 ```
-Priority 0: Tree Step
-    Reads:  Gap.states (climate, n_supply_ratio, flood_days, fire_intensity)
-            Gap.states (num_to_recruit, recruit_rand_seed) - for dormant trees
-            Tree.states_db (neighbor heights for light)  ← SAME PRIORITY, needs buffer
-    Writes: Tree.params (internal physiology: age, biomass, growth factors)
-            Tree.states (litter output: litter_c, litter_n, n_demand)
-            Tree.states_db (updated structure: is_alive, diam, height)
+Priority 0: Gap Litter Aggregate
+    Reads:  Tree.states (litter_c/n, litter_c/n_bg) - from P6 prev tick
+            Tree.states_db (is_alive: count living/dormant)
+            Tree.params (env_stress from templates: regrowth/growmax)
+    Writes: Gap.states (litter_accum_c/n, litter_accum_c/n_bg)
+            Gap.states (num_to_recruit, recruit_rand_seed)
 
-Priority 1: Gap Aggregate Step
-    Reads:  Tree.states (litter_c, litter_n, n_demand)  ← DIFFERENT PRIORITY
-            Tree.states_db (is_alive to filter living vs dormant)
-            Tree.params (invader, seed for recruitment calc)
-    Writes: Gap.params (total_n_demand)
-            Gap.states (litter_accum_c/n, num_to_recruit, seed_bank)
-
-Priority 2: Site Soil Step
-    Reads:  Gap.states (litter_accum_c/n)  ← DIFFERENT PRIORITY
+Priority 1: Site Soil Step
+    Reads:  Gap.states (litter_accum_c/n, litter_accum_c/n_bg) - from P0 same tick
     Writes: Site.params (soil pools: A0/A/BL carbon, nitrogen, water)
-            Site.states (deg_days, dry_days, avail_n, flood_days, fire_intensity)
+            Site.states (avail_n, flood_days, fire_intensity)
 
-Priority 3: Gap Sync Step
-    Reads:  Site.states (climate, avail_n, flood_days, fire_intensity)  ← DIFFERENT PRIORITY
-            Gap.params (total_n_demand for n_supply_ratio calc)
-    Writes: Gap.states (climate copy, n_supply_ratio)
-            Gap.states (clears litter_accum and num_to_recruit)
+Priority 2: Tree Potential Growth
+    Reads:  Gap.states (deg_days, dry_days, flood_days) - relayed at P5 prev tick
+            Tree.states_db (neighbor heights for light) ← SAME PRIORITY, needs buffer
+    Writes: Tree.params (env_stress, diam_max, light_avail, fc_degday/drought/flood)
+            Tree.states (n_demand)
+
+Priority 3: Gap N Demand Aggregate
+    Reads:  Tree.states (n_demand) - from P2 same tick
+    Writes: Gap.states (total_n_demand)
+
+Priority 4: Site Nutrient Allocation
+    Reads:  Site.states (avail_n) - from P1 same tick
+            Gap.states (total_n_demand) - from P3 same tick
+    Writes: Site.states (n_supply_ratio)
+
+Priority 5: Gap Sync
+    Reads:  Site.states (climate, n_supply_ratio) - from P1/P4 same tick
+    Writes: Gap.states (climate copy, n_supply_ratio relay)
+    Clears: Gap.states (litter_accum_c/n, litter_accum_c/n_bg)
+
+Priority 6: Tree Actual Growth + Renewal + Recruitment
+    Living trees:
+      Reads:  Tree.params (env_stress, diam_max from P2)
+              Gap.states (n_supply_ratio, base_mortality, fire_intensity from P5)
+      Writes: Tree.params (age, biomC, biomN, leaf_bm)
+              Tree.states (litter_c/n, litter_c/n_bg)
+              Tree.states_db (is_alive, diam, height, canopy_ht)
+    Templates:
+      Reads:  Gap.states (climate, n_supply_ratio from P5)
+              Tree.states_db (neighbor structure for light, species_id for avail_spec)
+      Writes: Tree.params (seedbank, seedling, env_stress=regrowth)
+              Tree.states_db (seedling_weight)
+    Dormant slots:
+      Reads:  Gap.states (num_to_recruit, recruit_rand_seed from P0)
+              Tree.states_db (seedling_weight from templates, same priority)
+      Writes: Tree.params (species traits, physiology init)
+              Tree.states_db (is_alive=1, diam, height, canopy_ht)
 ```
 
 ## Adding New Variables
@@ -292,43 +307,13 @@ When adding a new variable, ask these questions:
 
 **Adding a new tree variable: "crown_radius"**
 - Q1: Do neighbors need it? Yes, other trees for crown overlap calculation.
-- Q2: Same type at same priority? Yes, all trees at priority 0.
+- Q2: Same type at same priority? Yes, all trees at P2.
 - Answer: `states_db`
 
 **Adding a new site variable: "soil_temperature"**
 - Q1: Do neighbors need it? Yes, Gap relays it to trees.
-- Q2: Same type at same priority? No, Gap reads at priority 3, Site writes at priority 2.
+- Q2: Same type at same priority? No, Gap reads at P5, Site writes at P1.
 - Answer: `states`
-
-## Customizing Property Names
-
-The current property names (`params`, `states`, `states_db`) are grouped by **code requirements** (visibility and buffering behavior), not by domain meaning. This is a practical choice for the framework.
-
-**If you prefer more domain-meaningful names**, you can create them. For example:
-- Instead of `params`, use `traits` for Tree and `soil_pools` for Site
-- Instead of `states`, use `litter_output` for Tree and `climate` for Site
-
-**Critical Constraint: All breeds MUST have the same property names.**
-
-SAGESim requires a uniform step function signature across all breeds. If you create a property for one breed, all other breeds must have a property with the same name, even if they don't use it.
-
-```python
-# Example: If you want domain-specific names
-
-# Tree breed
-tree_breed.register_property("traits", [0.0] * 20, neighbor_visible=False)      # used
-tree_breed.register_property("litter", [0.0] * 3, neighbor_visible=True)        # used
-tree_breed.register_property("structure", [0.0] * 4, neighbor_visible=True)     # used
-tree_breed.register_property("soil_pools", [0.0] * 1, neighbor_visible=False)   # NOT used, but must exist
-
-# Site breed
-site_breed.register_property("traits", [0.0] * 1, neighbor_visible=False)       # NOT used, but must exist
-site_breed.register_property("litter", [0.0] * 1, neighbor_visible=True)        # NOT used, but must exist
-site_breed.register_property("structure", [0.0] * 1, neighbor_visible=True)     # NOT used, but must exist
-site_breed.register_property("soil_pools", [0.0] * 9, neighbor_visible=False)   # used
-```
-
-**Recommendation:** The current `params`/`states`/`states_db` naming is simple and clearly indicates visibility and buffering behavior. Domain meaning is captured in the index constants (e.g., `TREE_P_MAX_AGE`, `SITE_S_AVAIL_N`). This avoids proliferation of unused placeholder properties.
 
 ## Index Constants
 
@@ -346,6 +331,7 @@ GAP_S_DEG_DAYS = 0
 # states_db indices use _DB_ prefix
 TREE_DB_IS_ALIVE = 0
 TREE_DB_HEIGHT = 2
+TREE_DB_SEEDLING_WEIGHT = 4
 ```
 
 ## Summary
@@ -364,7 +350,8 @@ When in doubt:
 - Move to `states` if neighbors need to read it
 - Move to `states_db` only if same-priority race conditions occur
 
-**GGap Example**:
-- Gap writes `litter_accum` at P1, Site reads at P2 → must be in `states`
-- Site writes `avail_n` at P2, Gap reads at P3 → must be in `states`
-- Tree writes `height` at P0, other Trees read at P0 → must be in `states_db`
+**GGap Examples**:
+- Gap writes `litter_accum` at P0, Site reads at P1 → must be in `states`
+- Site writes `avail_n` at P1, Site nutrient reads at P4 → must be in `states`
+- Tree writes `height` at P6, other Trees read at P2 → must be in `states_db`
+- Template writes `seedling_weight` at P6, dormant slots read at P6 → must be in `states_db`
