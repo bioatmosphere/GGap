@@ -54,8 +54,8 @@ Soil Layers:
     Base:         Stable organic matter, slow turnover
 
 Property scheme (3 properties):
-- params[53]: soil pools + monthly climate + site properties - private
-- states[7]: climate + avail_n + flood_days + fire_intensity + n_supply_ratio - public
+- params[116]: soil pools + monthly climate + site properties + fire/wind/soil + climate_std - private
+- states[6]: climate + avail_n + flood_days + fire_intensity + n_supply_ratio - public
 - states_db[1]: placeholder (public, double buffered but unused)
 """
 
@@ -67,7 +67,7 @@ BREED_TREE = 0
 BREED_GAP = 1
 BREED_SITE = 2
 
-# === Site params[53] (private) ===
+# === Site params[116] (private) ===
 # Soil pools [0-8]:
 SITE_P_A0_C = 0
 SITE_P_A0_N = 1
@@ -91,20 +91,27 @@ SITE_P_LAI = 49
 SITE_P_LAI_W0 = 50
 SITE_P_LATITUDE = 51
 SITE_P_RAIN_N = 52
+# Fire/wind/soil [53-55]:
+SITE_P_FIRE_PROB = 53
+SITE_P_WIND_PROB = 54
+SITE_P_BASE_H = 55
+# Climate standard deviations [56-91]:
+SITE_P_TMIN_STD_BASE = 56   # tmin_std[0..11] at 56-67
+SITE_P_TMAX_STD_BASE = 68   # tmax_std[0..11] at 68-79
+SITE_P_PRCP_STD_BASE = 80   # prcp_std[0..11] at 80-91
 
-# === Site states[7] (public) ===
+# === Site states[6] (public) ===
 SITE_S_DEG_DAYS = 0
 SITE_S_DRY_DAYS = 1
-SITE_S_BASE_MORTALITY = 2
-SITE_S_AVAIL_N = 3
-SITE_S_FLOOD_DAYS = 4  # Days when A layer is saturated
-SITE_S_FIRE_INTENSITY = 5  # Fire intensity this year (0-1)
+SITE_S_AVAIL_N = 2
+SITE_S_FLOOD_DAYS = 3  # Days when A layer is saturated
+SITE_S_FIRE_INTENSITY = 4  # Fire intensity this year (0-1)
 
-# === Gap states[15] (for reading from Gap neighbors) ===
-GAP_S_LITTER_ACCUM_C = 5       # Above-ground litter -> A0 layer
-GAP_S_LITTER_ACCUM_N = 6
-GAP_S_LITTER_ACCUM_C_BG = 13   # Below-ground litter -> A layer (roots)
-GAP_S_LITTER_ACCUM_N_BG = 14
+# === Gap states[14] (for reading from Gap neighbors) ===
+GAP_S_LITTER_ACCUM_C = 4       # Above-ground litter -> A0 layer
+GAP_S_LITTER_ACCUM_N = 5
+GAP_S_LITTER_ACCUM_C_BG = 12   # Below-ground litter -> A layer (roots)
+GAP_S_LITTER_ACCUM_N_BG = 13
 
 # === UVAFME Constants (from soil.py) ===
 AO_CN_0 = 30.0
@@ -114,7 +121,6 @@ AO_RESP = 5.24e-4
 SA_RESP = 1.24e-5
 SB_RESP = 2.74e-7
 
-SOIL_BASE_DEPTH = 70.0
 BASE_MAX = 0.6
 BASE_MIN = 0.1
 AO_MIN = 0.025
@@ -123,7 +129,7 @@ LAI_MIN = 0.01
 LAI_MAX = 0.15
 
 # Atmospheric N in precipitation (tn N per cm precip)
-PRCP_N = 0.00001
+PRCP_N = 0.00002
 
 # Days per month for interpolation
 DAYS_PER_MONTH_0 = 31
@@ -199,12 +205,6 @@ def site_soil_step(
 
         i = i + 1
 
-    # Convert annual litter to daily inputs
-    daily_litter_c = total_litter_c / 365.0        # Above-ground daily
-    daily_litter_n = total_litter_n / 365.0
-    daily_litter_c_bg = total_litter_c_bg / 365.0  # Below-ground daily
-    daily_litter_n_bg = total_litter_n_bg / 365.0
-
     # ========== READ CURRENT SOIL STATE ==========
     ao_c0 = params_tensor[agent_index][SITE_P_A0_C]
     ao_n0 = params_tensor[agent_index][SITE_P_A0_N]
@@ -225,9 +225,55 @@ def site_soil_step(
     lai_w0 = params_tensor[agent_index][SITE_P_LAI_W0]
     latitude = params_tensor[agent_index][SITE_P_LATITUDE]
 
+    # ========== ADD LITTER AS ANNUAL PULSE (matches GAPpy) ==========
+    ao_c0 = ao_c0 + total_litter_c       # Above-ground litter -> A0 layer
+    ao_n0 = ao_n0 + total_litter_n
+    sa_c0 = sa_c0 + total_litter_c_bg    # Below-ground litter -> A layer (roots)
+    sa_n0 = sa_n0 + total_litter_n_bg
+
     # Ensure minimum LAI
     if lai < 1.0:
         lai = 1.0
+
+    # ========== READ MONTHLY CLIMATE STD DEVS ==========
+    tmin_std_0 = params_tensor[agent_index][SITE_P_TMIN_STD_BASE + 0]
+    tmin_std_1 = params_tensor[agent_index][SITE_P_TMIN_STD_BASE + 1]
+    tmin_std_2 = params_tensor[agent_index][SITE_P_TMIN_STD_BASE + 2]
+    tmin_std_3 = params_tensor[agent_index][SITE_P_TMIN_STD_BASE + 3]
+    tmin_std_4 = params_tensor[agent_index][SITE_P_TMIN_STD_BASE + 4]
+    tmin_std_5 = params_tensor[agent_index][SITE_P_TMIN_STD_BASE + 5]
+    tmin_std_6 = params_tensor[agent_index][SITE_P_TMIN_STD_BASE + 6]
+    tmin_std_7 = params_tensor[agent_index][SITE_P_TMIN_STD_BASE + 7]
+    tmin_std_8 = params_tensor[agent_index][SITE_P_TMIN_STD_BASE + 8]
+    tmin_std_9 = params_tensor[agent_index][SITE_P_TMIN_STD_BASE + 9]
+    tmin_std_10 = params_tensor[agent_index][SITE_P_TMIN_STD_BASE + 10]
+    tmin_std_11 = params_tensor[agent_index][SITE_P_TMIN_STD_BASE + 11]
+
+    tmax_std_0 = params_tensor[agent_index][SITE_P_TMAX_STD_BASE + 0]
+    tmax_std_1 = params_tensor[agent_index][SITE_P_TMAX_STD_BASE + 1]
+    tmax_std_2 = params_tensor[agent_index][SITE_P_TMAX_STD_BASE + 2]
+    tmax_std_3 = params_tensor[agent_index][SITE_P_TMAX_STD_BASE + 3]
+    tmax_std_4 = params_tensor[agent_index][SITE_P_TMAX_STD_BASE + 4]
+    tmax_std_5 = params_tensor[agent_index][SITE_P_TMAX_STD_BASE + 5]
+    tmax_std_6 = params_tensor[agent_index][SITE_P_TMAX_STD_BASE + 6]
+    tmax_std_7 = params_tensor[agent_index][SITE_P_TMAX_STD_BASE + 7]
+    tmax_std_8 = params_tensor[agent_index][SITE_P_TMAX_STD_BASE + 8]
+    tmax_std_9 = params_tensor[agent_index][SITE_P_TMAX_STD_BASE + 9]
+    tmax_std_10 = params_tensor[agent_index][SITE_P_TMAX_STD_BASE + 10]
+    tmax_std_11 = params_tensor[agent_index][SITE_P_TMAX_STD_BASE + 11]
+
+    prcp_std_0 = params_tensor[agent_index][SITE_P_PRCP_STD_BASE + 0]
+    prcp_std_1 = params_tensor[agent_index][SITE_P_PRCP_STD_BASE + 1]
+    prcp_std_2 = params_tensor[agent_index][SITE_P_PRCP_STD_BASE + 2]
+    prcp_std_3 = params_tensor[agent_index][SITE_P_PRCP_STD_BASE + 3]
+    prcp_std_4 = params_tensor[agent_index][SITE_P_PRCP_STD_BASE + 4]
+    prcp_std_5 = params_tensor[agent_index][SITE_P_PRCP_STD_BASE + 5]
+    prcp_std_6 = params_tensor[agent_index][SITE_P_PRCP_STD_BASE + 6]
+    prcp_std_7 = params_tensor[agent_index][SITE_P_PRCP_STD_BASE + 7]
+    prcp_std_8 = params_tensor[agent_index][SITE_P_PRCP_STD_BASE + 8]
+    prcp_std_9 = params_tensor[agent_index][SITE_P_PRCP_STD_BASE + 9]
+    prcp_std_10 = params_tensor[agent_index][SITE_P_PRCP_STD_BASE + 10]
+    prcp_std_11 = params_tensor[agent_index][SITE_P_PRCP_STD_BASE + 11]
 
     # ========== READ MONTHLY CLIMATE ==========
     tmin_0 = params_tensor[agent_index][SITE_P_TMIN_BASE + 0]
@@ -269,8 +315,303 @@ def site_soil_step(
     prcp_10 = params_tensor[agent_index][SITE_P_PRCP_BASE + 10]
     prcp_11 = params_tensor[agent_index][SITE_P_PRCP_BASE + 11]
 
+    # ========== MONTHLY CLIMATE PERTURBATION (matches GAPpy) ==========
+    # Generate one pseudo-random perturbation per month and apply to monthly
+    # climate variables. Temp perturbation clamped to [-1,1], precip to [-0.5,0.5].
+    u1 = 0.0
+    u2 = 0.0
+    u3 = 0.0
+    u4 = 0.0
+    tp = 0.0
+    pp = 0.0
+
+    # Month 0 (January)
+    u1 = ((tick * 7919 + 0 * 6271 + agent_index * 1013) % 10000) / 10000.0
+    u2 = ((tick * 5381 + 0 * 3571 + agent_index * 2017) % 10000) / 10000.0
+    tp = u1 + u2 - 1.0
+    if tp < -1.0:
+        tp = -1.0
+    if tp > 1.0:
+        tp = 1.0
+    u3 = ((tick * 4219 + 0 * 8461 + agent_index * 3037) % 10000) / 10000.0
+    u4 = ((tick * 3079 + 0 * 7517 + agent_index * 5039) % 10000) / 10000.0
+    pp = (u3 + u4 - 1.0) * 0.5
+    if pp < -0.5:
+        pp = -0.5
+    if pp > 0.5:
+        pp = 0.5
+    tmin_0 = tmin_0 + tp * tmin_std_0
+    tmax_0 = tmax_0 + tp * tmax_std_0
+    if tmax_0 < tmin_0:
+        tmax_0 = tmin_0 + 0.1
+    prcp_0 = prcp_0 + pp * prcp_std_0
+    if prcp_0 < 0.0:
+        prcp_0 = 0.0
+
+    # Month 1 (February)
+    u1 = ((tick * 7919 + 1 * 6271 + agent_index * 1013) % 10000) / 10000.0
+    u2 = ((tick * 5381 + 1 * 3571 + agent_index * 2017) % 10000) / 10000.0
+    tp = u1 + u2 - 1.0
+    if tp < -1.0:
+        tp = -1.0
+    if tp > 1.0:
+        tp = 1.0
+    u3 = ((tick * 4219 + 1 * 8461 + agent_index * 3037) % 10000) / 10000.0
+    u4 = ((tick * 3079 + 1 * 7517 + agent_index * 5039) % 10000) / 10000.0
+    pp = (u3 + u4 - 1.0) * 0.5
+    if pp < -0.5:
+        pp = -0.5
+    if pp > 0.5:
+        pp = 0.5
+    tmin_1 = tmin_1 + tp * tmin_std_1
+    tmax_1 = tmax_1 + tp * tmax_std_1
+    if tmax_1 < tmin_1:
+        tmax_1 = tmin_1 + 0.1
+    prcp_1 = prcp_1 + pp * prcp_std_1
+    if prcp_1 < 0.0:
+        prcp_1 = 0.0
+
+    # Month 2 (March)
+    u1 = ((tick * 7919 + 2 * 6271 + agent_index * 1013) % 10000) / 10000.0
+    u2 = ((tick * 5381 + 2 * 3571 + agent_index * 2017) % 10000) / 10000.0
+    tp = u1 + u2 - 1.0
+    if tp < -1.0:
+        tp = -1.0
+    if tp > 1.0:
+        tp = 1.0
+    u3 = ((tick * 4219 + 2 * 8461 + agent_index * 3037) % 10000) / 10000.0
+    u4 = ((tick * 3079 + 2 * 7517 + agent_index * 5039) % 10000) / 10000.0
+    pp = (u3 + u4 - 1.0) * 0.5
+    if pp < -0.5:
+        pp = -0.5
+    if pp > 0.5:
+        pp = 0.5
+    tmin_2 = tmin_2 + tp * tmin_std_2
+    tmax_2 = tmax_2 + tp * tmax_std_2
+    if tmax_2 < tmin_2:
+        tmax_2 = tmin_2 + 0.1
+    prcp_2 = prcp_2 + pp * prcp_std_2
+    if prcp_2 < 0.0:
+        prcp_2 = 0.0
+
+    # Month 3 (April)
+    u1 = ((tick * 7919 + 3 * 6271 + agent_index * 1013) % 10000) / 10000.0
+    u2 = ((tick * 5381 + 3 * 3571 + agent_index * 2017) % 10000) / 10000.0
+    tp = u1 + u2 - 1.0
+    if tp < -1.0:
+        tp = -1.0
+    if tp > 1.0:
+        tp = 1.0
+    u3 = ((tick * 4219 + 3 * 8461 + agent_index * 3037) % 10000) / 10000.0
+    u4 = ((tick * 3079 + 3 * 7517 + agent_index * 5039) % 10000) / 10000.0
+    pp = (u3 + u4 - 1.0) * 0.5
+    if pp < -0.5:
+        pp = -0.5
+    if pp > 0.5:
+        pp = 0.5
+    tmin_3 = tmin_3 + tp * tmin_std_3
+    tmax_3 = tmax_3 + tp * tmax_std_3
+    if tmax_3 < tmin_3:
+        tmax_3 = tmin_3 + 0.1
+    prcp_3 = prcp_3 + pp * prcp_std_3
+    if prcp_3 < 0.0:
+        prcp_3 = 0.0
+
+    # Month 4 (May)
+    u1 = ((tick * 7919 + 4 * 6271 + agent_index * 1013) % 10000) / 10000.0
+    u2 = ((tick * 5381 + 4 * 3571 + agent_index * 2017) % 10000) / 10000.0
+    tp = u1 + u2 - 1.0
+    if tp < -1.0:
+        tp = -1.0
+    if tp > 1.0:
+        tp = 1.0
+    u3 = ((tick * 4219 + 4 * 8461 + agent_index * 3037) % 10000) / 10000.0
+    u4 = ((tick * 3079 + 4 * 7517 + agent_index * 5039) % 10000) / 10000.0
+    pp = (u3 + u4 - 1.0) * 0.5
+    if pp < -0.5:
+        pp = -0.5
+    if pp > 0.5:
+        pp = 0.5
+    tmin_4 = tmin_4 + tp * tmin_std_4
+    tmax_4 = tmax_4 + tp * tmax_std_4
+    if tmax_4 < tmin_4:
+        tmax_4 = tmin_4 + 0.1
+    prcp_4 = prcp_4 + pp * prcp_std_4
+    if prcp_4 < 0.0:
+        prcp_4 = 0.0
+
+    # Month 5 (June)
+    u1 = ((tick * 7919 + 5 * 6271 + agent_index * 1013) % 10000) / 10000.0
+    u2 = ((tick * 5381 + 5 * 3571 + agent_index * 2017) % 10000) / 10000.0
+    tp = u1 + u2 - 1.0
+    if tp < -1.0:
+        tp = -1.0
+    if tp > 1.0:
+        tp = 1.0
+    u3 = ((tick * 4219 + 5 * 8461 + agent_index * 3037) % 10000) / 10000.0
+    u4 = ((tick * 3079 + 5 * 7517 + agent_index * 5039) % 10000) / 10000.0
+    pp = (u3 + u4 - 1.0) * 0.5
+    if pp < -0.5:
+        pp = -0.5
+    if pp > 0.5:
+        pp = 0.5
+    tmin_5 = tmin_5 + tp * tmin_std_5
+    tmax_5 = tmax_5 + tp * tmax_std_5
+    if tmax_5 < tmin_5:
+        tmax_5 = tmin_5 + 0.1
+    prcp_5 = prcp_5 + pp * prcp_std_5
+    if prcp_5 < 0.0:
+        prcp_5 = 0.0
+
+    # Month 6 (July)
+    u1 = ((tick * 7919 + 6 * 6271 + agent_index * 1013) % 10000) / 10000.0
+    u2 = ((tick * 5381 + 6 * 3571 + agent_index * 2017) % 10000) / 10000.0
+    tp = u1 + u2 - 1.0
+    if tp < -1.0:
+        tp = -1.0
+    if tp > 1.0:
+        tp = 1.0
+    u3 = ((tick * 4219 + 6 * 8461 + agent_index * 3037) % 10000) / 10000.0
+    u4 = ((tick * 3079 + 6 * 7517 + agent_index * 5039) % 10000) / 10000.0
+    pp = (u3 + u4 - 1.0) * 0.5
+    if pp < -0.5:
+        pp = -0.5
+    if pp > 0.5:
+        pp = 0.5
+    tmin_6 = tmin_6 + tp * tmin_std_6
+    tmax_6 = tmax_6 + tp * tmax_std_6
+    if tmax_6 < tmin_6:
+        tmax_6 = tmin_6 + 0.1
+    prcp_6 = prcp_6 + pp * prcp_std_6
+    if prcp_6 < 0.0:
+        prcp_6 = 0.0
+
+    # Month 7 (August)
+    u1 = ((tick * 7919 + 7 * 6271 + agent_index * 1013) % 10000) / 10000.0
+    u2 = ((tick * 5381 + 7 * 3571 + agent_index * 2017) % 10000) / 10000.0
+    tp = u1 + u2 - 1.0
+    if tp < -1.0:
+        tp = -1.0
+    if tp > 1.0:
+        tp = 1.0
+    u3 = ((tick * 4219 + 7 * 8461 + agent_index * 3037) % 10000) / 10000.0
+    u4 = ((tick * 3079 + 7 * 7517 + agent_index * 5039) % 10000) / 10000.0
+    pp = (u3 + u4 - 1.0) * 0.5
+    if pp < -0.5:
+        pp = -0.5
+    if pp > 0.5:
+        pp = 0.5
+    tmin_7 = tmin_7 + tp * tmin_std_7
+    tmax_7 = tmax_7 + tp * tmax_std_7
+    if tmax_7 < tmin_7:
+        tmax_7 = tmin_7 + 0.1
+    prcp_7 = prcp_7 + pp * prcp_std_7
+    if prcp_7 < 0.0:
+        prcp_7 = 0.0
+
+    # Month 8 (September)
+    u1 = ((tick * 7919 + 8 * 6271 + agent_index * 1013) % 10000) / 10000.0
+    u2 = ((tick * 5381 + 8 * 3571 + agent_index * 2017) % 10000) / 10000.0
+    tp = u1 + u2 - 1.0
+    if tp < -1.0:
+        tp = -1.0
+    if tp > 1.0:
+        tp = 1.0
+    u3 = ((tick * 4219 + 8 * 8461 + agent_index * 3037) % 10000) / 10000.0
+    u4 = ((tick * 3079 + 8 * 7517 + agent_index * 5039) % 10000) / 10000.0
+    pp = (u3 + u4 - 1.0) * 0.5
+    if pp < -0.5:
+        pp = -0.5
+    if pp > 0.5:
+        pp = 0.5
+    tmin_8 = tmin_8 + tp * tmin_std_8
+    tmax_8 = tmax_8 + tp * tmax_std_8
+    if tmax_8 < tmin_8:
+        tmax_8 = tmin_8 + 0.1
+    prcp_8 = prcp_8 + pp * prcp_std_8
+    if prcp_8 < 0.0:
+        prcp_8 = 0.0
+
+    # Month 9 (October)
+    u1 = ((tick * 7919 + 9 * 6271 + agent_index * 1013) % 10000) / 10000.0
+    u2 = ((tick * 5381 + 9 * 3571 + agent_index * 2017) % 10000) / 10000.0
+    tp = u1 + u2 - 1.0
+    if tp < -1.0:
+        tp = -1.0
+    if tp > 1.0:
+        tp = 1.0
+    u3 = ((tick * 4219 + 9 * 8461 + agent_index * 3037) % 10000) / 10000.0
+    u4 = ((tick * 3079 + 9 * 7517 + agent_index * 5039) % 10000) / 10000.0
+    pp = (u3 + u4 - 1.0) * 0.5
+    if pp < -0.5:
+        pp = -0.5
+    if pp > 0.5:
+        pp = 0.5
+    tmin_9 = tmin_9 + tp * tmin_std_9
+    tmax_9 = tmax_9 + tp * tmax_std_9
+    if tmax_9 < tmin_9:
+        tmax_9 = tmin_9 + 0.1
+    prcp_9 = prcp_9 + pp * prcp_std_9
+    if prcp_9 < 0.0:
+        prcp_9 = 0.0
+
+    # Month 10 (November)
+    u1 = ((tick * 7919 + 10 * 6271 + agent_index * 1013) % 10000) / 10000.0
+    u2 = ((tick * 5381 + 10 * 3571 + agent_index * 2017) % 10000) / 10000.0
+    tp = u1 + u2 - 1.0
+    if tp < -1.0:
+        tp = -1.0
+    if tp > 1.0:
+        tp = 1.0
+    u3 = ((tick * 4219 + 10 * 8461 + agent_index * 3037) % 10000) / 10000.0
+    u4 = ((tick * 3079 + 10 * 7517 + agent_index * 5039) % 10000) / 10000.0
+    pp = (u3 + u4 - 1.0) * 0.5
+    if pp < -0.5:
+        pp = -0.5
+    if pp > 0.5:
+        pp = 0.5
+    tmin_10 = tmin_10 + tp * tmin_std_10
+    tmax_10 = tmax_10 + tp * tmax_std_10
+    if tmax_10 < tmin_10:
+        tmax_10 = tmin_10 + 0.1
+    prcp_10 = prcp_10 + pp * prcp_std_10
+    if prcp_10 < 0.0:
+        prcp_10 = 0.0
+
+    # Month 11 (December)
+    u1 = ((tick * 7919 + 11 * 6271 + agent_index * 1013) % 10000) / 10000.0
+    u2 = ((tick * 5381 + 11 * 3571 + agent_index * 2017) % 10000) / 10000.0
+    tp = u1 + u2 - 1.0
+    if tp < -1.0:
+        tp = -1.0
+    if tp > 1.0:
+        tp = 1.0
+    u3 = ((tick * 4219 + 11 * 8461 + agent_index * 3037) % 10000) / 10000.0
+    u4 = ((tick * 3079 + 11 * 7517 + agent_index * 5039) % 10000) / 10000.0
+    pp = (u3 + u4 - 1.0) * 0.5
+    if pp < -0.5:
+        pp = -0.5
+    if pp > 0.5:
+        pp = 0.5
+    tmin_11 = tmin_11 + tp * tmin_std_11
+    tmax_11 = tmax_11 + tp * tmax_std_11
+    if tmax_11 < tmin_11:
+        tmax_11 = tmin_11 + 0.1
+    prcp_11 = prcp_11 + pp * prcp_std_11
+    if prcp_11 < 0.0:
+        prcp_11 = 0.0
+
+    # ========== COMPUTE ANNUAL PRECIP AND DRY_DAYS (matches GAPpy) ==========
+    total_prcp_mm = prcp_0 + prcp_1 + prcp_2 + prcp_3 + prcp_4 + prcp_5 + prcp_6 + prcp_7 + prcp_8 + prcp_9 + prcp_10 + prcp_11
+    annual_prcp_cm = total_prcp_mm / 10.0
+    dry_days = 100.0 - annual_prcp_cm
+    if dry_days < 0.0:
+        dry_days = 0.0
+
     # ========== WATER BALANCE LIMITS ==========
-    sbh = SOIL_BASE_DEPTH
+    sbh = params_tensor[agent_index][SITE_P_BASE_H]
+    if sbh < 1.0:
+        sbh = 70.0  # Fallback if not set
     laiw_min = lai * LAI_MIN
     laiw_max = lai * LAI_MAX
     aow_min = ao_c0 * AO_MIN
@@ -392,8 +733,11 @@ def site_soil_step(
         if day_temp < 0.0:
             freeze_days = freeze_days + 1.0
 
-        # Accumulate atmospheric N from precipitation
+        # Accumulate atmospheric N from precipitation (mm units)
         rain_n = rain_n + day_prcp * PRCP_N
+
+        # Convert mm -> cm for water balance
+        day_prcp = day_prcp / 10.0
 
         # === Calculate Potential Evapotranspiration (Hamon method) ===
         day_of_year = day + 1
@@ -436,7 +780,7 @@ def site_soil_step(
 
         # Water table recharge from rain
         if day_prcp > 0.01:
-            table_water = day_prcp * sigma * (1.0 - freeze)
+            table_water = day_prcp * sigma * freeze
             sb_w0 = sb_w0 + table_water
             if sb_w0 > sbw_max:
                 sb_w0 = sbw_max
@@ -581,10 +925,6 @@ def site_soil_step(
             flood_days = flood_days + 1.0
 
         # === SOIL DECOMPOSITION (from UVAFME soil.py:soil_decomp) ===
-        # Add above-ground daily litter to A0 layer
-        ao_c0 = ao_c0 + daily_litter_c
-        ao_n0 = ao_n0 + daily_litter_n
-
         # A0 layer C/N ratio
         ao_cn = AO_CN_0
         if ao_n0 > 0.0001:
@@ -618,9 +958,9 @@ def site_soil_step(
         if ao_n0 < 0.0:
             ao_n0 = 0.0
 
-        # Soil A layer (receives A0 decomposition + below-ground root litter)
-        sa_c0 = sa_c0 + yxdc + daily_litter_c_bg
-        sa_n0 = sa_n0 + yxdn + daily_litter_n_bg
+        # Soil A layer (receives A0 decomposition products)
+        sa_c0 = sa_c0 + yxdc
+        sa_n0 = sa_n0 + yxdn
         sa_cn = SA_CN_0
         if sa_n0 > 0.0001:
             sa_cn = sa_c0 / sa_n0
@@ -683,27 +1023,26 @@ def site_soil_step(
     # Flood days for this year
     states_tensor[agent_index][SITE_S_FLOOD_DAYS] = flood_days
 
+    # Dry days recomputed from perturbed annual precipitation
+    states_tensor[agent_index][SITE_S_DRY_DAYS] = dry_days
+
     # ========== FIRE PROBABILITY ==========
-    # Fire probability increases with dry days and decreases with precipitation
-    # Base fire probability: 0.01 (1% per year baseline)
-    # Dry conditions increase fire risk
-    fire_prob = 0.01  # Base probability
-    dry_day_fraction = freeze_days / 365.0  # Reuse freeze_days counter for dry conditions
+    # Fire probability from CSV (per 1000 years, already converted to annual at load)
+    fire_prob = params_tensor[agent_index][SITE_P_FIRE_PROB]
 
-    # More dry days = higher fire probability
-    # At 120+ dry days, fire probability increases significantly
-    if freeze_days < 30.0:  # freeze_days was actually calculated but let's use a simple dry proxy
-        # Use dry_days from soil moisture tracking (estimated from water balance)
-        estimated_dry_days = 0.0
-        if saw0_scaled < 0.3:
-            estimated_dry_days = 30.0
-        if saw0_scaled < 0.2:
-            estimated_dry_days = 60.0
-        if saw0_scaled < 0.1:
-            estimated_dry_days = 120.0
+    # Dry conditions increase fire risk beyond base probability
+    estimated_dry_days = 0.0
+    if saw0_scaled < 0.3:
+        estimated_dry_days = 30.0
+    if saw0_scaled < 0.2:
+        estimated_dry_days = 60.0
+    if saw0_scaled < 0.1:
+        estimated_dry_days = 120.0
 
-        if estimated_dry_days > 60.0:
-            fire_prob = 0.03 + (estimated_dry_days - 60.0) * 0.001
+    if estimated_dry_days > 60.0:
+        dry_fire_adj = 0.03 + (estimated_dry_days - 60.0) * 0.001
+        if dry_fire_adj > fire_prob:
+            fire_prob = dry_fire_adj
 
     if fire_prob > 0.15:
         fire_prob = 0.15  # Cap at 15% annual probability

@@ -1,6 +1,9 @@
 """
-Run script for a single site simulation.
+Run script for a single site simulation with GAPpy-compatible CSV output.
 Uses Site -> Gap(s) -> Trees agent hierarchy with soil biogeochemistry.
+
+Produces 5 CSV files in output_dir matching GAPpy format:
+  - site_data.csv, soil_data.csv, genus_data.csv, species_data.csv, tree_data.csv
 """
 
 import argparse
@@ -28,10 +31,11 @@ from gap.gap_model import (
     SITE_P_A0_C, SITE_P_A0_N,
     SITE_P_A_C, SITE_P_A_N,
     SITE_P_BL_C, SITE_P_BL_N,
+    SITE_P_PRCP_BASE, SITE_P_TMIN_BASE, SITE_P_TMAX_BASE,
     # Site states indices (public: climate + avail_n)
-    SITE_S_DEG_DAYS, SITE_S_DRY_DAYS,
-    SITE_S_BASE_MORTALITY, SITE_S_AVAIL_N,
+    SITE_S_AVAIL_N, SITE_S_DEG_DAYS, SITE_S_DRY_DAYS, SITE_S_FLOOD_DAYS,
 )
+from gap.output_utils import OutputWriter, compute_site_extras, compute_soil_biomass
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
@@ -51,44 +55,26 @@ def main():
     parser.add_argument(
         "--num_gaps",
         type=int,
-        default=1,
-        help="Number of gaps per site (default: 1)"
+        default=200,
+        help="Number of gaps per site (default: 200)"
     )
     parser.add_argument(
-        "--trees_per_gap",
+        "--pool_size",
         type=int,
-        default=100,
-        help="Number of trees per gap (default: 100)"
+        default=1000,
+        help="Max tree slots per gap (default: 1000)"
     )
     parser.add_argument(
         "--years",
         type=int,
-        default=50,
-        help="Number of years to simulate (default: 50)"
-    )
-    parser.add_argument(
-        "--deg_days",
-        type=float,
-        default=None,
-        help="Override annual degree days (default: calculated from CSV)"
-    )
-    parser.add_argument(
-        "--dry_days",
-        type=float,
-        default=None,
-        help="Override annual drought days (default: calculated from CSV)"
-    )
-    parser.add_argument(
-        "--base_mortality",
-        type=float,
-        default=0.02,
-        help="Base annual mortality rate (default: 0.02)"
+        default=1000,
+        help="Number of years to simulate (default: 1000)"
     )
     parser.add_argument(
         "--report_interval",
         type=int,
         default=10,
-        help="Years between progress reports (default: 10)"
+        help="Years between progress reports and CSV output (default: 10)"
     )
     parser.add_argument(
         "--site_id",
@@ -108,6 +94,17 @@ def main():
         default="UVAFME2012",
         help="File prefix for UVAFME CSV files (default: UVAFME2012)"
     )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="output_data",
+        help="Directory for CSV output files (default: output_data)"
+    )
+    parser.add_argument(
+        "--no_tree_data",
+        action="store_true",
+        help="Skip writing tree_data.csv (can be very large)"
+    )
 
     args = parser.parse_args()
 
@@ -117,17 +114,13 @@ def main():
         print("=" * 60)
         print(f"\nSimulation Parameters:")
         print(f"  Number of gaps: {args.num_gaps}")
-        print(f"  Trees per gap: {args.trees_per_gap}")
-        print(f"  Total trees: {args.num_gaps * args.trees_per_gap}")
+        print(f"  Pool size per gap: {args.pool_size}")
+        print(f"  Total slots: {args.num_gaps * args.pool_size}")
         print(f"  Simulation duration: {args.years} years")
-        print(f"  Base mortality rate: {args.base_mortality}")
-        if args.deg_days is not None:
-            print(f"  Degree days override: {args.deg_days}")
-        if args.dry_days is not None:
-            print(f"  Dry days override: {args.dry_days}")
         print(f"  Data directory: {args.data_dir}")
         print(f"  File prefix: {args.prefix}")
         print(f"  Site ID: {args.site_id}")
+        print(f"  Output directory: {args.output_dir}")
         print()
 
     # Create model
@@ -141,28 +134,17 @@ def main():
         site_id=args.site_id,
         data_dir=args.data_dir,
         prefix=args.prefix,
-        base_mortality_rate=args.base_mortality,
     )
 
-    # Apply CLI overrides for climate (after CSV calculation)
     site_agent_id = site['site_agent_id']
-    if args.deg_days is not None:
-        site['deg_days'] = args.deg_days
-        states = model.get_agent_property_value(site_agent_id, "states")
-        states[SITE_S_DEG_DAYS] = args.deg_days
-        model.set_agent_property_value(site_agent_id, "states", states)
-    if args.dry_days is not None:
-        site['dry_days'] = args.dry_days
-        states = model.get_agent_property_value(site_agent_id, "states")
-        states[SITE_S_DRY_DAYS] = args.dry_days
-        model.set_agent_property_value(site_agent_id, "states", states)
+    num_species = len(site['species'])
 
     if rank == 0:
         print(f"Site: {site['site_name']} ({site['latitude']:.2f}°N, {site['longitude']:.2f}°W)")
-        print(f"Loaded {len(site['species'])} species for site")
-        deg_src = "override" if args.deg_days is not None else "CSV"
-        dry_src = "override" if args.dry_days is not None else "CSV"
-        print(f"  deg_days: {site['deg_days']:.0f} ({deg_src}), dry_days: {site['dry_days']:.1f} ({dry_src})")
+        print(f"  Region: {site.get('region', 'N/A')}, Elevation: {site['elevation']:.1f} m")
+        print(f"Loaded {num_species} species for site")
+        print(f"  deg_days: {site['deg_days']:.0f}, dry_days: {site['dry_days']:.1f}")
+        print(f"  soil_base_h: {site.get('soil_base_h', 'N/A')}, fire_prob: {site.get('fire_prob', 'N/A')}")
         print(f"Site agent ID: {site['site_agent_id']}")
         print(f"\nInitializing {args.num_gaps} gap(s) with trees...")
 
@@ -172,30 +154,36 @@ def main():
     for gap_num in range(args.num_gaps):
         tree_ids, initial_alive = model.initialize_trees(
             site=site,
-            maxtrees=args.trees_per_gap,
+            maxtrees=args.pool_size,
         )
         total_trees += len(tree_ids)
         total_alive += initial_alive
         if rank == 0:
-            print(f"  Gap {gap_num + 1}: {len(tree_ids)} dormant slots (empty start, renewal fills forest)")
+            print(f"  Gap {gap_num + 1}: {len(tree_ids)} free slots (empty start, renewal fills forest)")
 
-    # All ranks must participate in get_statistics/get_agent_property_value (MPI bcast)
-    stats = model.get_statistics()
+    num_templates = num_species * args.num_gaps
+
+    # All ranks must participate in get_agent_property_value (MPI bcast)
     site_params = model.get_agent_property_value(site_agent_id, "params")
     site_states = model.get_agent_property_value(site_agent_id, "states")
 
     if rank == 0:
         print(f"\nTotal agents: {len(model.site_agents)} site, {len(model.gap_agents)} gaps, {len(model.tree_ids)} tree slots")
-        print(f"  Initial alive: {total_alive}, Dormant slots: {total_trees - total_alive}")
-        print(f"\nInitial state:")
-        print(f"  Living trees: {stats['living_trees']}")
-        print(f"  Total biomass: {stats['total_biomass']:.1f} kg C")
-
+        print(f"  Initial alive: {total_alive}, Free slots: {total_trees - total_alive}")
         print(f"\nInitial soil state:")
         print(f"  A0 layer C: {site_params[SITE_P_A0_C]:.2f} tn/ha")
         print(f"  A layer C: {site_params[SITE_P_A_C]:.2f} tn/ha")
         print(f"  Base layer C: {site_params[SITE_P_BL_C]:.2f} tn/ha")
         print(f"  Available N: {site_states[SITE_S_AVAIL_N]:.4f} tn/ha")
+
+    # Initialize output writer
+    writer = OutputWriter(args.output_dir, site_id=args.site_id)
+    writer.open(model.species_by_id, args.num_gaps)
+
+    if rank == 0:
+        print(f"\nOutput files opened in {args.output_dir}/")
+        print(f"  genus_data.csv, species_data.csv, site_data.csv, soil_data.csv"
+              + ("" if args.no_tree_data else ", tree_data.csv"))
         print("\nSetting up GPU kernels...")
 
     # Setup model (generates GPU kernels)
@@ -204,57 +192,94 @@ def main():
     if rank == 0:
         print("Starting simulation...")
         print()
-        print(f"{'Year':<6} {'Alive':<7} {'Seedlings':<10} {'Dormant':<8} {'NetChg':<8} {'Biomass':<10} {'Avail_N':<10}")
+        print(f"{'Year':<6} {'Alive':<7} {'Seedlings':<10} {'Free':<8} {'NetChg':<8} {'Biomass':<10} {'Avail_N':<10}")
         print("-" * 70)
 
     # Track living trees for net change calculation
     prev_alive = total_alive
 
     # Run simulation
-    site_agent_id = site['site_agent_id']
     for year_batch in range(0, args.years, args.report_interval):
         years_to_run = min(args.report_interval, args.years - year_batch)
 
         # Simulate
         model.simulate(ticks=years_to_run, sync_workers_every_n_ticks=1)
 
+        current_year = year_batch + years_to_run
+
         # All ranks must participate in MPI collective calls
-        stats = model.get_statistics()
+        site_params = model.get_agent_property_value(site_agent_id, "params")
         site_states = model.get_agent_property_value(site_agent_id, "states")
 
+        # Collect tree data for output
+        tree_data = model.collect_tree_data()
+
+        # Compute derived values
+        annual_rain, grow_days = compute_site_extras(
+            site_params, SITE_P_PRCP_BASE, SITE_P_TMIN_BASE, SITE_P_TMAX_BASE
+        )
+        soil_biomC, soil_biomN = compute_soil_biomass(tree_data, writer.plotadj)
+
         if rank == 0:
-            current_year = year_batch + years_to_run
+            # Write CSV outputs
+            writer.write_site_data(
+                current_year,
+                site['latitude'], site['longitude'],
+                site['elevation'], site.get('slope', 0.0),
+                site_states[SITE_S_DEG_DAYS],
+                site_states[SITE_S_FLOOD_DAYS],
+                site_states[SITE_S_DRY_DAYS],
+                annual_rain, grow_days,
+            )
+            writer.write_soil_data(
+                current_year,
+                site_params[SITE_P_A0_C], site_params[SITE_P_A_C],
+                site_params[SITE_P_A0_N], site_params[SITE_P_A_N],
+                site_params[SITE_P_BL_C], site_params[SITE_P_BL_N],
+                site_states[SITE_S_AVAIL_N],
+                soil_biomC, soil_biomN,
+            )
+            writer.write_species_data(current_year, tree_data, model.gap_agents)
+            writer.write_genus_data(current_year, tree_data, model.gap_agents)
+            if not args.no_tree_data:
+                writer.write_tree_data(current_year, tree_data, model.gap_agents)
+
+            # Console output
+            num_living = len(tree_data)
+            num_seedlings = sum(1 for t in tree_data if t['age'] <= 2.0)
+            total_biomass = sum(t['biomC'] for t in tree_data)
+            num_free = len(model.tree_ids) - num_living - num_templates
             avail_n = site_states[SITE_S_AVAIL_N] if isinstance(site_states, list) else site_states
 
-            # Calculate net change (positive = more recruited than died)
-            net_change = stats['living_trees'] - prev_alive
+            net_change = num_living - prev_alive
             net_str = f"+{net_change}" if net_change >= 0 else str(net_change)
-            prev_alive = stats['living_trees']
+            prev_alive = num_living
 
-            print(f"{current_year:<6} {stats['living_trees']:<7} {stats['seedlings']:<10} {stats['dormant_slots']:<8} {net_str:<8} {stats['total_biomass']:<10.1f} {avail_n:<10.4f}")
+            print(f"{current_year:<6} {num_living:<7} {num_seedlings:<10} {num_free:<8} {net_str:<8} {total_biomass:<10.1f} {avail_n:<10.4f}")
 
-    # All ranks must participate in MPI collective calls
-    stats = model.get_statistics()
+    # Final state
     site_params = model.get_agent_property_value(site_agent_id, "params")
     site_states = model.get_agent_property_value(site_agent_id, "states")
 
     if rank == 0:
+        avail_n = site_states[SITE_S_AVAIL_N] if isinstance(site_states, list) else site_states
         print("\n" + "=" * 70)
         print("Simulation Complete")
         print("=" * 70)
         print(f"\nFinal Tree Statistics:")
-        print(f"  Living trees: {stats['living_trees']}")
-        print(f"  Seedlings (age <= 2): {stats['seedlings']}")
-        print(f"  Dormant slots: {stats['dormant_slots']}")
-        print(f"  Total biomass: {stats['total_biomass']:.1f} kg C")
-        print(f"  Net change from start: {stats['living_trees'] - total_alive:+d}")
+        print(f"  Living trees: {prev_alive}")
+        print(f"  Free slots: {len(model.tree_ids) - prev_alive - num_templates}")
+        print(f"  Net change from start: {prev_alive - total_alive:+d}")
 
-        avail_n = site_states[SITE_S_AVAIL_N] if isinstance(site_states, list) else site_states
         print(f"\nFinal soil state:")
         print(f"  A0 layer C: {site_params[SITE_P_A0_C]:.2f} tn/ha, N: {site_params[SITE_P_A0_N]:.4f} tn/ha")
         print(f"  A layer C: {site_params[SITE_P_A_C]:.2f} tn/ha, N: {site_params[SITE_P_A_N]:.4f} tn/ha")
         print(f"  Base layer C: {site_params[SITE_P_BL_C]:.2f} tn/ha, N: {site_params[SITE_P_BL_N]:.4f} tn/ha")
         print(f"  Available N: {avail_n:.4f} tn/ha/yr")
+
+        print(f"\nOutput files written to {args.output_dir}/")
+
+    writer.close()
 
 
 if __name__ == "__main__":

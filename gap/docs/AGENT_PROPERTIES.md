@@ -139,7 +139,7 @@ Since `no_double_buffer` applies at the property level (not per-priority), you c
 
 | Property | Array | Contents |
 |----------|-------|----------|
-| `params[38]` | Private | Species traits [0-21] + Physiology [22-31] + Intermediates [32-33] + Renewal [34-37] |
+| `params[40]` | Private | Species traits [0-21] + Physiology [22-31] + Intermediates [32-33] + Renewal [34-37] + Leaf area [38-39] |
 | `states[5]` | Public | Litter output: litter_c, litter_n, n_demand, litter_c_bg, litter_n_bg |
 | `states_db[5]` | Public, buffered | Structure: is_alive, diam, height, canopy_ht, seedling_weight |
 
@@ -148,6 +148,7 @@ Since `no_double_buffer` applies at the property level (not per-priority), you c
 - `[22-31]` Internal physiology: age, biomC, biomN, leaf_bm, x, y, light_avail, fc_degday, fc_drought, fc_flood
 - `[32-33]` Intermediates: env_stress (P2→P6), diam_max_calc (P2→P6)
 - `[34-37]` Renewal (template-only): seed_surv, seedling_lg, seedbank, seedling
+- `[38-39]` Leaf area: leafdiam_a (adjusted by shade_tol), leafarea_c (normalized by HEC_TO_M2)
 
 **states breakdown:**
 - `[0-1]` Above-ground litter: litter_c, litter_n
@@ -181,18 +182,18 @@ Since `no_double_buffer` applies at the property level (not per-priority), you c
 | Property | Array | Contents |
 |----------|-------|----------|
 | `params[2]` | Private | gap_id, total_n_demand |
-| `states[15]` | Public | Climate + nutrients + litter + recruitment + disturbance + n_demand + bg_litter |
+| `states[14]` | Public | Climate + nutrients + litter + recruitment + disturbance + n_demand + bg_litter |
 | `states_db[1]` | Public, buffered | Placeholder (not used) |
 
 **states breakdown:**
-- `[0-4]` Climate/nutrients: deg_days, dry_days, base_mortality, avail_n, n_supply_ratio
-- `[5-6]` Above-ground litter accumulators: litter_accum_c, litter_accum_n
-- `[7-8]` Recruitment: num_to_recruit, recruit_rand_seed
-- `[9]` Flood days
-- `[10]` Seed bank (legacy, unused in current renewal)
-- `[11]` Fire intensity
-- `[12]` Total N demand (public, Site reads at P4)
-- `[13-14]` Below-ground litter accumulators: litter_accum_c_bg, litter_accum_n_bg
+- `[0-3]` Climate/nutrients: deg_days, dry_days, avail_n, n_supply_ratio
+- `[4-5]` Above-ground litter accumulators: litter_accum_c, litter_accum_n
+- `[6-7]` Recruitment: num_to_recruit, recruit_rand_seed
+- `[8]` Flood days
+- `[9]` Seed bank (legacy, unused in current renewal)
+- `[10]` Fire intensity
+- `[11]` Total N demand (public, Site reads at P4)
+- `[12-13]` Below-ground litter accumulators: litter_accum_c_bg, litter_accum_n_bg
 
 **Why this assignment?**
 - total_n_demand internal copy → `params`
@@ -205,8 +206,8 @@ Since `no_double_buffer` applies at the property level (not per-priority), you c
 
 | Property | Array | Contents |
 |----------|-------|----------|
-| `params[53]` | Private | Soil pools [0-8] + Monthly climate [9-44] + Site properties [45-52] |
-| `states[7]` | Public | Climate + nutrients + disturbance + n_supply_ratio |
+| `params[116]` | Private | Soil pools [0-8] + Monthly climate [9-44] + Site properties [45-55] + Climate std dev [56-91] + Lapse rates [92-115] |
+| `states[6]` | Public | Climate + nutrients + disturbance + n_supply_ratio |
 | `states_db[1]` | Public, buffered | Placeholder (not used) |
 
 **params breakdown:**
@@ -214,12 +215,18 @@ Since `no_double_buffer` applies at the property level (not per-priority), you c
 - `[9-20]` Monthly tmin (12 months)
 - `[21-32]` Monthly tmax (12 months)
 - `[33-44]` Monthly precipitation (12 months)
-- `[45-52]` Site properties: field_cap, perm_wp, slope, sigma, lai, lai_w0, latitude, rain_n
+- `[45-55]` Site properties: field_cap, perm_wp, slope, sigma, lai, lai_w0, latitude, rain_n, fire_prob, wind_prob, base_h
+- `[56-67]` Monthly tmin std dev (12 months)
+- `[68-79]` Monthly tmax std dev (12 months)
+- `[80-91]` Monthly precipitation std dev (12 months)
+- `[92-103]` Monthly temperature lapse rate (12 months)
+- `[104-115]` Monthly precipitation lapse rate (12 months)
 
 **states breakdown:**
-- `[0-3]` Climate: deg_days, dry_days, base_mortality, avail_n
-- `[4-5]` Disturbance: flood_days, fire_intensity
-- `[6]` Nutrient: n_supply_ratio (computed at P4, Gap reads at P5)
+- `[0-1]` Climate: deg_days, dry_days
+- `[2]` Nutrient: avail_n
+- `[3-4]` Disturbance: flood_days, fire_intensity
+- `[5]` Nutrient: n_supply_ratio (computed at P4, Gap reads at P5)
 
 **Why this assignment?**
 - Soil pool dynamics and monthly climate are internal to Site → `params`
@@ -264,7 +271,7 @@ Priority 5: Gap Sync
 Priority 6: Tree Actual Growth + Renewal + Recruitment
     Living trees:
       Reads:  Tree.params (env_stress, diam_max from P2)
-              Gap.states (n_supply_ratio, base_mortality, fire_intensity from P5)
+              Gap.states (n_supply_ratio, fire_intensity from P5)
       Writes: Tree.params (age, biomC, biomN, leaf_bm)
               Tree.states (litter_c/n, litter_c/n_bg)
               Tree.states_db (is_alive, diam, height, canopy_ht)

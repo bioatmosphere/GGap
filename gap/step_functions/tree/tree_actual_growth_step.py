@@ -19,9 +19,9 @@ Execution Flow:
        - Compute per-species environmental response (regrowth)
        - Count same-species living trees (avail_spec)
        - Update seedbank/seedling populations
-       - Write seedling_weight to states_db for dormant selection
+       - Write seedling_weight to states_db for free slot selection
 
-    3. DORMANT ACTIVATION (dormant slots, is_alive == 0):
+    3. DORMANT ACTIVATION (free slots, is_alive == 0):
        - Read num_to_recruit from Gap (written at P0, same tick)
        - Select species from templates weighted by seedling_weight
        - Copy traits, initialize as seedling, set is_alive = 1.0
@@ -32,12 +32,12 @@ Key improvement: n_supply_ratio is computed and consumed within the same tick.
 Previous single-pass model had a one-tick lag on nutrient feedback.
 
 Property scheme:
-- params[38]: reads env_stress, diam_max (from P2), writes age, biomC, etc.
+- params[40]: reads env_stress, diam_max (from P2), writes age, biomC, etc.
               templates write seedbank/seedling/env_stress for renewal
 - states[5]: writes litter_c/n (above-ground), litter_c/n_bg (below-ground) (consumed at P0 next tick)
 - states_db[5]: writes is_alive, diam, height, canopy_ht
-                templates write seedling_weight (read by dormant activation, same priority)
-                dormant activation writes is_alive=1 (visible next tick via double buffer)
+                templates write seedling_weight (read by free slot activation, same priority)
+                free slot activation writes is_alive=1 (visible next tick via double buffer)
 """
 
 import cupy as cp
@@ -48,7 +48,7 @@ BREED_TREE = 0
 BREED_GAP = 1
 BREED_SITE = 2
 
-# === Tree params[38] (private) ===
+# === Tree params[40] (private) ===
 # Species traits [0-21]:
 TREE_P_SPECIES_ID = 0
 TREE_P_MAX_AGE = 1
@@ -91,6 +91,9 @@ TREE_P_SEED_SURV = 34
 TREE_P_SEEDLING_LG = 35
 TREE_P_SEEDBANK = 36
 TREE_P_SEEDLING = 37
+# Leaf area params [38-39]:
+TREE_P_LEAFDIAM_A = 38
+TREE_P_LEAFAREA_C = 39
 
 # === Tree states[5] (public, no buffer) ===
 TREE_S_LITTER_C = 0       # Above-ground litter carbon
@@ -106,19 +109,18 @@ TREE_DB_HEIGHT = 2
 TREE_DB_CANOPY_HT = 3
 TREE_DB_SEEDLING_WEIGHT = 4
 
-# === Gap states[15] (for reading from Gap neighbor) ===
+# === Gap states[14] (for reading from Gap neighbor) ===
 GAP_S_DEG_DAYS = 0
 GAP_S_DRY_DAYS = 1
-GAP_S_BASE_MORTALITY = 2
-GAP_S_AVAIL_N = 3
-GAP_S_N_SUPPLY_RATIO = 4
-GAP_S_LITTER_ACCUM_C = 5
-GAP_S_LITTER_ACCUM_N = 6
-GAP_S_NUM_TO_RECRUIT = 7
-GAP_S_RECRUIT_RAND_SEED = 8
-GAP_S_FLOOD_DAYS = 9
-GAP_S_SEED_BANK = 10
-GAP_S_FIRE_INTENSITY = 11
+GAP_S_AVAIL_N = 2
+GAP_S_N_SUPPLY_RATIO = 3
+GAP_S_LITTER_ACCUM_C = 4
+GAP_S_LITTER_ACCUM_N = 5
+GAP_S_NUM_TO_RECRUIT = 6
+GAP_S_RECRUIT_RAND_SEED = 7
+GAP_S_FLOOD_DAYS = 8
+GAP_S_SEED_BANK = 9
+GAP_S_FIRE_INTENSITY = 10
 
 # === Constants ===
 PI = 3.14159265359
@@ -666,7 +668,7 @@ def tree_actual_growth_step(
         states_db_tensor[agent_index][TREE_DB_SEEDLING_WEIGHT] = weight
 
     # ===== DORMANT SLOT ACTIVATION (moved from P2 to match GAPpy renewal-last ordering) =====
-    # Dormant slots (is_alive == 0) check if Gap signals recruitment, select species
+    # Free slots (is_alive == 0) check if Gap signals recruitment, select species
     # from templates weighted by SEEDLING_WEIGHT, and activate as seedlings.
     # By activating at P6, seedlings don't grow until next tick (matching GAPpy).
     else:
@@ -684,7 +686,7 @@ def tree_actual_growth_step(
                 recruit_rand_seed = states_tensor[neighbor_idx][GAP_S_RECRUIT_RAND_SEED]
             i = i + 1
 
-        # Determine if this dormant slot should be recruited
+        # Determine if this free slot should be recruited
         if num_to_recruit > 0.5:
             slot_priority = ((agent_index * 997 + int(recruit_rand_seed)) % 10000) / 10000.0
             recruit_threshold = num_to_recruit / 100.0
@@ -741,6 +743,9 @@ def tree_actual_growth_step(
                     # Copy renewal params from template
                     params_tensor[agent_index][TREE_P_SEED_SURV] = params_tensor[selected_neighbor_idx][TREE_P_SEED_SURV]
                     params_tensor[agent_index][TREE_P_SEEDLING_LG] = params_tensor[selected_neighbor_idx][TREE_P_SEEDLING_LG]
+                    # Copy leaf area params from template
+                    params_tensor[agent_index][TREE_P_LEAFDIAM_A] = params_tensor[selected_neighbor_idx][TREE_P_LEAFDIAM_A]
+                    params_tensor[agent_index][TREE_P_LEAFAREA_C] = params_tensor[selected_neighbor_idx][TREE_P_LEAFAREA_C]
 
                     # Variable seedling diameter: uniform [0.5, 2.5] (approximates GAPpy 1.5+N(0,1))
                     seedling_diam = 0.5 + ((agent_index * 1013 + tick * 997 + int(recruit_rand_seed)) % 2000) / 1000.0

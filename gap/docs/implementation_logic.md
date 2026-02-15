@@ -10,8 +10,8 @@ GGap is a GPU-accelerated forest gap dynamics model that implements GAPpy/UVAFME
 
 ```
 Site (1 per simulation)
-  └── Gap (N per site, typically 1-10)
-        └── Tree (M per gap, typically 100-1000)
+  └── Gap (N per site, default 200)
+        └── Tree (M per gap, default 1000 slots)
               ├── Living trees (is_alive = 1)
               ├── Dormant slots (is_alive = 0)
               └── Template trees (is_alive = -1, one per species)
@@ -21,7 +21,7 @@ Site (1 per simulation)
 
 Gap agents serve as intermediaries between Site and Trees to:
 
-1. **Memory Efficiency**: Without Gaps, Site would need 1000+ tree neighbors. Gap keeps neighbor lists short (~10 gaps per site, ~100 trees per gap).
+1. **Memory Efficiency**: Without Gaps, Site would need 200,000+ tree neighbors. Gap keeps neighbor lists short (~200 gaps per site, ~1000 tree slots per gap).
 
 2. **Data Aggregation**: Gap collects litter from trees before passing to Site, reducing Site's workload.
 
@@ -100,18 +100,26 @@ Each simulation tick executes seven step functions in priority order:
 │                                                                 │
 │  1. READ LITTER FROM GAPS                                       │
 │     - Sum litter_accum_c/n + litter_accum_c/n_bg from Gaps     │
-│     - Above-ground litter → A0 layer                            │
-│     - Below-ground litter → A layer (root decomposition)        │
-│     - Convert annual litter to daily inputs (/ 365)             │
+│     - Above-ground litter → A0 layer (pulse at year start)     │
+│     - Below-ground litter → A layer (pulse at year start)      │
 │                                                                 │
-│  2. DAILY LOOP (365 days)                                       │
+│  2. MONTHLY CLIMATE PERTURBATION                                │
+│     - For each month (0-11), generate pseudo-random perturbation│
+│     - Temperature perturbation clamped to [-1, 1]              │
+│     - Precipitation perturbation clamped to [-0.5, 0.5]        │
+│     - Apply: tmin/tmax += pert * std_dev, prcp += pert * std   │
+│     - Compute annual precip and dry_days from perturbed climate │
+│       dry_days = max(0, 100 - annual_precip_cm)                │
+│                                                                 │
+│  3. DAILY LOOP (365 days)                                       │
 │     For each day:                                               │
 │                                                                 │
 │     a. CLIMATE INTERPOLATION                                    │
 │        - Determine month from day of year                       │
-│        - Get daily tmin, tmax, precip from monthly values       │
+│        - Get daily tmin, tmax, precip from perturbed monthly    │
 │        - Track freeze days                                      │
-│        - Accumulate atmospheric N from precipitation            │
+│        - Accumulate atmospheric N from precipitation (mm units) │
+│        - Convert precip mm → cm for water balance               │
 │                                                                 │
 │     b. POTENTIAL EVAPOTRANSPIRATION (Hamon method)              │
 │        - Solar declination, day length, PET from temperature    │
@@ -123,7 +131,6 @@ Each simulation tick executes seven step functions in priority order:
 │        - Track flood days (A layer saturated)                   │
 │                                                                 │
 │     d. SOIL DECOMPOSITION (three-layer)                         │
-│        - Add daily litter to A0 (above-ground) and A (roots)   │
 │        - A0 respiration → transfer to A layer                   │
 │        - A layer respiration → N mineralization (avail_n)       │
 │        - A layer transfer to Base layer                         │
@@ -139,7 +146,8 @@ Each simulation tick executes seven step functions in priority order:
 │                                                                 │
 │  WRITES:                                                        │
 │     - params: soil pools (A0/A/BL C, N, W)                     │
-│     - states: avail_n, flood_days, fire_intensity               │
+│     - states: avail_n, deg_days, dry_days, flood_days,          │
+│              fire_intensity                                      │
 │                                                                 │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
@@ -524,13 +532,13 @@ if growth_below_threshold AND random < stress_check: growth_dies
 Three-layer model (A0 → A → Base):
 
 ### A0 Layer (Litter)
-- Receives above-ground tree litter input
+- Receives above-ground tree litter as pulse at year start
 - Respiration rate: `AO_RESP = 5.24e-4`
 - Transfer to A layer based on C/N ratio
 - Division guard: skip decomposition when C/N ratio ≤ 0.001
 
 ### A Layer (Humus)
-- Receives from A0 decomposition + below-ground root litter
+- Receives from A0 decomposition + below-ground root litter (pulse at year start)
 - Respiration rate: `SA_RESP = 1.24e-5`
 - **N mineralization**: main source of available N
 - N efficiency: `max(0.5, (sa_cn - SA_CN_0) / sa_cn)`
@@ -587,3 +595,33 @@ Note: GAPpy's `soil.py` does not include these guards because its renewal proces
 | `step_functions/site/site_nutrient_step.py` | P4 | Site | Compute n_supply_ratio |
 | `step_functions/gap/gap_sync_step.py` | P5 | Gap | Relay climate + clear accumulators |
 | `step_functions/tree/tree_actual_growth_step.py` | P6 | Tree | Final growth + mortality + renewal + recruitment |
+
+---
+
+## Output System
+
+GGap produces 5 GAPpy-compatible CSV files via `output_utils.py`:
+
+### Scaling
+
+All output values are scaled to per-hectare units using GAPpy conventions:
+- `plotsize = 500 m²` (area of one gap)
+- `plotscale = HEC_TO_M2 / plotsize = 20` (scale factor from gap to hectare)
+- `plotadj = plotscale / num_gaps` (per-gap contribution to hectare average)
+- `plotrenorm = 1 / (plotsize * num_gaps)` (basal area normalization)
+
+### CSV Files
+
+| File | Key Columns | Notes |
+|------|------------|-------|
+| `site_data.csv` | year, lat, lon, elevation, slope, deg_days, flood_days, dry_days, annual_rain, grow_days | Annual site conditions |
+| `soil_data.csv` | year, A0_C/N, A_C/N, BL_C/N, avail_n, biomC, biomN | Soil pools in tn/ha |
+| `genus_data.csv` | year, genus, biomC/N (mean/std), basal_area, max_ht/diam, n_trees, diam_cats (6 classes) | Per-genus averages across gaps |
+| `species_data.csv` | year, genus, species, biomC/N (mean/std), basal_area, max_ht/diam, n_trees, diam_cats | Per-species averages |
+| `tree_data.csv` | year, gap_id, species_id, diam, height, biomC, biomN, leaf_bm, age, canopy_ht | Individual tree data (optional) |
+
+### Biomass Calculation
+
+- **Species/genus output**: `biomC = tree.biomC + leaf_bm` (always includes leaf biomass)
+- **Soil output**: `biomC += leaf_bm` only for conifers (evergreen trees)
+- Diameter categories: <=8, <=28, <=48, <=68, <=88, >88 cm

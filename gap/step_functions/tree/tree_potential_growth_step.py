@@ -21,11 +21,11 @@ Execution Flow:
        - params[FC_DEGDAY/DROUGHT/FLOOD/LIGHT_AVAIL]: individual factors
        - states[N_DEMAND]: nitrogen demand from potential growth
 
-Note: Recruitment (dormant slot activation) moved to P6 (tree_actual_growth_step)
+Note: Recruitment (free slot activation) moved to P6 (tree_actual_growth_step)
 to match GAPpy ordering where renewal is the last annual operation.
 
 Property scheme:
-- params[38]: species traits (static) + physiology (dynamic) + intermediates + renewal - private, no buffer
+- params[40]: species traits (static) + physiology (dynamic) + intermediates + renewal + leaf_area - private, no buffer
 - states[5]: n_demand output (for Gap to aggregate at P3) - public, no buffer
 - states_db[5]: structure (is_alive, diam, height, canopy_ht) + seedling_weight - public, double buffered
 """
@@ -38,7 +38,7 @@ BREED_TREE = 0
 BREED_GAP = 1
 BREED_SITE = 2
 
-# === Tree params[38] (private) ===
+# === Tree params[40] (private) ===
 # Species traits [0-21]:
 TREE_P_SPECIES_ID = 0
 TREE_P_MAX_AGE = 1
@@ -81,6 +81,9 @@ TREE_P_SEED_SURV = 34
 TREE_P_SEEDLING_LG = 35
 TREE_P_SEEDBANK = 36
 TREE_P_SEEDLING = 37
+# Leaf area params [38-39]:
+TREE_P_LEAFDIAM_A = 38
+TREE_P_LEAFAREA_C = 39
 
 # === Tree states[5] (public, no buffer) ===
 TREE_S_LITTER_C = 0       # Above-ground litter carbon
@@ -96,19 +99,18 @@ TREE_DB_HEIGHT = 2
 TREE_DB_CANOPY_HT = 3
 TREE_DB_SEEDLING_WEIGHT = 4
 
-# === Gap states[15] (for reading from Gap neighbor) ===
+# === Gap states[14] (for reading from Gap neighbor) ===
 GAP_S_DEG_DAYS = 0
 GAP_S_DRY_DAYS = 1
-GAP_S_BASE_MORTALITY = 2
-GAP_S_AVAIL_N = 3
-GAP_S_N_SUPPLY_RATIO = 4
-GAP_S_LITTER_ACCUM_C = 5
-GAP_S_LITTER_ACCUM_N = 6
-GAP_S_NUM_TO_RECRUIT = 7
-GAP_S_RECRUIT_RAND_SEED = 8
-GAP_S_FLOOD_DAYS = 9
-GAP_S_SEED_BANK = 10
-GAP_S_FIRE_INTENSITY = 11
+GAP_S_AVAIL_N = 2
+GAP_S_N_SUPPLY_RATIO = 3
+GAP_S_LITTER_ACCUM_C = 4
+GAP_S_LITTER_ACCUM_N = 5
+GAP_S_NUM_TO_RECRUIT = 6
+GAP_S_RECRUIT_RAND_SEED = 7
+GAP_S_FLOOD_DAYS = 8
+GAP_S_SEED_BANK = 9
+GAP_S_FIRE_INTENSITY = 10
 
 # === Constants ===
 PI = 3.14159265359

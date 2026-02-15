@@ -24,12 +24,12 @@ BREED_TREE = 0
 BREED_GAP = 1
 BREED_SITE = 2
 
-# === Site states[7] (public) ===
-SITE_S_AVAIL_N = 3
-SITE_S_N_SUPPLY_RATIO = 6
+# === Site states[6] (public) ===
+SITE_S_AVAIL_N = 2
+SITE_S_N_SUPPLY_RATIO = 5
 
-# === Gap states[15] (for reading total_n_demand from Gap neighbors) ===
-GAP_S_TOTAL_N_DEMAND = 12
+# === Gap states[14] (for reading total_n_demand from Gap neighbors) ===
+GAP_S_TOTAL_N_DEMAND = 11
 
 
 @jit.rawkernel(device="cuda")
