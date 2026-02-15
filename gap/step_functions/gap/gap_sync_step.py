@@ -21,29 +21,27 @@ BREED_TREE = 0
 BREED_GAP = 1
 BREED_SITE = 2
 
-# === Gap states[15] (public, no buffer) ===
+# === Gap states[14] (public, no buffer) ===
 GAP_S_DEG_DAYS = 0
 GAP_S_DRY_DAYS = 1
-GAP_S_BASE_MORTALITY = 2
-GAP_S_AVAIL_N = 3
-GAP_S_N_SUPPLY_RATIO = 4
-GAP_S_LITTER_ACCUM_C = 5
-GAP_S_LITTER_ACCUM_N = 6
-GAP_S_NUM_TO_RECRUIT = 7
-GAP_S_RECRUIT_RAND_SEED = 8
-GAP_S_FLOOD_DAYS = 9
-GAP_S_FIRE_INTENSITY = 11
-GAP_S_LITTER_ACCUM_C_BG = 13
-GAP_S_LITTER_ACCUM_N_BG = 14
+GAP_S_AVAIL_N = 2
+GAP_S_N_SUPPLY_RATIO = 3
+GAP_S_LITTER_ACCUM_C = 4
+GAP_S_LITTER_ACCUM_N = 5
+GAP_S_NUM_TO_RECRUIT = 6
+GAP_S_RECRUIT_RAND_SEED = 7
+GAP_S_FLOOD_DAYS = 8
+GAP_S_FIRE_INTENSITY = 10
+GAP_S_LITTER_ACCUM_C_BG = 12
+GAP_S_LITTER_ACCUM_N_BG = 13
 
-# === Site states[7] (for reading from Site neighbor) ===
+# === Site states[6] (for reading from Site neighbor) ===
 SITE_S_DEG_DAYS = 0
 SITE_S_DRY_DAYS = 1
-SITE_S_BASE_MORTALITY = 2
-SITE_S_AVAIL_N = 3
-SITE_S_FLOOD_DAYS = 4
-SITE_S_FIRE_INTENSITY = 5
-SITE_S_N_SUPPLY_RATIO = 6
+SITE_S_AVAIL_N = 2
+SITE_S_FLOOD_DAYS = 3
+SITE_S_FIRE_INTENSITY = 4
+SITE_S_N_SUPPLY_RATIO = 5
 
 
 @jit.rawkernel(device="cuda")
@@ -68,7 +66,6 @@ def gap_sync_step(
     # Find Site neighbor and read climate + n_supply_ratio
     site_deg_days = 2500.0
     site_dry_days = 30.0
-    site_base_mortality = 0.02
     site_avail_n = 0.1
     site_flood_days = 0.0
     site_fire_intensity = 0.0
@@ -83,7 +80,6 @@ def gap_sync_step(
         if neighbor_breed == BREED_SITE:
             site_deg_days = states_tensor[neighbor_idx][SITE_S_DEG_DAYS]
             site_dry_days = states_tensor[neighbor_idx][SITE_S_DRY_DAYS]
-            site_base_mortality = states_tensor[neighbor_idx][SITE_S_BASE_MORTALITY]
             site_avail_n = states_tensor[neighbor_idx][SITE_S_AVAIL_N]
             site_flood_days = states_tensor[neighbor_idx][SITE_S_FLOOD_DAYS]
             site_fire_intensity = states_tensor[neighbor_idx][SITE_S_FIRE_INTENSITY]
@@ -94,7 +90,6 @@ def gap_sync_step(
     # Copy climate to own states (Trees read at P2)
     states_tensor[agent_index][GAP_S_DEG_DAYS] = site_deg_days
     states_tensor[agent_index][GAP_S_DRY_DAYS] = site_dry_days
-    states_tensor[agent_index][GAP_S_BASE_MORTALITY] = site_base_mortality
     states_tensor[agent_index][GAP_S_AVAIL_N] = site_avail_n
     states_tensor[agent_index][GAP_S_FLOOD_DAYS] = site_flood_days
     states_tensor[agent_index][GAP_S_FIRE_INTENSITY] = site_fire_intensity
@@ -108,4 +103,4 @@ def gap_sync_step(
     states_tensor[agent_index][GAP_S_LITTER_ACCUM_C_BG] = 0.0
     states_tensor[agent_index][GAP_S_LITTER_ACCUM_N_BG] = 0.0
     # Note: NUM_TO_RECRUIT and RECRUIT_RAND_SEED are NOT cleared here.
-    # Trees read them at P6 (dormant activation). P0 overwrites them each tick.
+    # Trees read them at P6 (free slot activation). P0 overwrites them each tick.

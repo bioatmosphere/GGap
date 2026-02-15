@@ -22,8 +22,8 @@ BREED_SITE = 2
 # === Gap params[2] (private) ===
 GAP_P_TOTAL_N_DEMAND = 1
 
-# === Gap states[15] (public, no buffer) ===
-GAP_S_TOTAL_N_DEMAND = 12  # Public slot for Site to read
+# === Gap states[14] (public, no buffer) ===
+GAP_S_TOTAL_N_DEMAND = 11  # Public slot for Site to read
 
 # === Tree states[5] (for reading n_demand) ===
 TREE_S_N_DEMAND = 2
