@@ -102,19 +102,14 @@ TREE_DB_HEIGHT = 2
 TREE_DB_CANOPY_HT = 3
 TREE_DB_SEEDLING_WEIGHT = 4
 
-# === Gap states[16] (for reading from Gap neighbor) ===
+# === Gap states (for reading from Gap neighbor) ===
 GAP_S_DEG_DAYS = 0
 GAP_S_DRY_DAYS = 1
-GAP_S_AVAIL_N = 2
-GAP_S_N_SUPPLY_RATIO = 3
-GAP_S_LITTER_ACCUM_C = 4
-GAP_S_LITTER_ACCUM_N = 5
-GAP_S_NUM_TO_RECRUIT = 6
-GAP_S_RECRUIT_RAND_SEED = 7
 GAP_S_FLOOD_DAYS = 8
-GAP_S_TOTAL_SEEDLING_WEIGHT = 9
-GAP_S_FIRE_INTENSITY = 10
 GAP_S_DRY_DAYS_BASE = 14
+# Pre-aggregated cumulative LAI bins (computed at P0)
+GAP_S_CUM_DEC_LAI_BASE = 16   # cum_dec_lai[0..49] at slots 16-65
+GAP_S_CUM_CON_LAI_BASE = 66   # cum_con_lai[0..49] at slots 66-115
 
 # === Constants ===
 PI = 3.14159265359
@@ -185,11 +180,28 @@ def tree_potential_growth_step(
         biomC = params_tensor[agent_index][TREE_P_BIOMC]
         leaf_bm = params_tensor[agent_index][TREE_P_LEAF_BM]
 
-        # ===== READ CLIMATE FROM GAP NEIGHBOR =====
+        # ===== READ CLIMATE + CUMULATIVE LAI FROM GAP NEIGHBOR =====
         deg_days = 2500.0
         dry_days = 0.0
         dry_days_base = 0.0
         flood_days = 0.0
+        cum_dec_lai = 0.0
+        cum_con_lai = 0.0
+        cum_dec_lai_base = 0.0
+        cum_con_lai_base = 0.0
+
+        # Height layer indices for cumulative LAI lookup
+        # GAPpy: light[h] = exp(-0.40 * cumLAI[h+1] / plotsize), h = int(forht)
+        tree_height_layer = int(height)
+        if tree_height_layer < 0:
+            tree_height_layer = 0
+        if tree_height_layer > 49:
+            tree_height_layer = 49
+        tree_base_layer = int(canopy_ht)
+        if tree_base_layer < 0:
+            tree_base_layer = 0
+        if tree_base_layer > 49:
+            tree_base_layer = 49
 
         neighbor_indices = locations[agent_index]
         i = 0
@@ -201,93 +213,11 @@ def tree_potential_growth_step(
                 dry_days = states_tensor[neighbor_idx][GAP_S_DRY_DAYS]
                 dry_days_base = states_tensor[neighbor_idx][GAP_S_DRY_DAYS_BASE]
                 flood_days = states_tensor[neighbor_idx][GAP_S_FLOOD_DAYS]
-            i = i + 1
-
-        # ===== CALCULATE LIGHT AVAILABILITY (GAPpy canopy(), model.py:277-362) =====
-        # GAPpy uses discrete height-layer arrays with cumulative LAI from top-down.
-        # Reformulated per-tree: sum LAI from neighbor canopy layers above this tree's
-        # height, using GAPpy's layer discretization and xt=-0.40 coefficient.
-        #
-        # Separate dec/con LAI accumulators (GAPpy model.py:323-334):
-        #   Conifers contribute 100% to both dec and con arrays
-        #   Deciduous contribute 100% to dec, 80% to con
-        # Current tree reads con_light if conifer, dec_light if deciduous.
-        #
-        # GAPpy: light[h] = exp(-0.40 * cumLAI[h+1] / plotsize), plotsize=500
-        # where h = int(tree_height) - 1, so cumLAI at layer int(tree_height).
-        tree_height_layer = int(height)  # GAPpy: kh+1 = int(forht)
-        tree_base_layer = int(canopy_ht)  # GAPpy: khc+1 = int(canht), for forska_shade
-
-        cum_dec_lai = 0.0
-        cum_con_lai = 0.0
-        cum_dec_lai_base = 0.0  # LAI above canopy base (for forska_shade)
-        cum_con_lai_base = 0.0
-        i = 0
-        while i < len(neighbor_indices) and neighbor_indices[i] != -1:
-            neighbor_idx = int(neighbor_indices[i])
-            neighbor_breed = int(breeds[neighbor_idx])
-
-            if neighbor_breed == BREED_TREE:
-                neighbor_alive = states_db_tensor[neighbor_idx][TREE_DB_IS_ALIVE]
-                if neighbor_alive > 0.5:
-                    neighbor_height = states_db_tensor[neighbor_idx][TREE_DB_HEIGHT]
-                    neighbor_canopy_ht = states_db_tensor[neighbor_idx][TREE_DB_CANOPY_HT]
-                    neighbor_diam = states_db_tensor[neighbor_idx][TREE_DB_DIAM]
-                    neighbor_evergreen = int(params_tensor[neighbor_idx][TREE_P_EVERGREEN])
-                    neighbor_leafdiam_a = params_tensor[neighbor_idx][TREE_P_LEAFDIAM_A]
-
-                    # Canopy diameter (GAPpy tree.py stem_shape: dc = (h-hc)/(h-STD_HT)*d)
-                    neighbor_dc = neighbor_diam
-                    if neighbor_height > neighbor_canopy_ht and neighbor_height > STD_HT:
-                        neighbor_dc = (neighbor_height - neighbor_canopy_ht) / (neighbor_height - STD_HT) * neighbor_diam
-
-                    # LAI (GAPpy tree.py:174-181: lai_biomass_c = dc^2 * leafdiam_a)
-                    neighbor_lai = neighbor_dc * neighbor_dc * neighbor_leafdiam_a
-
-                    # Layer indices (GAPpy 0-based: canht_int, forht_int)
-                    canht_int = int(neighbor_canopy_ht) - 1
-                    if canht_int < 0:
-                        canht_int = 0
-                    forht_int = int(neighbor_height) - 1
-                    if forht_int < 0:
-                        forht_int = 0
-
-                    # Number of canopy layers
-                    n_canopy = forht_int - canht_int + 1
-                    if n_canopy < 1:
-                        n_canopy = 1
-
-                    # Layers above current tree: >= tree_height_layer
-                    lower_bound = canht_int
-                    if lower_bound < tree_height_layer:
-                        lower_bound = tree_height_layer
-                    n_above = forht_int - lower_bound + 1
-
-                    if n_above > 0:
-                        lai_above = neighbor_lai * float(n_above) / float(n_canopy)
-                        if neighbor_evergreen > 0:
-                            # Conifers: 100% to both arrays (GAPpy model.py:325-328)
-                            cum_dec_lai = cum_dec_lai + lai_above
-                            cum_con_lai = cum_con_lai + lai_above
-                        else:
-                            # Deciduous: 100% to dec, 80% to con (GAPpy model.py:331-334)
-                            cum_dec_lai = cum_dec_lai + lai_above
-                            cum_con_lai = cum_con_lai + lai_above * 0.8
-
-                    # LAI above canopy base (for forska_shade, GAPpy model.py:428-431)
-                    lower_base = canht_int
-                    if lower_base < tree_base_layer:
-                        lower_base = tree_base_layer
-                    n_above_base = forht_int - lower_base + 1
-                    if n_above_base > 0:
-                        lai_above_base = neighbor_lai * float(n_above_base) / float(n_canopy)
-                        if neighbor_evergreen > 0:
-                            cum_dec_lai_base = cum_dec_lai_base + lai_above_base
-                            cum_con_lai_base = cum_con_lai_base + lai_above_base
-                        else:
-                            cum_dec_lai_base = cum_dec_lai_base + lai_above_base
-                            cum_con_lai_base = cum_con_lai_base + lai_above_base * 0.8
-
+                # O(1) cumulative LAI reads (pre-aggregated at P0)
+                cum_dec_lai = states_tensor[neighbor_idx][GAP_S_CUM_DEC_LAI_BASE + tree_height_layer]
+                cum_con_lai = states_tensor[neighbor_idx][GAP_S_CUM_CON_LAI_BASE + tree_height_layer]
+                cum_dec_lai_base = states_tensor[neighbor_idx][GAP_S_CUM_DEC_LAI_BASE + tree_base_layer]
+                cum_con_lai_base = states_tensor[neighbor_idx][GAP_S_CUM_CON_LAI_BASE + tree_base_layer]
             i = i + 1
 
         # Beer-Lambert (GAPpy model.py:347-348): exp(xt * cumLAI / plotsize)

@@ -31,10 +31,10 @@ Why Gap Agents Exist (Design Rationale):
     a relay (copying climate from Site to Trees at P3), keeping the neighbor
     graph sparse while enabling hierarchical data flow.
 
-Network Connections (bidirectional):
-- Site <-> Gap: each gap connects to its parent site
-- Gap <-> Tree: each tree connects to its parent gap
-- Tree <-> Tree: all trees within a gap connect to each other
+Network Connections:
+- Site <-> Gap: each gap connects to its parent site (bidirectional)
+- Gap <-> Tree: each tree connects to its parent gap (bidirectional)
+- Free -> Template: each free slot connects to all templates (directed, for P8 species selection)
 
 Property Scheme (3 properties per breed):
 - params:    neighbor_visible=False  (private data, not shared)
@@ -46,9 +46,13 @@ Data Flow by Priority (matching GAPpy: soil first, two-phase tree growth):
   Priority 0 - Gap Litter Aggregate (gap_litter_aggregate_step):
     Reads from Tree neighbors:
       - states: litter_c, litter_n (from P8 of previous tick)
-      - states_db: is_alive (count living/free), dimensions (for LAI)
+      - states_db: is_alive, dimensions (for LAI binning), seedling_weight
+      - params: species_id, max_diam, evergreen, leafdiam_a
     Writes to own:
       - states: litter_accum_c/n, total_lai, total_seedling_weight
+      - states[16-65]: cum_dec_lai[0..49] (top-down cumulative, P3/P6 read O(1))
+      - states[66-115]: cum_con_lai[0..49] (top-down cumulative, P3/P6 read O(1))
+      - states[116-165]: avail_spec[0..49] (binary maturity flags, P6 reads O(1))
 
   Priority 1 - Site Soil Step (site_soil_step):
     Reads from Gap neighbors:
@@ -66,8 +70,7 @@ Data Flow by Priority (matching GAPpy: soil first, two-phase tree growth):
   Priority 3 - Tree Potential Growth (tree_potential_growth_step):
     Reads from Gap neighbor:
       - states: deg_days, dry_days, flood_days (from P2, current-tick climate)
-    Reads from Tree neighbors:
-      - states_db: is_alive, diam, height, canopy_ht (for light competition)
+      - states: cum_dec_lai, cum_con_lai at tree height/base (from P0, O(1) lookup)
     Writes to own:
       - params: env_stress, diam_max, light_avail, fc_degday/drought/flood
       - states: n_demand (for Gap to aggregate at P4)
@@ -92,8 +95,8 @@ Data Flow by Priority (matching GAPpy: soil first, two-phase tree growth):
 
   Priority 6 - Tree Template Renewal (tree_template_renewal_step):
     Templates only (is_alive < -0.5):
-      Reads from Gap neighbor: climate (from P2), n_supply_ratio (from P5)
-      Reads from Tree neighbors: structure (for light), species_id (for avail_spec)
+      Reads from Gap neighbor: climate (from P2), n_supply_ratio (from P5),
+        cum_lai at ground (from P0, O(1)), avail_spec (from P0, O(1))
       Writes to own:
         - params: seedbank, seedling, env_stress (regrowth), seedling_weight
         - states_db: seedling_weight (P0 reads next tick via read buffer)
@@ -145,8 +148,8 @@ See docs/implementation_logic.md for step function details.
 Property Arrays by Breed:
   Tree: params[42], states[5], states_db[5]
         (params includes species traits[22] + physiology[10] + intermediates[2] + renewal[4] + leaf_area[2] + seedling_weight[1])
-  Gap:  params[2],  states[16], states_db[1]
-        (states includes climate[5] + litter[4] + recruitment[3] + flood[1] + fire[1] + wind[1] + n_demand[1] + dry_days_base[1])
+  Gap:  params[2],  states[166], states_db[1]
+        (states includes climate[5] + litter[4] + recruitment[3] + flood[1] + fire[1] + wind[1] + n_demand[1] + dry_days_base[1] + cum_lai_bins[100] + avail_spec[50])
   Site: params[116], states[8], states_db[1]
         (params includes soil pools[9] + monthly climate[36] + site properties[8] + fire/wind/soil[3] + climate_std[36] + lapse_rates[24])
 """
@@ -279,6 +282,14 @@ GAP_S_LITTER_ACCUM_N_BG = 13  # Below-ground litter nitrogen aggregate
 GAP_S_DRY_DAYS_BASE = 14      # Base layer drought fraction (for intolerant species)
 GAP_S_WIND_INTENSITY = 15     # Wind intensity this year (0-1, 0=no wind)
 
+# --- Pre-aggregated light competition + species maturity (P0 computes, P3/P6 read) ---
+MAX_HEIGHT_BINS = 50   # Max discrete height layers (0..49)
+MAX_SPECIES = 50       # Max species tracked for avail_spec flags
+GAP_S_CUM_DEC_LAI_BASE = 16   # cum_dec_lai[0..49] at slots 16-65
+GAP_S_CUM_CON_LAI_BASE = 66   # cum_con_lai[0..49] at slots 66-115
+GAP_S_AVAIL_SPEC_BASE = 116   # avail_spec[0..49] at slots 116-165
+GAP_STATES_SIZE = 166          # Total Gap states slots
+
 # states_db[1]: placeholder (not used, but keeps uniform signature)
 GAP_DB_PLACEHOLDER = 0
 
@@ -410,8 +421,8 @@ class GAPModel(Model):
         self._gap_breed = Breed("Gap")
         # params[2]: internal only (private)
         self._gap_breed.register_property("params", [0.0] * 2, neighbor_visible=False)
-        # states[16]: climate + nutrients + litter_pool + recruitment + flood + seedling_weight + fire + wind + n_demand + bg_litter + dry_days_base (public)
-        self._gap_breed.register_property("states", [0.0] * 16, neighbor_visible=True)
+        # states[166]: climate + nutrients + litter + recruitment + flood + seedling_weight + fire + wind + n_demand + bg_litter + dry_days_base + cum_lai_bins + avail_spec (public)
+        self._gap_breed.register_property("states", [0.0] * GAP_STATES_SIZE, neighbor_visible=True)
         # states_db[1]: placeholder (public but unused)
         self._gap_breed.register_property("states_db", [0.0] * 1, neighbor_visible=True)
         # P0: aggregate litter from trees (prev tick)
@@ -827,8 +838,8 @@ class GAPModel(Model):
         params[GAP_P_GAP_ID] = float(gap_id)
         params[GAP_P_TOTAL_N_DEMAND] = 0.0
 
-        # Build states[16] for Gap (climate + nutrients + litter_pool + recruitment + flood + seedling_weight + fire + wind + n_demand + bg_litter + dry_days_base)
-        states = [0.0] * 16
+        # Build states for Gap (climate + nutrients + litter + recruitment + flood + seedling_weight + fire + wind + n_demand + bg_litter + dry_days_base + cum_lai_bins + avail_spec)
+        states = [0.0] * GAP_STATES_SIZE
         states[GAP_S_DEG_DAYS] = deg_days
         states[GAP_S_DRY_DAYS] = dry_days
         states[GAP_S_AVAIL_N] = 0.1
@@ -933,12 +944,12 @@ class GAPModel(Model):
                 )
                 created_trees.append(agent_id)
 
-        # Connect all trees to each other (within gap)
-        # Include templates so they appear in neighbor lists for recruitment
-        all_trees = template_trees + created_trees
-        for i in range(len(all_trees)):
-            for j in range(i + 1, len(all_trees)):
-                self.connect_agents(all_trees[i], all_trees[j])
+        # Connect free slots → templates (directed, one-way) for P8 species selection.
+        # Templates don't need tree neighbors (P6 reads LAI/avail_spec from Gap).
+        # Living trees don't need tree neighbors (P3 reads LAI from Gap).
+        for free_slot_id in created_trees:
+            for template_id in template_trees:
+                self.connect_agents(free_slot_id, template_id, directed=True)
 
         return created_trees, initial_alive_count
 
@@ -1080,9 +1091,9 @@ class GAPModel(Model):
 
         return agent_id
 
-    def connect_agents(self, agent_0, agent_1):
-        """Connect two agents bidirectionally."""
-        self.get_space().connect_agents(agent_0, agent_1)
+    def connect_agents(self, agent_0, agent_1, directed=False):
+        """Connect two agents. Bidirectional by default, one-way if directed=True."""
+        self.get_space().connect_agents(agent_0, agent_1, directed=directed)
 
     def get_species_count(self):
         return len(self.unique_species)

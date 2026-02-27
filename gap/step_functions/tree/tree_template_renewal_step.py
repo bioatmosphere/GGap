@@ -38,7 +38,6 @@ BREED_SITE = 2
 
 # === Tree params[42] (private, no buffer) ===
 TREE_P_SPECIES_ID = 0
-TREE_P_MAX_DIAM = 2
 TREE_P_SHADE_TOL = 6
 TREE_P_DEG_DAY_MIN = 7
 TREE_P_DEG_DAY_OPT = 8
@@ -51,7 +50,6 @@ TREE_P_FLOOD_TOL = 15
 TREE_P_DROUGHT_TOL = 16
 TREE_P_EVERGREEN = 17
 TREE_P_FIRE_TOL = 18
-TREE_P_LEAFDIAM_A = 38
 TREE_P_ENV_STRESS = 32       # Regrowth output (P7 reads same tick for growmax)
 TREE_P_SEED_SURV = 34
 TREE_P_SEEDLING_LG = 35
@@ -61,12 +59,9 @@ TREE_P_SEEDLING_WEIGHT = 41  # Non-buffered seedling weight (P8 free slots read 
 
 # === Tree states_db[5] (public, double buffered) ===
 TREE_DB_IS_ALIVE = 0
-TREE_DB_DIAM = 1
-TREE_DB_HEIGHT = 2
-TREE_DB_CANOPY_HT = 3
 TREE_DB_SEEDLING_WEIGHT = 4  # Previous-tick weight (read buffer, for decrement calculation)
 
-# === Gap states[16] (for reading from Gap neighbor) ===
+# === Gap states (for reading from Gap neighbor) ===
 GAP_S_DEG_DAYS = 0
 GAP_S_DRY_DAYS = 1
 GAP_S_AVAIL_N = 2
@@ -77,9 +72,12 @@ GAP_S_TOTAL_SEEDLING_WEIGHT = 9
 GAP_S_FIRE_INTENSITY = 10
 GAP_S_DRY_DAYS_BASE = 14
 GAP_S_WIND_INTENSITY = 15
+# Pre-aggregated cumulative LAI bins + avail_spec (computed at P0)
+GAP_S_CUM_DEC_LAI_BASE = 16   # cum_dec_lai[0..49] at slots 16-65
+GAP_S_CUM_CON_LAI_BASE = 66   # cum_con_lai[0..49] at slots 66-115
+GAP_S_AVAIL_SPEC_BASE = 116   # avail_spec[0..49] at slots 116-165
 
 # === Constants ===
-STD_HT = 1.3
 XT = -0.40
 PLOTSIZE = 500.0  # GAPpy parameters.py:59 — plot area m² (also max trees per plot)
 
@@ -107,7 +105,7 @@ def tree_template_renewal_step(
     is_alive = states_db_tensor[agent_index][TREE_DB_IS_ALIVE]
 
     if is_alive < -0.5:
-        # --- 1. Read climate + disturbance + recruitment info from Gap neighbor ---
+        # --- 1. Read climate + disturbance + recruitment + LAI + avail_spec from Gap ---
         deg_days = 2500.0
         dry_days = 0.0
         dry_days_base = 0.0
@@ -118,6 +116,9 @@ def tree_template_renewal_step(
         wind_intensity = 0.0
         num_to_recruit = 0.0
         total_seedling_weight = 0.0
+        cum_dec_lai = 0.0
+        cum_con_lai = 0.0
+        gap_idx = -1
 
         neighbor_indices = locations[agent_index]
         i = 0
@@ -125,6 +126,7 @@ def tree_template_renewal_step(
             neighbor_idx = int(neighbor_indices[i])
             neighbor_breed = int(breeds[neighbor_idx])
             if neighbor_breed == BREED_GAP:
+                gap_idx = neighbor_idx
                 deg_days = states_tensor[neighbor_idx][GAP_S_DEG_DAYS]
                 dry_days = states_tensor[neighbor_idx][GAP_S_DRY_DAYS]
                 dry_days_base = states_tensor[neighbor_idx][GAP_S_DRY_DAYS_BASE]
@@ -136,6 +138,9 @@ def tree_template_renewal_step(
                 # For seedling decrement (GAPpy model.py:941)
                 num_to_recruit = states_tensor[neighbor_idx][GAP_S_NUM_TO_RECRUIT]
                 total_seedling_weight = states_tensor[neighbor_idx][GAP_S_TOTAL_SEEDLING_WEIGHT]
+                # O(1) ground-level cumulative LAI (layer 0 = total, pre-aggregated at P0)
+                cum_dec_lai = states_tensor[neighbor_idx][GAP_S_CUM_DEC_LAI_BASE]
+                cum_con_lai = states_tensor[neighbor_idx][GAP_S_CUM_CON_LAI_BASE]
             i = i + 1
 
         # Read species params
@@ -240,34 +245,7 @@ def tree_template_renewal_step(
             fpoor = 1.0
         fc_nutrient = fpoor * sf
 
-        # Light at ground level (all neighbor LAI counts, normalized by PLOTSIZE)
-        cum_dec_lai = 0.0
-        cum_con_lai = 0.0
-        i = 0
-        while i < len(neighbor_indices) and neighbor_indices[i] != -1:
-            neighbor_idx = int(neighbor_indices[i])
-            neighbor_breed = int(breeds[neighbor_idx])
-            if neighbor_breed == BREED_TREE:
-                neighbor_alive = states_db_tensor[neighbor_idx][TREE_DB_IS_ALIVE]
-                if neighbor_alive > 0.5:
-                    neighbor_height = states_db_tensor[neighbor_idx][TREE_DB_HEIGHT]
-                    neighbor_canopy_ht = states_db_tensor[neighbor_idx][TREE_DB_CANOPY_HT]
-                    neighbor_diam = states_db_tensor[neighbor_idx][TREE_DB_DIAM]
-                    neighbor_evergreen = int(params_tensor[neighbor_idx][TREE_P_EVERGREEN])
-                    neighbor_leafdiam_a = params_tensor[neighbor_idx][TREE_P_LEAFDIAM_A]
-                    if neighbor_height > 0.01:
-                        neighbor_dc = neighbor_diam
-                        if neighbor_height > neighbor_canopy_ht and neighbor_height > STD_HT:
-                            neighbor_dc = (neighbor_height - neighbor_canopy_ht) / (neighbor_height - STD_HT) * neighbor_diam
-                        neighbor_lai = neighbor_dc * neighbor_dc * neighbor_leafdiam_a
-                        if neighbor_evergreen > 0:
-                            cum_dec_lai = cum_dec_lai + neighbor_lai
-                            cum_con_lai = cum_con_lai + neighbor_lai
-                        else:
-                            cum_dec_lai = cum_dec_lai + neighbor_lai
-                            cum_con_lai = cum_con_lai + neighbor_lai * 0.8
-            i = i + 1
-
+        # Light at ground level: O(1) read from Gap (cum_dec_lai/cum_con_lai already read above)
         light_avail = 1.0
         if evergreen > 0:
             light_avail = cp.exp(XT * cum_con_lai / PLOTSIZE)
@@ -322,25 +300,11 @@ def tree_template_renewal_step(
             if regrowth <= 0.05:
                 regrowth = 0.0
 
-        # --- 4. Detect mature trees of same species (avail_spec) ---
+        # --- 4. Read avail_spec from Gap (pre-aggregated at P0) ---
         avail_spec = 0.0
-        max_diam_self = params_tensor[agent_index][TREE_P_MAX_DIAM]
-        maturity_threshold = max_diam_self * 0.05
-        i = 0
-        while i < len(neighbor_indices) and neighbor_indices[i] != -1:
-            neighbor_idx = int(neighbor_indices[i])
-            neighbor_breed = int(breeds[neighbor_idx])
-            if neighbor_breed == BREED_TREE:
-                neighbor_alive = states_db_tensor[neighbor_idx][TREE_DB_IS_ALIVE]
-                if neighbor_alive > 0.5:
-                    if avail_spec < 0.5:
-                        neighbor_species = params_tensor[neighbor_idx][TREE_P_SPECIES_ID]
-                        diff = neighbor_species - species_id
-                        if diff < 0.5 and diff > -0.5:
-                            neighbor_diam = states_db_tensor[neighbor_idx][TREE_DB_DIAM]
-                            if neighbor_diam > maturity_threshold:
-                                avail_spec = 1.0
-            i = i + 1
+        species_idx = int(species_id)
+        if gap_idx >= 0 and species_idx >= 0 and species_idx < 50:
+            avail_spec = states_tensor[gap_idx][GAP_S_AVAIL_SPEC_BASE + species_idx]
 
         # --- 5. Seedbank/seedling pipeline ---
         # Fire/wind: seedling reset/accumulate happens in GAPpy's mortality(),
