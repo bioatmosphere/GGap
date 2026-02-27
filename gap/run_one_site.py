@@ -9,6 +9,7 @@ Produces 5 CSV files in output_dir matching GAPpy format:
 import argparse
 import sys
 import os
+import time
 
 # Add parent directory to path for imports
 _current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -123,11 +124,15 @@ def main():
         print(f"  Output directory: {args.output_dir}")
         print()
 
+    t_total_start = time.time()
+
     # Create model
     model = GAPModel()
 
     if rank == 0:
         print("Initializing site from UVAFME CSV files...")
+
+    t_init_start = time.time()
 
     # Initialize site (loads from UVAFME CSV files)
     site = model.initialize_site(
@@ -167,6 +172,8 @@ def main():
     site_params = model.get_agent_property_value(site_agent_id, "params")
     site_states = model.get_agent_property_value(site_agent_id, "states")
 
+    t_init_end = time.time()
+
     if rank == 0:
         print(f"\nTotal agents: {len(model.site_agents)} site, {len(model.gap_agents)} gaps, {len(model.tree_ids)} tree slots")
         print(f"  Initial alive: {total_alive}, Free slots: {total_trees - total_alive}")
@@ -189,18 +196,24 @@ def main():
     # Setup model (generates GPU kernels)
     model.setup(use_gpu=True)
 
+    t_setup_end = time.time()
+
     if rank == 0:
+        print(f"  Init time: {t_init_end - t_init_start:.2f}s, GPU setup time: {t_setup_end - t_init_end:.2f}s")
         print("Starting simulation...")
         print()
-        print(f"{'Year':<6} {'Alive':<7} {'Seedlings':<10} {'Free':<8} {'NetChg':<8} {'Biomass':<10} {'Avail_N':<10}")
-        print("-" * 70)
+        print(f"{'Year':<6} {'Alive':<7} {'Seedlings':<10} {'Free':<8} {'NetChg':<8} {'Biomass':<10} {'Avail_N':<10} {'BatchTime':<10}")
+        print("-" * 80)
 
     # Track living trees for net change calculation
     prev_alive = total_alive
+    t_sim_start = time.time()
 
     # Run simulation
     for year_batch in range(0, args.years, args.report_interval):
         years_to_run = min(args.report_interval, args.years - year_batch)
+
+        t_batch_start = time.time()
 
         # Simulate
         model.simulate(ticks=years_to_run, sync_workers_every_n_ticks=1)
@@ -256,14 +269,19 @@ def main():
             net_str = f"+{net_change}" if net_change >= 0 else str(net_change)
             prev_alive = num_living
 
-            print(f"{current_year:<6} {num_living:<7} {num_seedlings:<10} {num_free:<8} {net_str:<8} {total_biomass:<10.1f} {avail_n:<10.4f}")
+            t_batch_elapsed = time.time() - t_batch_start
+            print(f"{current_year:<6} {num_living:<7} {num_seedlings:<10} {num_free:<8} {net_str:<8} {total_biomass:<10.1f} {avail_n:<10.4f} {t_batch_elapsed:<10.2f}s")
 
     # Final state
     site_params = model.get_agent_property_value(site_agent_id, "params")
     site_states = model.get_agent_property_value(site_agent_id, "states")
 
+    t_total_end = time.time()
+
     if rank == 0:
         avail_n = site_states[SITE_S_AVAIL_N] if isinstance(site_states, list) else site_states
+        t_sim_elapsed = t_total_end - t_sim_start
+        t_total_elapsed = t_total_end - t_total_start
         print("\n" + "=" * 70)
         print("Simulation Complete")
         print("=" * 70)
@@ -277,6 +295,12 @@ def main():
         print(f"  A layer C: {site_params[SITE_P_A_C]:.2f} tn/ha, N: {site_params[SITE_P_A_N]:.4f} tn/ha")
         print(f"  Base layer C: {site_params[SITE_P_BL_C]:.2f} tn/ha, N: {site_params[SITE_P_BL_N]:.4f} tn/ha")
         print(f"  Available N: {avail_n:.4f} tn/ha/yr")
+
+        print(f"\nTiming Summary:")
+        print(f"  Initialization: {t_init_end - t_init_start:.2f}s")
+        print(f"  GPU setup:      {t_setup_end - t_init_end:.2f}s")
+        print(f"  Simulation:     {t_sim_elapsed:.2f}s ({t_sim_elapsed / args.years:.3f}s/year)")
+        print(f"  Total:          {t_total_elapsed:.2f}s")
 
         print(f"\nOutput files written to {args.output_dir}/")
 
