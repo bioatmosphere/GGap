@@ -33,7 +33,7 @@ from gap.gap_model import (
     SITE_P_BL_C, SITE_P_BL_N,
     SITE_P_PRCP_BASE, SITE_P_TMIN_BASE, SITE_P_TMAX_BASE,
     # Site states indices (public: climate + avail_n)
-    SITE_S_AVAIL_N, SITE_S_DEG_DAYS, SITE_S_DRY_DAYS, SITE_S_FLOOD_DAYS,
+    SITE_S_AVAIL_N, SITE_S_DEG_DAYS, SITE_S_DRY_DAYS, SITE_S_DRY_DAYS_BASE, SITE_S_FLOOD_DAYS,
 )
 from gap.output_utils import OutputWriter, compute_site_extras, compute_soil_biomass
 
@@ -59,10 +59,10 @@ def main():
         help="Number of gaps per site (default: 200)"
     )
     parser.add_argument(
-        "--pool_size",
+        "--maxtrees",
         type=int,
         default=1000,
-        help="Max tree slots per gap (default: 1000)"
+        help="Max tree slots per gap (default: 1000, matches GAPpy parameters.py:19)"
     )
     parser.add_argument(
         "--years",
@@ -114,8 +114,8 @@ def main():
         print("=" * 60)
         print(f"\nSimulation Parameters:")
         print(f"  Number of gaps: {args.num_gaps}")
-        print(f"  Pool size per gap: {args.pool_size}")
-        print(f"  Total slots: {args.num_gaps * args.pool_size}")
+        print(f"  Max trees per gap: {args.maxtrees}")
+        print(f"  Total slots: {args.num_gaps * args.maxtrees}")
         print(f"  Simulation duration: {args.years} years")
         print(f"  Data directory: {args.data_dir}")
         print(f"  File prefix: {args.prefix}")
@@ -154,7 +154,7 @@ def main():
     for gap_num in range(args.num_gaps):
         tree_ids, initial_alive = model.initialize_trees(
             site=site,
-            maxtrees=args.pool_size,
+            maxtrees=args.maxtrees,
         )
         total_trees += len(tree_ids)
         total_alive += initial_alive
@@ -230,6 +230,7 @@ def main():
                 site_states[SITE_S_FLOOD_DAYS],
                 site_states[SITE_S_DRY_DAYS],
                 annual_rain, grow_days,
+                dry_days_base=site_states[SITE_S_DRY_DAYS_BASE],
             )
             writer.write_soil_data(
                 current_year,

@@ -1,13 +1,16 @@
 """
 Tree potential growth step function for GGap model (Priority 2).
-Phase A of the two-phase tree growth pattern matching GAPpy's two-loop structure.
+Phase A: computes environmental stress and potential growth for LIVING TREES only.
 
-This step computes environmental stress and potential growth WITHOUT nutrient feedback.
-The nutrient factor is applied later in tree_actual_growth_step (Priority 6) after
+The nutrient factor is applied later in tree_actual_growth_step (Priority 8) after
 the soil N cycle computes the same-tick n_supply_ratio.
 
+Templates are handled by tree_template_renewal_step (P6) after P5 syncs current-tick
+climate. Free slots are handled by tree_actual_growth_step (P8) after P7 computes
+num_to_recruit.
+
 Execution Flow:
-    1. POTENTIAL GROWTH (living trees only):
+    1. LIVING TREES (is_alive > 0.5):
        - Read climate from Gap (deg_days, dry_days, etc.)
        - Calculate light availability from neighbor heights
        - Calculate env stress: fc_degday * fc_drought * fc_light * fc_flood (NO fc_nutrient)
@@ -15,18 +18,17 @@ Execution Flow:
        - Compute potential diameter/height/biomass from diam_max * env_stress
        - Compute n_demand from potential biomass change
 
-    2. OUTPUTS (written to params for same-tick P4 consumption):
-       - params[ENV_STRESS]: composite env stress (no nutrient)
-       - params[DIAM_MAX_CALC]: max diameter increment
-       - params[FC_DEGDAY/DROUGHT/FLOOD/LIGHT_AVAIL]: individual factors
-       - states[N_DEMAND]: nitrogen demand from potential growth
+    2. TEMPLATES + FREE SLOTS: no-op (n_demand = 0.0)
 
-Note: Recruitment (free slot activation) moved to P6 (tree_actual_growth_step)
-to match GAPpy ordering where renewal is the last annual operation.
+    3. OUTPUTS:
+       - params[ENV_STRESS]: env stress (living only)
+       - params[DIAM_MAX_CALC]: max diameter increment (living only)
+       - params[FC_DEGDAY/DROUGHT/FLOOD/LIGHT_AVAIL]: individual factors (living only)
+       - states[N_DEMAND]: nitrogen demand from potential growth (living only, 0 for others)
 
 Property scheme:
-- params[40]: species traits (static) + physiology (dynamic) + intermediates + renewal + leaf_area - private, no buffer
-- states[5]: n_demand output (for Gap to aggregate at P3) - public, no buffer
+- params[42]: species traits (static) + physiology (dynamic) + intermediates + renewal + leaf_area + seedling_weight - private, no buffer
+- states[5]: n_demand output (for Gap to aggregate at P4) - public, no buffer
 - states_db[5]: structure (is_alive, diam, height, canopy_ht) + seedling_weight - public, double buffered
 """
 
@@ -84,6 +86,7 @@ TREE_P_SEEDLING = 37
 # Leaf area params [38-39]:
 TREE_P_LEAFDIAM_A = 38
 TREE_P_LEAFAREA_C = 39
+TREE_P_FORSKA_SHADE = 40  # Light response at canopy base (P2->P6 for self-pruning)
 
 # === Tree states[5] (public, no buffer) ===
 TREE_S_LITTER_C = 0       # Above-ground litter carbon
@@ -99,7 +102,7 @@ TREE_DB_HEIGHT = 2
 TREE_DB_CANOPY_HT = 3
 TREE_DB_SEEDLING_WEIGHT = 4
 
-# === Gap states[14] (for reading from Gap neighbor) ===
+# === Gap states[16] (for reading from Gap neighbor) ===
 GAP_S_DEG_DAYS = 0
 GAP_S_DRY_DAYS = 1
 GAP_S_AVAIL_N = 2
@@ -109,20 +112,21 @@ GAP_S_LITTER_ACCUM_N = 5
 GAP_S_NUM_TO_RECRUIT = 6
 GAP_S_RECRUIT_RAND_SEED = 7
 GAP_S_FLOOD_DAYS = 8
-GAP_S_SEED_BANK = 9
+GAP_S_TOTAL_SEEDLING_WEIGHT = 9
 GAP_S_FIRE_INTENSITY = 10
+GAP_S_DRY_DAYS_BASE = 14
 
 # === Constants ===
 PI = 3.14159265359
 STD_HT = 1.3
 TC_KG = 0.039269908  # PI / 80 - stem volume constant, biomC in kg (cm, m, g/cm³)
-XT_CONIFER = -0.70
-XT_DECIDUOUS = -0.80
+XT = -0.40  # GAPpy model.py:280 — universal light extinction coefficient
+PLOTSIZE = 500.0  # GAPpy parameters.py:59 — plot area m² (also max trees per plot)
 
-STEM_C_N = 400.0
-CON_LEAF_C_N = 50.0
-DEC_LEAF_C_N = 25.0
-CON_LEAF_B = 1.32
+STEM_C_N = 450.0        # GAPpy constants.py:77
+CON_LEAF_C_N = 60.0     # GAPpy constants.py:71
+DEC_LEAF_C_N = 40.0     # GAPpy constants.py:74
+CON_LEAF_B = 1.3        # GAPpy: 1.0 + CON_LEAF_RATIO (0.3)
 
 SEEDLING_DIAM = 1.0
 SEEDLING_AGE = 1.0
@@ -169,6 +173,8 @@ def tree_potential_growth_step(
         evergreen = int(params_tensor[agent_index][TREE_P_EVERGREEN])
 
         rootdepth = params_tensor[agent_index][TREE_P_ROOTDEPTH]
+        leafdiam_a = params_tensor[agent_index][TREE_P_LEAFDIAM_A]
+        leafarea_c = params_tensor[agent_index][TREE_P_LEAFAREA_C]
 
         # Get current tree structure from states_db
         diam = states_db_tensor[agent_index][TREE_DB_DIAM]
@@ -181,7 +187,8 @@ def tree_potential_growth_step(
 
         # ===== READ CLIMATE FROM GAP NEIGHBOR =====
         deg_days = 2500.0
-        dry_days = 30.0
+        dry_days = 0.0
+        dry_days_base = 0.0
         flood_days = 0.0
 
         neighbor_indices = locations[agent_index]
@@ -192,12 +199,29 @@ def tree_potential_growth_step(
             if neighbor_breed == BREED_GAP:
                 deg_days = states_tensor[neighbor_idx][GAP_S_DEG_DAYS]
                 dry_days = states_tensor[neighbor_idx][GAP_S_DRY_DAYS]
+                dry_days_base = states_tensor[neighbor_idx][GAP_S_DRY_DAYS_BASE]
                 flood_days = states_tensor[neighbor_idx][GAP_S_FLOOD_DAYS]
             i = i + 1
 
-        # ===== CALCULATE LIGHT AVAILABILITY =====
-        total_lai_above = 0.0
+        # ===== CALCULATE LIGHT AVAILABILITY (GAPpy canopy(), model.py:277-362) =====
+        # GAPpy uses discrete height-layer arrays with cumulative LAI from top-down.
+        # Reformulated per-tree: sum LAI from neighbor canopy layers above this tree's
+        # height, using GAPpy's layer discretization and xt=-0.40 coefficient.
+        #
+        # Separate dec/con LAI accumulators (GAPpy model.py:323-334):
+        #   Conifers contribute 100% to both dec and con arrays
+        #   Deciduous contribute 100% to dec, 80% to con
+        # Current tree reads con_light if conifer, dec_light if deciduous.
+        #
+        # GAPpy: light[h] = exp(-0.40 * cumLAI[h+1] / plotsize), plotsize=500
+        # where h = int(tree_height) - 1, so cumLAI at layer int(tree_height).
+        tree_height_layer = int(height)  # GAPpy: kh+1 = int(forht)
+        tree_base_layer = int(canopy_ht)  # GAPpy: khc+1 = int(canht), for forska_shade
 
+        cum_dec_lai = 0.0
+        cum_con_lai = 0.0
+        cum_dec_lai_base = 0.0  # LAI above canopy base (for forska_shade)
+        cum_con_lai_base = 0.0
         i = 0
         while i < len(neighbor_indices) and neighbor_indices[i] != -1:
             neighbor_idx = int(neighbor_indices[i])
@@ -210,28 +234,68 @@ def tree_potential_growth_step(
                     neighbor_canopy_ht = states_db_tensor[neighbor_idx][TREE_DB_CANOPY_HT]
                     neighbor_diam = states_db_tensor[neighbor_idx][TREE_DB_DIAM]
                     neighbor_evergreen = int(params_tensor[neighbor_idx][TREE_P_EVERGREEN])
+                    neighbor_leafdiam_a = params_tensor[neighbor_idx][TREE_P_LEAFDIAM_A]
 
-                    if neighbor_height > height:
-                        canopy_depth = neighbor_height - neighbor_canopy_ht
-                        if canopy_depth < 1.0:
-                            canopy_depth = 1.0
+                    # Canopy diameter (GAPpy tree.py stem_shape: dc = (h-hc)/(h-STD_HT)*d)
+                    neighbor_dc = neighbor_diam
+                    if neighbor_height > neighbor_canopy_ht and neighbor_height > STD_HT:
+                        neighbor_dc = (neighbor_height - neighbor_canopy_ht) / (neighbor_height - STD_HT) * neighbor_diam
 
-                        neighbor_lai = (neighbor_diam * neighbor_diam * 0.01) / canopy_depth
-                        overlap = neighbor_height - height
-                        if overlap > canopy_depth:
-                            overlap = canopy_depth
+                    # LAI (GAPpy tree.py:174-181: lai_biomass_c = dc^2 * leafdiam_a)
+                    neighbor_lai = neighbor_dc * neighbor_dc * neighbor_leafdiam_a
 
+                    # Layer indices (GAPpy 0-based: canht_int, forht_int)
+                    canht_int = int(neighbor_canopy_ht) - 1
+                    if canht_int < 0:
+                        canht_int = 0
+                    forht_int = int(neighbor_height) - 1
+                    if forht_int < 0:
+                        forht_int = 0
+
+                    # Number of canopy layers
+                    n_canopy = forht_int - canht_int + 1
+                    if n_canopy < 1:
+                        n_canopy = 1
+
+                    # Layers above current tree: >= tree_height_layer
+                    lower_bound = canht_int
+                    if lower_bound < tree_height_layer:
+                        lower_bound = tree_height_layer
+                    n_above = forht_int - lower_bound + 1
+
+                    if n_above > 0:
+                        lai_above = neighbor_lai * float(n_above) / float(n_canopy)
                         if neighbor_evergreen > 0:
-                            neighbor_xt = XT_CONIFER
+                            # Conifers: 100% to both arrays (GAPpy model.py:325-328)
+                            cum_dec_lai = cum_dec_lai + lai_above
+                            cum_con_lai = cum_con_lai + lai_above
                         else:
-                            neighbor_xt = XT_DECIDUOUS
+                            # Deciduous: 100% to dec, 80% to con (GAPpy model.py:331-334)
+                            cum_dec_lai = cum_dec_lai + lai_above
+                            cum_con_lai = cum_con_lai + lai_above * 0.8
 
-                        weighted_lai = neighbor_lai * overlap * (neighbor_xt / XT_DECIDUOUS)
-                        total_lai_above = total_lai_above + weighted_lai
+                    # LAI above canopy base (for forska_shade, GAPpy model.py:428-431)
+                    lower_base = canht_int
+                    if lower_base < tree_base_layer:
+                        lower_base = tree_base_layer
+                    n_above_base = forht_int - lower_base + 1
+                    if n_above_base > 0:
+                        lai_above_base = neighbor_lai * float(n_above_base) / float(n_canopy)
+                        if neighbor_evergreen > 0:
+                            cum_dec_lai_base = cum_dec_lai_base + lai_above_base
+                            cum_con_lai_base = cum_con_lai_base + lai_above_base
+                        else:
+                            cum_dec_lai_base = cum_dec_lai_base + lai_above_base
+                            cum_con_lai_base = cum_con_lai_base + lai_above_base * 0.8
+
             i = i + 1
 
-        # Beer-Lambert light attenuation
-        light_avail = cp.exp(XT_DECIDUOUS * total_lai_above)
+        # Beer-Lambert (GAPpy model.py:347-348): exp(xt * cumLAI / plotsize)
+        light_avail = 1.0
+        if evergreen > 0:
+            light_avail = cp.exp(XT * cum_con_lai / PLOTSIZE)
+        else:
+            light_avail = cp.exp(XT * cum_dec_lai / PLOTSIZE)
         if light_avail < 0.01:
             light_avail = 0.01
         if light_avail > 1.0:
@@ -249,14 +313,15 @@ def tree_potential_growth_step(
             if tmp1 > 0.0 and tmp2 > 0.0:
                 fc_degday = (tmp1 ** a) * (tmp2 ** b)
 
-        # Drought response
+        # Drought response (GAPpy fdry + dual-metric for drought_tol==1)
         fc_drought = 1.0
         drought_idx = drought_tol - 1
         if drought_idx < 0:
             drought_idx = 0
-        if drought_idx > 4:
-            drought_idx = 4
+        if drought_idx > 5:
+            drought_idx = 5
 
+        # GAPpy gama = [0.50, 0.45, 0.35, 0.25, 0.15, 0.05] (species.py:219)
         gamma = 0.35
         if drought_idx == 0:
             gamma = 0.50
@@ -268,13 +333,31 @@ def tree_potential_growth_step(
             gamma = 0.25
         elif drought_idx == 4:
             gamma = 0.15
+        elif drought_idx == 5:
+            gamma = 0.05
 
-        if dry_days < gamma * 365.0:
-            tmp = (gamma * 365.0 - dry_days) / (gamma * 365.0)
-            if tmp > 0.0:
-                fc_drought = tmp ** 0.5
+        # fdry(dry_days, drought_tol): sqrt((gamma - dryday) / gamma)
+        if dry_days < gamma:
+            tmp_d = (gamma - dry_days) / gamma
+            fc_drought = tmp_d ** 0.5
         else:
             fc_drought = 0.0
+
+        # Dual metric for intolerant species (GAPpy species.py:140-151)
+        if drought_tol == 1:
+            # Base layer response using gamma=0.50 (drought_tol=1)
+            fcdry_base = 0.0
+            if dry_days_base < 0.50:
+                tmp_b = (0.50 - dry_days_base) / 0.50
+                fcdry_base = tmp_b ** 0.5
+            # Conifer/deciduous multiplier
+            if evergreen > 0:
+                fcdry_base = fcdry_base * 0.33
+            else:
+                fcdry_base = fcdry_base * 0.2
+            # Take maximum of upper and base responses
+            if fcdry_base > fc_drought:
+                fc_drought = fcdry_base
 
         # Light response
         shade_idx = shade_tol - 1
@@ -313,25 +396,25 @@ def tree_potential_growth_step(
         if fc_light > 1.0:
             fc_light = 1.0
 
-        # Flood response
-        flood_idx = flood_tol
-        if flood_idx < 1:
-            flood_idx = 1
-        if flood_idx > 6:
-            flood_idx = 6
+        # Forska shade: light response at canopy BASE (GAPpy model.py:428-431)
+        # Used for self-pruning check in P6 (GAPpy third tree loop, model.py:564-565)
+        light_at_base = 1.0
+        if evergreen > 0:
+            light_at_base = cp.exp(XT * cum_con_lai_base / PLOTSIZE)
+        else:
+            light_at_base = cp.exp(XT * cum_dec_lai_base / PLOTSIZE)
+        if light_at_base < 0.01:
+            light_at_base = 0.01
+        if light_at_base > 1.0:
+            light_at_base = 1.0
+        forska_shade = c1 * (1.0 - cp.exp(-c2 * (light_at_base - c3)))
+        if forska_shade < 0.0:
+            forska_shade = 0.0
+        if forska_shade > 1.0:
+            forska_shade = 1.0
 
-        gamma_f = 1.0 - (flood_idx - 1) * 0.1
-        flood_threshold = gamma_f * 365.0
-
+        # GAPpy flood_rsp always returns 1.0 (dead code, species.py:153-163)
         fc_flood = 1.0
-        if flood_days >= flood_threshold:
-            fc_flood = 0.0
-        elif flood_days > 0.0 and flood_threshold > 0.0:
-            fc_flood = 1.0 - (flood_days / flood_threshold)
-        if fc_flood < 0.0:
-            fc_flood = 0.0
-        if fc_flood > 1.0:
-            fc_flood = 1.0
 
         # Combined env stress (NO nutrient factor - that comes at P4)
         env_stress = fc_degday * fc_drought * fc_light * fc_flood
@@ -383,7 +466,7 @@ def tree_potential_growth_step(
         pot_crown_depth = pot_new_height - canopy_ht
         if pot_crown_depth < 0.0:
             pot_crown_depth = 0.0
-        pot_twigbc = TC_KG * wood_bulk_dens * 0.337 * pot_dc * pot_dc * pot_crown_depth
+        pot_twigbc = TC_KG * wood_bulk_dens * 0.33667 * pot_dc * pot_dc * pot_crown_depth
 
         # Root biomass
         pot_root_c = 0.0
@@ -392,8 +475,9 @@ def tree_potential_growth_step(
 
         pot_new_biomC = pot_stembc + pot_twigbc + pot_root_c
 
-        # Potential leaf biomass
-        pot_new_leaf_bm = pot_new_biomC * 0.1
+        # Potential leaf biomass (GAPpy: dc² * leafdiam_a * leafarea_c * 2.0)
+        # * 1000.0 converts GAPpy tonnes to GGap kg (TC_KG = TC * 1000)
+        pot_new_leaf_bm = pot_dc * pot_dc * leafdiam_a * leafarea_c * 2.0 * 1000.0
 
         # N demand from potential growth (GAPpy: species-specific leaf C/N)
         biomC_increment = pot_new_biomC - biomC
@@ -423,6 +507,8 @@ def tree_potential_growth_step(
         params_tensor[agent_index][TREE_P_FC_FLOOD] = fc_flood
         params_tensor[agent_index][TREE_P_ENV_STRESS] = env_stress
         params_tensor[agent_index][TREE_P_DIAM_MAX_CALC] = diam_max
+        params_tensor[agent_index][TREE_P_FORSKA_SHADE] = forska_shade
 
-    # ===== WRITE N DEMAND TO states (for Gap to aggregate at P1) =====
+    # ===== WRITE N DEMAND TO states (for Gap to aggregate at P4) =====
+    # Templates and free slots: n_demand stays 0.0 (initialized above)
     states_tensor[agent_index][TREE_S_N_DEMAND] = n_demand

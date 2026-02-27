@@ -7,16 +7,16 @@ Litter must be aggregated before site_soil_step (P1) can decompose it.
 
 Execution Flow:
     1. Loop through Tree neighbors
-    2. Sum litter_c, litter_n from living trees (written at P6 of previous tick)
+    2. Sum litter_c, litter_n from living trees (written at P8 of previous tick)
     3. Count living trees and free slots
-    4. Read growmax from templates (env_stress = regrowth, written at P6 prev tick)
-    5. Compute density-based nrenew (GAPpy model.py:833-837):
-       nrenew = min(max(plotsize*growmax - numtrees, 3), plotsize - numtrees)
-       capped by available free slots
-    6. Generate random seed for species selection
+    4. Compute per-gap LAI from living tree canopy
+    5. Sum seedling weights from templates (for proportional decrement at P6)
 
-    Writes: litter_accum_c/n (above-ground), litter_accum_c/n_bg (below-ground),
-            num_to_recruit, recruit_rand_seed
+    Writes: litter_accum_c/n (above-ground), total_lai (for soil water balance),
+            total_seedling_weight
+
+Note: N consumed aggregation moved to gap_nconsumed_aggregate_step (P9)
+which runs AFTER P8, enabling same-tick N balance at P10.
 """
 
 import cupy as cp  # noqa: F401
@@ -27,25 +27,29 @@ BREED_TREE = 0
 BREED_GAP = 1
 BREED_SITE = 2
 
-# === Gap states[14] (public, no buffer) ===
+# === Gap states[16] (public, no buffer) ===
 GAP_S_LITTER_ACCUM_C = 4
 GAP_S_LITTER_ACCUM_N = 5
-GAP_S_NUM_TO_RECRUIT = 6
-GAP_S_RECRUIT_RAND_SEED = 7
-GAP_S_LITTER_ACCUM_C_BG = 12  # Below-ground litter carbon aggregate
-GAP_S_LITTER_ACCUM_N_BG = 13  # Below-ground litter nitrogen aggregate
+GAP_S_TOTAL_SEEDLING_WEIGHT = 9  # Sum of all templates' seedling weights (for proportional decrement)
+GAP_S_TOTAL_LAI = 12  # Per-gap normalized LAI (sum of tree LAI / PLOTSIZE, GAPpy canopy())
 
-# === Tree params[40] (for reading env_stress/regrowth from templates) ===
-TREE_P_ENV_STRESS = 32  # Templates store regrowth here (written at P6 prev tick)
+# === Tree params (for reading from Tree neighbors) ===
+TREE_P_LEAFDIAM_A = 38  # Species-specific leaf area coefficient
 
 # === Tree states[5] (for reading litter from Tree neighbors) ===
 TREE_S_LITTER_C = 0       # Above-ground litter carbon
 TREE_S_LITTER_N = 1       # Above-ground litter nitrogen
-TREE_S_LITTER_C_BG = 3    # Below-ground litter carbon
-TREE_S_LITTER_N_BG = 4    # Below-ground litter nitrogen
 
-# === Tree states_db[4] (for checking alive status) ===
+# === Tree states_db[5] (for checking alive status + dimensions + seedling weight) ===
 TREE_DB_IS_ALIVE = 0
+TREE_DB_DIAM = 1
+TREE_DB_HEIGHT = 2
+TREE_DB_CANOPY_HT = 3
+TREE_DB_SEEDLING_WEIGHT = 4
+
+# === Constants ===
+STD_HT = 1.3  # Standard measurement height (m)
+PLOTSIZE = 500.0  # GAPpy parameters.py:59 — plot area m² (also max trees per plot)
 
 
 @jit.rawkernel(device="cuda")
@@ -69,11 +73,8 @@ def gap_litter_aggregate_step(
     """
     total_litter_c = 0.0
     total_litter_n = 0.0
-    total_litter_c_bg = 0.0
-    total_litter_n_bg = 0.0
-    living_tree_count = 0.0
-    free_slot_tree_count = 0.0
-    growmax = 0.0
+    total_seedling_weight = 0.0
+    total_lai = 0.0  # Sum of tree LAI for canopy water interception (GAPpy canopy())
 
     neighbor_indices = locations[agent_index]
     i = 0
@@ -94,62 +95,33 @@ def gap_litter_aggregate_step(
                 total_litter_c = total_litter_c + tree_litter_c
                 total_litter_n = total_litter_n + tree_litter_n
 
-                # Read below-ground litter (roots from dead trees)
-                tree_litter_c_bg = states_tensor[neighbor_idx][TREE_S_LITTER_C_BG]
-                tree_litter_n_bg = states_tensor[neighbor_idx][TREE_S_LITTER_N_BG]
-                total_litter_c_bg = total_litter_c_bg + tree_litter_c_bg
-                total_litter_n_bg = total_litter_n_bg + tree_litter_n_bg
-
             if tree_alive > 0.5:
-                living_tree_count = living_tree_count + 1.0
-            elif tree_alive > -0.5:
-                # Free slot (is_alive == 0), not template (is_alive == -1)
-                free_slot_tree_count = free_slot_tree_count + 1.0
-            else:
-                # Template (is_alive == -1): read regrowth for growmax
-                template_regrowth = params_tensor[neighbor_idx][TREE_P_ENV_STRESS]
-                if template_regrowth > growmax:
-                    growmax = template_regrowth
+                # Compute tree LAI for canopy water interception (GAPpy canopy():311)
+                # LAI = dc² * leafdiam_a, where dc = (h-hc)/(h-STD_HT)*diam
+                n_diam = states_db_tensor[neighbor_idx][TREE_DB_DIAM]
+                n_height = states_db_tensor[neighbor_idx][TREE_DB_HEIGHT]
+                n_canopy_ht = states_db_tensor[neighbor_idx][TREE_DB_CANOPY_HT]
+                n_leafdiam_a = params_tensor[neighbor_idx][TREE_P_LEAFDIAM_A]
+                if n_height > STD_HT + 0.1:
+                    n_dc = (n_height - n_canopy_ht) / (n_height - STD_HT) * n_diam
+                    total_lai = total_lai + n_dc * n_dc * n_leafdiam_a
+            elif tree_alive < -0.5:
+                # Template (is_alive == -1): read seedling weight for proportional decrement
+                template_weight = states_db_tensor[neighbor_idx][TREE_DB_SEEDLING_WEIGHT]
+                total_seedling_weight = total_seedling_weight + template_weight
 
         i = i + 1
-
-    # Density-based recruitment count (GAPpy model.py:833-837)
-    # total_capacity = living + free (acts as plotsize equivalent)
-    total_capacity = living_tree_count + free_slot_tree_count
-    num_to_recruit = 0.0
-
-    if free_slot_tree_count > 0.5 and total_capacity > 0.5:
-        # max_renew = min(plotsize * growmax - numtrees, plotsize * 0.5)
-        max_renew = total_capacity * growmax - living_tree_count
-        half_cap = total_capacity * 0.5
-        if max_renew > half_cap:
-            max_renew = half_cap
-
-        # nrenew = min(max(max_renew, 3), plotsize - numtrees)
-        nrenew = max_renew
-        if nrenew < 3.0:
-            nrenew = 3.0
-        cap = total_capacity - living_tree_count
-        if nrenew > cap:
-            nrenew = cap
-
-        # Cap by available free slots
-        if nrenew > free_slot_tree_count:
-            nrenew = free_slot_tree_count
-        if nrenew < 0.0:
-            nrenew = 0.0
-
-        num_to_recruit = nrenew
-
-    # Generate pseudo-random seed for species selection
-    recruit_rand_seed = float((tick * 997 + agent_index * 991) % 10000)
 
     # Write aggregated litter (Site reads at P1)
     states_tensor[agent_index][GAP_S_LITTER_ACCUM_C] = total_litter_c      # Above-ground -> A0
     states_tensor[agent_index][GAP_S_LITTER_ACCUM_N] = total_litter_n
-    states_tensor[agent_index][GAP_S_LITTER_ACCUM_C_BG] = total_litter_c_bg  # Below-ground -> A layer
-    states_tensor[agent_index][GAP_S_LITTER_ACCUM_N_BG] = total_litter_n_bg
 
-    # Write recruitment info (Trees read at P2)
-    states_tensor[agent_index][GAP_S_NUM_TO_RECRUIT] = num_to_recruit
-    states_tensor[agent_index][GAP_S_RECRUIT_RAND_SEED] = recruit_rand_seed
+    # Write per-gap normalized LAI (GAPpy canopy():362 divides by numplots*plotsize)
+    # PLOTSIZE matches GAPpy plotsize=500; Site averages across gaps (= /numplots)
+    gap_lai = total_lai / PLOTSIZE
+    states_tensor[agent_index][GAP_S_TOTAL_LAI] = gap_lai
+
+    # Write total seedling weight for proportional decrement (templates read at P6)
+    # GAPpy model.py:941: seedling[species] -= 1.0 per recruited tree
+    # GPU approximation: each template subtracts its proportional share
+    states_tensor[agent_index][GAP_S_TOTAL_SEEDLING_WEIGHT] = total_seedling_weight

@@ -55,7 +55,7 @@ Soil Layers:
 
 Property scheme (3 properties):
 - params[116]: soil pools + monthly climate + site properties + fire/wind/soil + climate_std - private
-- states[6]: climate + avail_n + flood_days + fire_intensity + n_supply_ratio - public
+- states[8]: climate + avail_n + flood_days + fire_intensity + n_supply_ratio + dry_days_base + wind_intensity - public
 - states_db[1]: placeholder (public, double buffered but unused)
 """
 
@@ -99,19 +99,24 @@ SITE_P_BASE_H = 55
 SITE_P_TMIN_STD_BASE = 56   # tmin_std[0..11] at 56-67
 SITE_P_TMAX_STD_BASE = 68   # tmax_std[0..11] at 68-79
 SITE_P_PRCP_STD_BASE = 80   # prcp_std[0..11] at 80-91
+# N balance state [92]:
+SITE_P_ANNUAL_RUNOFF = 92   # Annual accumulated runoff (for N balance at P10 same tick)
 
-# === Site states[6] (public) ===
+# === Site states[8] (public) ===
 SITE_S_DEG_DAYS = 0
 SITE_S_DRY_DAYS = 1
 SITE_S_AVAIL_N = 2
 SITE_S_FLOOD_DAYS = 3  # Days when A layer is saturated
 SITE_S_FIRE_INTENSITY = 4  # Fire intensity this year (0-1)
+SITE_S_DRY_DAYS_BASE = 6   # Base layer drought fraction (for intolerant species)
+SITE_S_WIND_INTENSITY = 7  # Wind intensity this year (0-1, 0=no wind)
 
-# === Gap states[14] (for reading from Gap neighbors) ===
+# === Gap states[16] (for reading from Gap neighbors) ===
 GAP_S_LITTER_ACCUM_C = 4       # Above-ground litter -> A0 layer
 GAP_S_LITTER_ACCUM_N = 5
-GAP_S_LITTER_ACCUM_C_BG = 12   # Below-ground litter -> A layer (roots)
-GAP_S_LITTER_ACCUM_N_BG = 13
+GAP_S_TOTAL_N_DEMAND = 11      # N demand from trees (written at P4, used by P5 for N ratio)
+GAP_S_TOTAL_LAI = 12           # Per-gap normalized LAI (from P0, GAPpy canopy())
+GAP_S_N_CONSUMED = 13          # N consumed by trees (now aggregated at P9, read at P10)
 
 # === UVAFME Constants (from soil.py) ===
 AO_CN_0 = 30.0
@@ -131,7 +136,12 @@ LAI_MAX = 0.15
 # Atmospheric N in precipitation (tn N per cm precip)
 PRCP_N = 0.00002
 
-# Days per month for interpolation
+# Unit conversion: kg (tree-level) → tn/ha (soil pools)
+# = HEC_TO_M2 / plotsize / 1000 = 10000 / 500 / 1000
+# Divide by gap_count at runtime (= /numplots equivalent)
+UNIT_CONV = 0.02
+
+# Days per month (for precip distribution)
 DAYS_PER_MONTH_0 = 31
 DAYS_PER_MONTH_1 = 28
 DAYS_PER_MONTH_2 = 31
@@ -146,6 +156,16 @@ DAYS_PER_MONTH_10 = 30
 DAYS_PER_MONTH_11 = 31
 
 PI = 3.14159265359
+DEG2RAD = 0.017453
+
+# Hargreaves PET constants (GAPpy constants.py)
+H_B = 0.017214        # ≈ 2*PI/365
+H_AS = 0.409           # Max solar declination (radians)
+H_AC = 0.033           # Eccentricity correction amplitude
+H_PHASE = -1.39        # Phase offset for declination
+H_AMP = 37.58603       # Radiation amplitude
+H_COEFF = 0.000093876  # Hargreaves coefficient
+H_ADDON = 17.8         # Hargreaves temperature offset
 
 
 @jit.rawkernel(device="cuda")
@@ -180,11 +200,11 @@ def site_soil_step(
     - params: soil pools (A0/A/BL carbon, nitrogen, water)
     - states: avail_n (for Gap to read)
     """
-    # ========== READ LITTER FROM GAP NEIGHBORS ==========
+    # ========== READ LITTER + LAI FROM GAP NEIGHBORS ==========
     total_litter_c = 0.0       # Above-ground -> A0 layer
     total_litter_n = 0.0
-    total_litter_c_bg = 0.0    # Below-ground -> A layer (roots)
-    total_litter_n_bg = 0.0
+    total_gap_lai = 0.0        # Sum of per-gap normalized LAI
+    gap_count = 0.0
 
     neighbor_indices = locations[agent_index]
     i = 0
@@ -198,12 +218,19 @@ def site_soil_step(
             total_litter_c = total_litter_c + gap_litter_c
             total_litter_n = total_litter_n + gap_litter_n
 
-            gap_litter_c_bg = states_tensor[neighbor_idx][GAP_S_LITTER_ACCUM_C_BG]
-            gap_litter_n_bg = states_tensor[neighbor_idx][GAP_S_LITTER_ACCUM_N_BG]
-            total_litter_c_bg = total_litter_c_bg + gap_litter_c_bg
-            total_litter_n_bg = total_litter_n_bg + gap_litter_n_bg
+            # Read per-gap normalized LAI (GAPpy canopy():362)
+            gap_lai = states_tensor[neighbor_idx][GAP_S_TOTAL_LAI]
+            total_gap_lai = total_gap_lai + gap_lai
+
+            gap_count = gap_count + 1.0
 
         i = i + 1
+
+    # ========== CONVERT TREE KG → SOIL TN/HA (GAPpy uconvert) ==========
+    if gap_count > 0.5:
+        uconv = UNIT_CONV / gap_count
+        total_litter_c = total_litter_c * uconv
+        total_litter_n = total_litter_n * uconv
 
     # ========== READ CURRENT SOIL STATE ==========
     ao_c0 = params_tensor[agent_index][SITE_P_A0_C]
@@ -221,15 +248,23 @@ def site_soil_step(
     sa_pwp = params_tensor[agent_index][SITE_P_PERM_WP]
     slope = params_tensor[agent_index][SITE_P_SLOPE]
     sigma = params_tensor[agent_index][SITE_P_SIGMA]
-    lai = params_tensor[agent_index][SITE_P_LAI]
     lai_w0 = params_tensor[agent_index][SITE_P_LAI_W0]
     latitude = params_tensor[agent_index][SITE_P_LATITUDE]
+
+    # N balance moved to site_nbalance_step (P10) — runs AFTER P8 growth,
+    # so it uses same-tick avail_N and n_consumed (no 1-tick delay).
+
+    # ========== DYNAMIC LAI FROM TREE CANOPY (GAPpy canopy():282-362) ==========
+    # Average per-gap normalized LAI across gaps (= /numplots equivalent)
+    lai = params_tensor[agent_index][SITE_P_LAI]  # Fallback: initial CSV value
+    if gap_count > 0.5:
+        dynamic_lai = total_gap_lai / gap_count
+        if dynamic_lai > 0.01:
+            lai = dynamic_lai
 
     # ========== ADD LITTER AS ANNUAL PULSE (matches GAPpy) ==========
     ao_c0 = ao_c0 + total_litter_c       # Above-ground litter -> A0 layer
     ao_n0 = ao_n0 + total_litter_n
-    sa_c0 = sa_c0 + total_litter_c_bg    # Below-ground litter -> A layer (roots)
-    sa_n0 = sa_n0 + total_litter_n_bg
 
     # Ensure minimum LAI
     if lai < 1.0:
@@ -315,27 +350,41 @@ def site_soil_step(
     prcp_10 = params_tensor[agent_index][SITE_P_PRCP_BASE + 10]
     prcp_11 = params_tensor[agent_index][SITE_P_PRCP_BASE + 11]
 
-    # ========== MONTHLY CLIMATE PERTURBATION (matches GAPpy) ==========
-    # Generate one pseudo-random perturbation per month and apply to monthly
-    # climate variables. Temp perturbation clamped to [-1,1], precip to [-0.5,0.5].
-    u1 = 0.0
-    u2 = 0.0
-    u3 = 0.0
-    u4 = 0.0
+    # ========== MONTHLY CLIMATE PERTURBATION ==========
+    # Beasley-Springer-Moro (BSM) inverse normal CDF approximation applied to
+    # hash-based uniform RNG. Matches GAPpy's Box-Muller normal + clamp approach.
+    # Hash uniform mapped to [0.08, 0.92] (BSM central region), then rational
+    # approximation gives ~N(0,1). Clamped to [-1,1] for temp, [-0.5,0.5] for precip.
+    u_t = 0.0
+    u_p = 0.0
+    q_t = 0.0
+    q_p = 0.0
+    r_t = 0.0
+    r_p = 0.0
+    numer = 0.0
+    denom = 0.0
     tp = 0.0
     pp = 0.0
 
     # Month 0 (January)
-    u1 = ((tick * 7919 + 0 * 6271 + agent_index * 1013) % 10000) / 10000.0
-    u2 = ((tick * 5381 + 0 * 3571 + agent_index * 2017) % 10000) / 10000.0
-    tp = u1 + u2 - 1.0
+    u_t = ((tick * 7919 + 0 * 6271 + agent_index * 1013) % 1000000) / 1000000.0
+    u_t = 0.08 + u_t * 0.84
+    q_t = u_t - 0.5
+    r_t = q_t * q_t
+    numer = q_t * (2.50662824 + r_t * (-18.6150006 + r_t * (41.3911977 + r_t * (-25.4410605))))
+    denom = 1.0 + r_t * (-8.47351093 + r_t * (23.0833674 + r_t * (-21.0622410 + r_t * 3.13082910)))
+    tp = numer / denom
     if tp < -1.0:
         tp = -1.0
     if tp > 1.0:
         tp = 1.0
-    u3 = ((tick * 4219 + 0 * 8461 + agent_index * 3037) % 10000) / 10000.0
-    u4 = ((tick * 3079 + 0 * 7517 + agent_index * 5039) % 10000) / 10000.0
-    pp = (u3 + u4 - 1.0) * 0.5
+    u_p = ((tick * 4219 + 0 * 8461 + agent_index * 3037) % 1000000) / 1000000.0
+    u_p = 0.08 + u_p * 0.84
+    q_p = u_p - 0.5
+    r_p = q_p * q_p
+    numer = q_p * (2.50662824 + r_p * (-18.6150006 + r_p * (41.3911977 + r_p * (-25.4410605))))
+    denom = 1.0 + r_p * (-8.47351093 + r_p * (23.0833674 + r_p * (-21.0622410 + r_p * 3.13082910)))
+    pp = numer / denom
     if pp < -0.5:
         pp = -0.5
     if pp > 0.5:
@@ -349,16 +398,24 @@ def site_soil_step(
         prcp_0 = 0.0
 
     # Month 1 (February)
-    u1 = ((tick * 7919 + 1 * 6271 + agent_index * 1013) % 10000) / 10000.0
-    u2 = ((tick * 5381 + 1 * 3571 + agent_index * 2017) % 10000) / 10000.0
-    tp = u1 + u2 - 1.0
+    u_t = ((tick * 7919 + 1 * 6271 + agent_index * 1013) % 1000000) / 1000000.0
+    u_t = 0.08 + u_t * 0.84
+    q_t = u_t - 0.5
+    r_t = q_t * q_t
+    numer = q_t * (2.50662824 + r_t * (-18.6150006 + r_t * (41.3911977 + r_t * (-25.4410605))))
+    denom = 1.0 + r_t * (-8.47351093 + r_t * (23.0833674 + r_t * (-21.0622410 + r_t * 3.13082910)))
+    tp = numer / denom
     if tp < -1.0:
         tp = -1.0
     if tp > 1.0:
         tp = 1.0
-    u3 = ((tick * 4219 + 1 * 8461 + agent_index * 3037) % 10000) / 10000.0
-    u4 = ((tick * 3079 + 1 * 7517 + agent_index * 5039) % 10000) / 10000.0
-    pp = (u3 + u4 - 1.0) * 0.5
+    u_p = ((tick * 4219 + 1 * 8461 + agent_index * 3037) % 1000000) / 1000000.0
+    u_p = 0.08 + u_p * 0.84
+    q_p = u_p - 0.5
+    r_p = q_p * q_p
+    numer = q_p * (2.50662824 + r_p * (-18.6150006 + r_p * (41.3911977 + r_p * (-25.4410605))))
+    denom = 1.0 + r_p * (-8.47351093 + r_p * (23.0833674 + r_p * (-21.0622410 + r_p * 3.13082910)))
+    pp = numer / denom
     if pp < -0.5:
         pp = -0.5
     if pp > 0.5:
@@ -372,16 +429,24 @@ def site_soil_step(
         prcp_1 = 0.0
 
     # Month 2 (March)
-    u1 = ((tick * 7919 + 2 * 6271 + agent_index * 1013) % 10000) / 10000.0
-    u2 = ((tick * 5381 + 2 * 3571 + agent_index * 2017) % 10000) / 10000.0
-    tp = u1 + u2 - 1.0
+    u_t = ((tick * 7919 + 2 * 6271 + agent_index * 1013) % 1000000) / 1000000.0
+    u_t = 0.08 + u_t * 0.84
+    q_t = u_t - 0.5
+    r_t = q_t * q_t
+    numer = q_t * (2.50662824 + r_t * (-18.6150006 + r_t * (41.3911977 + r_t * (-25.4410605))))
+    denom = 1.0 + r_t * (-8.47351093 + r_t * (23.0833674 + r_t * (-21.0622410 + r_t * 3.13082910)))
+    tp = numer / denom
     if tp < -1.0:
         tp = -1.0
     if tp > 1.0:
         tp = 1.0
-    u3 = ((tick * 4219 + 2 * 8461 + agent_index * 3037) % 10000) / 10000.0
-    u4 = ((tick * 3079 + 2 * 7517 + agent_index * 5039) % 10000) / 10000.0
-    pp = (u3 + u4 - 1.0) * 0.5
+    u_p = ((tick * 4219 + 2 * 8461 + agent_index * 3037) % 1000000) / 1000000.0
+    u_p = 0.08 + u_p * 0.84
+    q_p = u_p - 0.5
+    r_p = q_p * q_p
+    numer = q_p * (2.50662824 + r_p * (-18.6150006 + r_p * (41.3911977 + r_p * (-25.4410605))))
+    denom = 1.0 + r_p * (-8.47351093 + r_p * (23.0833674 + r_p * (-21.0622410 + r_p * 3.13082910)))
+    pp = numer / denom
     if pp < -0.5:
         pp = -0.5
     if pp > 0.5:
@@ -395,16 +460,24 @@ def site_soil_step(
         prcp_2 = 0.0
 
     # Month 3 (April)
-    u1 = ((tick * 7919 + 3 * 6271 + agent_index * 1013) % 10000) / 10000.0
-    u2 = ((tick * 5381 + 3 * 3571 + agent_index * 2017) % 10000) / 10000.0
-    tp = u1 + u2 - 1.0
+    u_t = ((tick * 7919 + 3 * 6271 + agent_index * 1013) % 1000000) / 1000000.0
+    u_t = 0.08 + u_t * 0.84
+    q_t = u_t - 0.5
+    r_t = q_t * q_t
+    numer = q_t * (2.50662824 + r_t * (-18.6150006 + r_t * (41.3911977 + r_t * (-25.4410605))))
+    denom = 1.0 + r_t * (-8.47351093 + r_t * (23.0833674 + r_t * (-21.0622410 + r_t * 3.13082910)))
+    tp = numer / denom
     if tp < -1.0:
         tp = -1.0
     if tp > 1.0:
         tp = 1.0
-    u3 = ((tick * 4219 + 3 * 8461 + agent_index * 3037) % 10000) / 10000.0
-    u4 = ((tick * 3079 + 3 * 7517 + agent_index * 5039) % 10000) / 10000.0
-    pp = (u3 + u4 - 1.0) * 0.5
+    u_p = ((tick * 4219 + 3 * 8461 + agent_index * 3037) % 1000000) / 1000000.0
+    u_p = 0.08 + u_p * 0.84
+    q_p = u_p - 0.5
+    r_p = q_p * q_p
+    numer = q_p * (2.50662824 + r_p * (-18.6150006 + r_p * (41.3911977 + r_p * (-25.4410605))))
+    denom = 1.0 + r_p * (-8.47351093 + r_p * (23.0833674 + r_p * (-21.0622410 + r_p * 3.13082910)))
+    pp = numer / denom
     if pp < -0.5:
         pp = -0.5
     if pp > 0.5:
@@ -418,16 +491,24 @@ def site_soil_step(
         prcp_3 = 0.0
 
     # Month 4 (May)
-    u1 = ((tick * 7919 + 4 * 6271 + agent_index * 1013) % 10000) / 10000.0
-    u2 = ((tick * 5381 + 4 * 3571 + agent_index * 2017) % 10000) / 10000.0
-    tp = u1 + u2 - 1.0
+    u_t = ((tick * 7919 + 4 * 6271 + agent_index * 1013) % 1000000) / 1000000.0
+    u_t = 0.08 + u_t * 0.84
+    q_t = u_t - 0.5
+    r_t = q_t * q_t
+    numer = q_t * (2.50662824 + r_t * (-18.6150006 + r_t * (41.3911977 + r_t * (-25.4410605))))
+    denom = 1.0 + r_t * (-8.47351093 + r_t * (23.0833674 + r_t * (-21.0622410 + r_t * 3.13082910)))
+    tp = numer / denom
     if tp < -1.0:
         tp = -1.0
     if tp > 1.0:
         tp = 1.0
-    u3 = ((tick * 4219 + 4 * 8461 + agent_index * 3037) % 10000) / 10000.0
-    u4 = ((tick * 3079 + 4 * 7517 + agent_index * 5039) % 10000) / 10000.0
-    pp = (u3 + u4 - 1.0) * 0.5
+    u_p = ((tick * 4219 + 4 * 8461 + agent_index * 3037) % 1000000) / 1000000.0
+    u_p = 0.08 + u_p * 0.84
+    q_p = u_p - 0.5
+    r_p = q_p * q_p
+    numer = q_p * (2.50662824 + r_p * (-18.6150006 + r_p * (41.3911977 + r_p * (-25.4410605))))
+    denom = 1.0 + r_p * (-8.47351093 + r_p * (23.0833674 + r_p * (-21.0622410 + r_p * 3.13082910)))
+    pp = numer / denom
     if pp < -0.5:
         pp = -0.5
     if pp > 0.5:
@@ -441,16 +522,24 @@ def site_soil_step(
         prcp_4 = 0.0
 
     # Month 5 (June)
-    u1 = ((tick * 7919 + 5 * 6271 + agent_index * 1013) % 10000) / 10000.0
-    u2 = ((tick * 5381 + 5 * 3571 + agent_index * 2017) % 10000) / 10000.0
-    tp = u1 + u2 - 1.0
+    u_t = ((tick * 7919 + 5 * 6271 + agent_index * 1013) % 1000000) / 1000000.0
+    u_t = 0.08 + u_t * 0.84
+    q_t = u_t - 0.5
+    r_t = q_t * q_t
+    numer = q_t * (2.50662824 + r_t * (-18.6150006 + r_t * (41.3911977 + r_t * (-25.4410605))))
+    denom = 1.0 + r_t * (-8.47351093 + r_t * (23.0833674 + r_t * (-21.0622410 + r_t * 3.13082910)))
+    tp = numer / denom
     if tp < -1.0:
         tp = -1.0
     if tp > 1.0:
         tp = 1.0
-    u3 = ((tick * 4219 + 5 * 8461 + agent_index * 3037) % 10000) / 10000.0
-    u4 = ((tick * 3079 + 5 * 7517 + agent_index * 5039) % 10000) / 10000.0
-    pp = (u3 + u4 - 1.0) * 0.5
+    u_p = ((tick * 4219 + 5 * 8461 + agent_index * 3037) % 1000000) / 1000000.0
+    u_p = 0.08 + u_p * 0.84
+    q_p = u_p - 0.5
+    r_p = q_p * q_p
+    numer = q_p * (2.50662824 + r_p * (-18.6150006 + r_p * (41.3911977 + r_p * (-25.4410605))))
+    denom = 1.0 + r_p * (-8.47351093 + r_p * (23.0833674 + r_p * (-21.0622410 + r_p * 3.13082910)))
+    pp = numer / denom
     if pp < -0.5:
         pp = -0.5
     if pp > 0.5:
@@ -464,16 +553,24 @@ def site_soil_step(
         prcp_5 = 0.0
 
     # Month 6 (July)
-    u1 = ((tick * 7919 + 6 * 6271 + agent_index * 1013) % 10000) / 10000.0
-    u2 = ((tick * 5381 + 6 * 3571 + agent_index * 2017) % 10000) / 10000.0
-    tp = u1 + u2 - 1.0
+    u_t = ((tick * 7919 + 6 * 6271 + agent_index * 1013) % 1000000) / 1000000.0
+    u_t = 0.08 + u_t * 0.84
+    q_t = u_t - 0.5
+    r_t = q_t * q_t
+    numer = q_t * (2.50662824 + r_t * (-18.6150006 + r_t * (41.3911977 + r_t * (-25.4410605))))
+    denom = 1.0 + r_t * (-8.47351093 + r_t * (23.0833674 + r_t * (-21.0622410 + r_t * 3.13082910)))
+    tp = numer / denom
     if tp < -1.0:
         tp = -1.0
     if tp > 1.0:
         tp = 1.0
-    u3 = ((tick * 4219 + 6 * 8461 + agent_index * 3037) % 10000) / 10000.0
-    u4 = ((tick * 3079 + 6 * 7517 + agent_index * 5039) % 10000) / 10000.0
-    pp = (u3 + u4 - 1.0) * 0.5
+    u_p = ((tick * 4219 + 6 * 8461 + agent_index * 3037) % 1000000) / 1000000.0
+    u_p = 0.08 + u_p * 0.84
+    q_p = u_p - 0.5
+    r_p = q_p * q_p
+    numer = q_p * (2.50662824 + r_p * (-18.6150006 + r_p * (41.3911977 + r_p * (-25.4410605))))
+    denom = 1.0 + r_p * (-8.47351093 + r_p * (23.0833674 + r_p * (-21.0622410 + r_p * 3.13082910)))
+    pp = numer / denom
     if pp < -0.5:
         pp = -0.5
     if pp > 0.5:
@@ -487,16 +584,24 @@ def site_soil_step(
         prcp_6 = 0.0
 
     # Month 7 (August)
-    u1 = ((tick * 7919 + 7 * 6271 + agent_index * 1013) % 10000) / 10000.0
-    u2 = ((tick * 5381 + 7 * 3571 + agent_index * 2017) % 10000) / 10000.0
-    tp = u1 + u2 - 1.0
+    u_t = ((tick * 7919 + 7 * 6271 + agent_index * 1013) % 1000000) / 1000000.0
+    u_t = 0.08 + u_t * 0.84
+    q_t = u_t - 0.5
+    r_t = q_t * q_t
+    numer = q_t * (2.50662824 + r_t * (-18.6150006 + r_t * (41.3911977 + r_t * (-25.4410605))))
+    denom = 1.0 + r_t * (-8.47351093 + r_t * (23.0833674 + r_t * (-21.0622410 + r_t * 3.13082910)))
+    tp = numer / denom
     if tp < -1.0:
         tp = -1.0
     if tp > 1.0:
         tp = 1.0
-    u3 = ((tick * 4219 + 7 * 8461 + agent_index * 3037) % 10000) / 10000.0
-    u4 = ((tick * 3079 + 7 * 7517 + agent_index * 5039) % 10000) / 10000.0
-    pp = (u3 + u4 - 1.0) * 0.5
+    u_p = ((tick * 4219 + 7 * 8461 + agent_index * 3037) % 1000000) / 1000000.0
+    u_p = 0.08 + u_p * 0.84
+    q_p = u_p - 0.5
+    r_p = q_p * q_p
+    numer = q_p * (2.50662824 + r_p * (-18.6150006 + r_p * (41.3911977 + r_p * (-25.4410605))))
+    denom = 1.0 + r_p * (-8.47351093 + r_p * (23.0833674 + r_p * (-21.0622410 + r_p * 3.13082910)))
+    pp = numer / denom
     if pp < -0.5:
         pp = -0.5
     if pp > 0.5:
@@ -510,16 +615,24 @@ def site_soil_step(
         prcp_7 = 0.0
 
     # Month 8 (September)
-    u1 = ((tick * 7919 + 8 * 6271 + agent_index * 1013) % 10000) / 10000.0
-    u2 = ((tick * 5381 + 8 * 3571 + agent_index * 2017) % 10000) / 10000.0
-    tp = u1 + u2 - 1.0
+    u_t = ((tick * 7919 + 8 * 6271 + agent_index * 1013) % 1000000) / 1000000.0
+    u_t = 0.08 + u_t * 0.84
+    q_t = u_t - 0.5
+    r_t = q_t * q_t
+    numer = q_t * (2.50662824 + r_t * (-18.6150006 + r_t * (41.3911977 + r_t * (-25.4410605))))
+    denom = 1.0 + r_t * (-8.47351093 + r_t * (23.0833674 + r_t * (-21.0622410 + r_t * 3.13082910)))
+    tp = numer / denom
     if tp < -1.0:
         tp = -1.0
     if tp > 1.0:
         tp = 1.0
-    u3 = ((tick * 4219 + 8 * 8461 + agent_index * 3037) % 10000) / 10000.0
-    u4 = ((tick * 3079 + 8 * 7517 + agent_index * 5039) % 10000) / 10000.0
-    pp = (u3 + u4 - 1.0) * 0.5
+    u_p = ((tick * 4219 + 8 * 8461 + agent_index * 3037) % 1000000) / 1000000.0
+    u_p = 0.08 + u_p * 0.84
+    q_p = u_p - 0.5
+    r_p = q_p * q_p
+    numer = q_p * (2.50662824 + r_p * (-18.6150006 + r_p * (41.3911977 + r_p * (-25.4410605))))
+    denom = 1.0 + r_p * (-8.47351093 + r_p * (23.0833674 + r_p * (-21.0622410 + r_p * 3.13082910)))
+    pp = numer / denom
     if pp < -0.5:
         pp = -0.5
     if pp > 0.5:
@@ -533,16 +646,24 @@ def site_soil_step(
         prcp_8 = 0.0
 
     # Month 9 (October)
-    u1 = ((tick * 7919 + 9 * 6271 + agent_index * 1013) % 10000) / 10000.0
-    u2 = ((tick * 5381 + 9 * 3571 + agent_index * 2017) % 10000) / 10000.0
-    tp = u1 + u2 - 1.0
+    u_t = ((tick * 7919 + 9 * 6271 + agent_index * 1013) % 1000000) / 1000000.0
+    u_t = 0.08 + u_t * 0.84
+    q_t = u_t - 0.5
+    r_t = q_t * q_t
+    numer = q_t * (2.50662824 + r_t * (-18.6150006 + r_t * (41.3911977 + r_t * (-25.4410605))))
+    denom = 1.0 + r_t * (-8.47351093 + r_t * (23.0833674 + r_t * (-21.0622410 + r_t * 3.13082910)))
+    tp = numer / denom
     if tp < -1.0:
         tp = -1.0
     if tp > 1.0:
         tp = 1.0
-    u3 = ((tick * 4219 + 9 * 8461 + agent_index * 3037) % 10000) / 10000.0
-    u4 = ((tick * 3079 + 9 * 7517 + agent_index * 5039) % 10000) / 10000.0
-    pp = (u3 + u4 - 1.0) * 0.5
+    u_p = ((tick * 4219 + 9 * 8461 + agent_index * 3037) % 1000000) / 1000000.0
+    u_p = 0.08 + u_p * 0.84
+    q_p = u_p - 0.5
+    r_p = q_p * q_p
+    numer = q_p * (2.50662824 + r_p * (-18.6150006 + r_p * (41.3911977 + r_p * (-25.4410605))))
+    denom = 1.0 + r_p * (-8.47351093 + r_p * (23.0833674 + r_p * (-21.0622410 + r_p * 3.13082910)))
+    pp = numer / denom
     if pp < -0.5:
         pp = -0.5
     if pp > 0.5:
@@ -556,16 +677,24 @@ def site_soil_step(
         prcp_9 = 0.0
 
     # Month 10 (November)
-    u1 = ((tick * 7919 + 10 * 6271 + agent_index * 1013) % 10000) / 10000.0
-    u2 = ((tick * 5381 + 10 * 3571 + agent_index * 2017) % 10000) / 10000.0
-    tp = u1 + u2 - 1.0
+    u_t = ((tick * 7919 + 10 * 6271 + agent_index * 1013) % 1000000) / 1000000.0
+    u_t = 0.08 + u_t * 0.84
+    q_t = u_t - 0.5
+    r_t = q_t * q_t
+    numer = q_t * (2.50662824 + r_t * (-18.6150006 + r_t * (41.3911977 + r_t * (-25.4410605))))
+    denom = 1.0 + r_t * (-8.47351093 + r_t * (23.0833674 + r_t * (-21.0622410 + r_t * 3.13082910)))
+    tp = numer / denom
     if tp < -1.0:
         tp = -1.0
     if tp > 1.0:
         tp = 1.0
-    u3 = ((tick * 4219 + 10 * 8461 + agent_index * 3037) % 10000) / 10000.0
-    u4 = ((tick * 3079 + 10 * 7517 + agent_index * 5039) % 10000) / 10000.0
-    pp = (u3 + u4 - 1.0) * 0.5
+    u_p = ((tick * 4219 + 10 * 8461 + agent_index * 3037) % 1000000) / 1000000.0
+    u_p = 0.08 + u_p * 0.84
+    q_p = u_p - 0.5
+    r_p = q_p * q_p
+    numer = q_p * (2.50662824 + r_p * (-18.6150006 + r_p * (41.3911977 + r_p * (-25.4410605))))
+    denom = 1.0 + r_p * (-8.47351093 + r_p * (23.0833674 + r_p * (-21.0622410 + r_p * 3.13082910)))
+    pp = numer / denom
     if pp < -0.5:
         pp = -0.5
     if pp > 0.5:
@@ -579,16 +708,24 @@ def site_soil_step(
         prcp_10 = 0.0
 
     # Month 11 (December)
-    u1 = ((tick * 7919 + 11 * 6271 + agent_index * 1013) % 10000) / 10000.0
-    u2 = ((tick * 5381 + 11 * 3571 + agent_index * 2017) % 10000) / 10000.0
-    tp = u1 + u2 - 1.0
+    u_t = ((tick * 7919 + 11 * 6271 + agent_index * 1013) % 1000000) / 1000000.0
+    u_t = 0.08 + u_t * 0.84
+    q_t = u_t - 0.5
+    r_t = q_t * q_t
+    numer = q_t * (2.50662824 + r_t * (-18.6150006 + r_t * (41.3911977 + r_t * (-25.4410605))))
+    denom = 1.0 + r_t * (-8.47351093 + r_t * (23.0833674 + r_t * (-21.0622410 + r_t * 3.13082910)))
+    tp = numer / denom
     if tp < -1.0:
         tp = -1.0
     if tp > 1.0:
         tp = 1.0
-    u3 = ((tick * 4219 + 11 * 8461 + agent_index * 3037) % 10000) / 10000.0
-    u4 = ((tick * 3079 + 11 * 7517 + agent_index * 5039) % 10000) / 10000.0
-    pp = (u3 + u4 - 1.0) * 0.5
+    u_p = ((tick * 4219 + 11 * 8461 + agent_index * 3037) % 1000000) / 1000000.0
+    u_p = 0.08 + u_p * 0.84
+    q_p = u_p - 0.5
+    r_p = q_p * q_p
+    numer = q_p * (2.50662824 + r_p * (-18.6150006 + r_p * (41.3911977 + r_p * (-25.4410605))))
+    denom = 1.0 + r_p * (-8.47351093 + r_p * (23.0833674 + r_p * (-21.0622410 + r_p * 3.13082910)))
+    pp = numer / denom
     if pp < -0.5:
         pp = -0.5
     if pp > 0.5:
@@ -601,12 +738,8 @@ def site_soil_step(
     if prcp_11 < 0.0:
         prcp_11 = 0.0
 
-    # ========== COMPUTE ANNUAL PRECIP AND DRY_DAYS (matches GAPpy) ==========
-    total_prcp_mm = prcp_0 + prcp_1 + prcp_2 + prcp_3 + prcp_4 + prcp_5 + prcp_6 + prcp_7 + prcp_8 + prcp_9 + prcp_10 + prcp_11
-    annual_prcp_cm = total_prcp_mm / 10.0
-    dry_days = 100.0 - annual_prcp_cm
-    if dry_days < 0.0:
-        dry_days = 0.0
+    # ========== COMPUTE ANNUAL PRECIP (already in cm from gap_model.py) ==========
+    annual_prcp_cm = prcp_0 + prcp_1 + prcp_2 + prcp_3 + prcp_4 + prcp_5 + prcp_6 + prcp_7 + prcp_8 + prcp_9 + prcp_10 + prcp_11
 
     # ========== WATER BALANCE LIMITS ==========
     sbh = params_tensor[agent_index][SITE_P_BASE_H]
@@ -628,104 +761,325 @@ def site_soil_step(
     rain_n = 0.0
     freeze_days = 0.0
     flood_days = 0.0  # Days when A layer is saturated
+    drydays_upper = 0.0   # Count of upper-layer dry days
+    drydays_base = 0.0    # Count of base-layer dry days
+    total_pet = 0.0       # Accumulated potential ET
+    total_aet = 0.0       # Accumulated actual ET
+    deg_days = 0.0        # Growing degree days (base 5°C, GAPpy model.py:233-236)
+    grow_days_5 = 0.0     # Days with tavg >= 5°C (GAPpy growing season definition)
+    annual_runoff = 0.0   # Accumulated runoff for N balance (GAPpy model.py:227)
+
+    # ========== BERNOULLI RAIN-DAY PARAMETERS (GAPpy cov365a) ==========
+    # Per month: raindays = min(25, prcp/4+1), ik = int(raindays),
+    # rr = prcp/ik (amount per rain day), ss = raindays/days_in_month (rain probability),
+    # inum = float(ik) (countdown of remaining rain events)
+    # Month 0 (Jan, 31 days)
+    m0_raindays = prcp_0 / 4.0 + 1.0
+    if m0_raindays > 25.0:
+        m0_raindays = 25.0
+    m0_ik = int(m0_raindays)
+    if m0_ik < 1:
+        m0_ik = 1
+    m0_rr = prcp_0 / float(m0_ik)
+    m0_ss = m0_raindays / 31.0
+    m0_inum = float(m0_ik)
+    # Month 1 (Feb, 28 days)
+    m1_raindays = prcp_1 / 4.0 + 1.0
+    if m1_raindays > 25.0:
+        m1_raindays = 25.0
+    m1_ik = int(m1_raindays)
+    if m1_ik < 1:
+        m1_ik = 1
+    m1_rr = prcp_1 / float(m1_ik)
+    m1_ss = m1_raindays / 28.0
+    m1_inum = float(m1_ik)
+    # Month 2 (Mar, 31 days)
+    m2_raindays = prcp_2 / 4.0 + 1.0
+    if m2_raindays > 25.0:
+        m2_raindays = 25.0
+    m2_ik = int(m2_raindays)
+    if m2_ik < 1:
+        m2_ik = 1
+    m2_rr = prcp_2 / float(m2_ik)
+    m2_ss = m2_raindays / 31.0
+    m2_inum = float(m2_ik)
+    # Month 3 (Apr, 30 days)
+    m3_raindays = prcp_3 / 4.0 + 1.0
+    if m3_raindays > 25.0:
+        m3_raindays = 25.0
+    m3_ik = int(m3_raindays)
+    if m3_ik < 1:
+        m3_ik = 1
+    m3_rr = prcp_3 / float(m3_ik)
+    m3_ss = m3_raindays / 30.0
+    m3_inum = float(m3_ik)
+    # Month 4 (May, 31 days)
+    m4_raindays = prcp_4 / 4.0 + 1.0
+    if m4_raindays > 25.0:
+        m4_raindays = 25.0
+    m4_ik = int(m4_raindays)
+    if m4_ik < 1:
+        m4_ik = 1
+    m4_rr = prcp_4 / float(m4_ik)
+    m4_ss = m4_raindays / 31.0
+    m4_inum = float(m4_ik)
+    # Month 5 (Jun, 30 days)
+    m5_raindays = prcp_5 / 4.0 + 1.0
+    if m5_raindays > 25.0:
+        m5_raindays = 25.0
+    m5_ik = int(m5_raindays)
+    if m5_ik < 1:
+        m5_ik = 1
+    m5_rr = prcp_5 / float(m5_ik)
+    m5_ss = m5_raindays / 30.0
+    m5_inum = float(m5_ik)
+    # Month 6 (Jul, 31 days)
+    m6_raindays = prcp_6 / 4.0 + 1.0
+    if m6_raindays > 25.0:
+        m6_raindays = 25.0
+    m6_ik = int(m6_raindays)
+    if m6_ik < 1:
+        m6_ik = 1
+    m6_rr = prcp_6 / float(m6_ik)
+    m6_ss = m6_raindays / 31.0
+    m6_inum = float(m6_ik)
+    # Month 7 (Aug, 31 days)
+    m7_raindays = prcp_7 / 4.0 + 1.0
+    if m7_raindays > 25.0:
+        m7_raindays = 25.0
+    m7_ik = int(m7_raindays)
+    if m7_ik < 1:
+        m7_ik = 1
+    m7_rr = prcp_7 / float(m7_ik)
+    m7_ss = m7_raindays / 31.0
+    m7_inum = float(m7_ik)
+    # Month 8 (Sep, 30 days)
+    m8_raindays = prcp_8 / 4.0 + 1.0
+    if m8_raindays > 25.0:
+        m8_raindays = 25.0
+    m8_ik = int(m8_raindays)
+    if m8_ik < 1:
+        m8_ik = 1
+    m8_rr = prcp_8 / float(m8_ik)
+    m8_ss = m8_raindays / 30.0
+    m8_inum = float(m8_ik)
+    # Month 9 (Oct, 31 days)
+    m9_raindays = prcp_9 / 4.0 + 1.0
+    if m9_raindays > 25.0:
+        m9_raindays = 25.0
+    m9_ik = int(m9_raindays)
+    if m9_ik < 1:
+        m9_ik = 1
+    m9_rr = prcp_9 / float(m9_ik)
+    m9_ss = m9_raindays / 31.0
+    m9_inum = float(m9_ik)
+    # Month 10 (Nov, 30 days)
+    m10_raindays = prcp_10 / 4.0 + 1.0
+    if m10_raindays > 25.0:
+        m10_raindays = 25.0
+    m10_ik = int(m10_raindays)
+    if m10_ik < 1:
+        m10_ik = 1
+    m10_rr = prcp_10 / float(m10_ik)
+    m10_ss = m10_raindays / 30.0
+    m10_inum = float(m10_ik)
+    # Month 11 (Dec, 31 days)
+    m11_raindays = prcp_11 / 4.0 + 1.0
+    if m11_raindays > 25.0:
+        m11_raindays = 25.0
+    m11_ik = int(m11_raindays)
+    if m11_ik < 1:
+        m11_ik = 1
+    m11_rr = prcp_11 / float(m11_ik)
+    m11_ss = m11_raindays / 31.0
+    m11_inum = float(m11_ik)
 
     day = 0
     while day < 365:
-        # === Determine month and interpolate daily climate ===
-        # Using simple month assignment based on day of year
-        month = 0
-        day_in_month = day
+        # === TEMPERATURE: Linear interpolation between monthly midpoints (GAPpy cov365) ===
+        # Anchor days (0-indexed): [15,44,74,104,135,165,195,226,257,287,318,348]
+        # Days 0-14 wrap around from December
+        d_s = day
+        if day < 15:
+            d_s = day + 365
 
-        if day < 31:
-            month = 0
-            day_in_month = day
-        elif day < 59:
-            month = 1
-            day_in_month = day - 31
-        elif day < 90:
-            month = 2
-            day_in_month = day - 59
-        elif day < 120:
-            month = 3
-            day_in_month = day - 90
-        elif day < 151:
-            month = 4
-            day_in_month = day - 120
-        elif day < 181:
-            month = 5
-            day_in_month = day - 151
-        elif day < 212:
-            month = 6
-            day_in_month = day - 181
-        elif day < 243:
-            month = 7
-            day_in_month = day - 212
-        elif day < 273:
-            month = 8
-            day_in_month = day - 243
-        elif day < 304:
-            month = 9
-            day_in_month = day - 273
-        elif day < 334:
-            month = 10
-            day_in_month = day - 304
-        else:
-            month = 11
-            day_in_month = day - 334
-
-        # Get monthly values (unrolled due to CuPy JIT limitations)
         day_tmin = 0.0
         day_tmax = 0.0
-        day_prcp = 0.0
+        frac = 0.0
 
-        if month == 0:
-            day_tmin = tmin_0
-            day_tmax = tmax_0
-            day_prcp = prcp_0 / 31.0
-        elif month == 1:
-            day_tmin = tmin_1
-            day_tmax = tmax_1
-            day_prcp = prcp_1 / 28.0
-        elif month == 2:
-            day_tmin = tmin_2
-            day_tmax = tmax_2
-            day_prcp = prcp_2 / 31.0
-        elif month == 3:
-            day_tmin = tmin_3
-            day_tmax = tmax_3
-            day_prcp = prcp_3 / 30.0
-        elif month == 4:
-            day_tmin = tmin_4
-            day_tmax = tmax_4
-            day_prcp = prcp_4 / 31.0
-        elif month == 5:
-            day_tmin = tmin_5
-            day_tmax = tmax_5
-            day_prcp = prcp_5 / 30.0
-        elif month == 6:
-            day_tmin = tmin_6
-            day_tmax = tmax_6
-            day_prcp = prcp_6 / 31.0
-        elif month == 7:
-            day_tmin = tmin_7
-            day_tmax = tmax_7
-            day_prcp = prcp_7 / 31.0
-        elif month == 8:
-            day_tmin = tmin_8
-            day_tmax = tmax_8
-            day_prcp = prcp_8 / 30.0
-        elif month == 9:
-            day_tmin = tmin_9
-            day_tmax = tmax_9
-            day_prcp = prcp_9 / 31.0
-        elif month == 10:
-            day_tmin = tmin_10
-            day_tmax = tmax_10
-            day_prcp = prcp_10 / 30.0
+        if d_s < 44:
+            # Jan mid (15) → Feb mid (44), width 29
+            frac = float(d_s - 15) / 29.0
+            day_tmin = tmin_0 + frac * (tmin_1 - tmin_0)
+            day_tmax = tmax_0 + frac * (tmax_1 - tmax_0)
+        elif d_s < 74:
+            # Feb mid (44) → Mar mid (74), width 30
+            frac = float(d_s - 44) / 30.0
+            day_tmin = tmin_1 + frac * (tmin_2 - tmin_1)
+            day_tmax = tmax_1 + frac * (tmax_2 - tmax_1)
+        elif d_s < 104:
+            # Mar mid (74) → Apr mid (104), width 30
+            frac = float(d_s - 74) / 30.0
+            day_tmin = tmin_2 + frac * (tmin_3 - tmin_2)
+            day_tmax = tmax_2 + frac * (tmax_3 - tmax_2)
+        elif d_s < 135:
+            # Apr mid (104) → May mid (135), width 31
+            frac = float(d_s - 104) / 31.0
+            day_tmin = tmin_3 + frac * (tmin_4 - tmin_3)
+            day_tmax = tmax_3 + frac * (tmax_4 - tmax_3)
+        elif d_s < 165:
+            # May mid (135) → Jun mid (165), width 30
+            frac = float(d_s - 135) / 30.0
+            day_tmin = tmin_4 + frac * (tmin_5 - tmin_4)
+            day_tmax = tmax_4 + frac * (tmax_5 - tmax_4)
+        elif d_s < 195:
+            # Jun mid (165) → Jul mid (195), width 30
+            frac = float(d_s - 165) / 30.0
+            day_tmin = tmin_5 + frac * (tmin_6 - tmin_5)
+            day_tmax = tmax_5 + frac * (tmax_6 - tmax_5)
+        elif d_s < 226:
+            # Jul mid (195) → Aug mid (226), width 31
+            frac = float(d_s - 195) / 31.0
+            day_tmin = tmin_6 + frac * (tmin_7 - tmin_6)
+            day_tmax = tmax_6 + frac * (tmax_7 - tmax_6)
+        elif d_s < 257:
+            # Aug mid (226) → Sep mid (257), width 31
+            frac = float(d_s - 226) / 31.0
+            day_tmin = tmin_7 + frac * (tmin_8 - tmin_7)
+            day_tmax = tmax_7 + frac * (tmax_8 - tmax_7)
+        elif d_s < 287:
+            # Sep mid (257) → Oct mid (287), width 30
+            frac = float(d_s - 257) / 30.0
+            day_tmin = tmin_8 + frac * (tmin_9 - tmin_8)
+            day_tmax = tmax_8 + frac * (tmax_9 - tmax_8)
+        elif d_s < 318:
+            # Oct mid (287) → Nov mid (318), width 31
+            frac = float(d_s - 287) / 31.0
+            day_tmin = tmin_9 + frac * (tmin_10 - tmin_9)
+            day_tmax = tmax_9 + frac * (tmax_10 - tmax_9)
+        elif d_s < 348:
+            # Nov mid (318) → Dec mid (348), width 30
+            frac = float(d_s - 318) / 30.0
+            day_tmin = tmin_10 + frac * (tmin_11 - tmin_10)
+            day_tmax = tmax_10 + frac * (tmax_11 - tmax_10)
         else:
-            day_tmin = tmin_11
-            day_tmax = tmax_11
-            day_prcp = prcp_11 / 31.0
+            # Dec mid (348) → Jan mid next year (380), width 32
+            frac = float(d_s - 348) / 32.0
+            day_tmin = tmin_11 + frac * (tmin_0 - tmin_11)
+            day_tmax = tmax_11 + frac * (tmax_0 - tmax_11)
+
+        # === PRECIPITATION: Bernoulli rain-day allocation (GAPpy cov365a) ===
+        # Each month has ik rain events of size rr, with daily probability ss.
+        # Remaining events dumped on last day of month to preserve monthly totals.
+        day_prcp = 0.0
+        if day < 31:
+            if m0_inum > 0.5:
+                rain_hash = ((tick * 5003 + day * 7013 + agent_index * 3019) % 1000000) / 1000000.0
+                if rain_hash <= m0_ss:
+                    day_prcp = m0_rr
+                    m0_inum = m0_inum - 1.0
+            if day == 30 and m0_inum > 0.5:
+                day_prcp = day_prcp + m0_inum * m0_rr
+                m0_inum = 0.0
+        elif day < 59:
+            if m1_inum > 0.5:
+                rain_hash = ((tick * 5003 + day * 7013 + agent_index * 3019) % 1000000) / 1000000.0
+                if rain_hash <= m1_ss:
+                    day_prcp = m1_rr
+                    m1_inum = m1_inum - 1.0
+            if day == 58 and m1_inum > 0.5:
+                day_prcp = day_prcp + m1_inum * m1_rr
+                m1_inum = 0.0
+        elif day < 90:
+            if m2_inum > 0.5:
+                rain_hash = ((tick * 5003 + day * 7013 + agent_index * 3019) % 1000000) / 1000000.0
+                if rain_hash <= m2_ss:
+                    day_prcp = m2_rr
+                    m2_inum = m2_inum - 1.0
+            if day == 89 and m2_inum > 0.5:
+                day_prcp = day_prcp + m2_inum * m2_rr
+                m2_inum = 0.0
+        elif day < 120:
+            if m3_inum > 0.5:
+                rain_hash = ((tick * 5003 + day * 7013 + agent_index * 3019) % 1000000) / 1000000.0
+                if rain_hash <= m3_ss:
+                    day_prcp = m3_rr
+                    m3_inum = m3_inum - 1.0
+            if day == 119 and m3_inum > 0.5:
+                day_prcp = day_prcp + m3_inum * m3_rr
+                m3_inum = 0.0
+        elif day < 151:
+            if m4_inum > 0.5:
+                rain_hash = ((tick * 5003 + day * 7013 + agent_index * 3019) % 1000000) / 1000000.0
+                if rain_hash <= m4_ss:
+                    day_prcp = m4_rr
+                    m4_inum = m4_inum - 1.0
+            if day == 150 and m4_inum > 0.5:
+                day_prcp = day_prcp + m4_inum * m4_rr
+                m4_inum = 0.0
+        elif day < 181:
+            if m5_inum > 0.5:
+                rain_hash = ((tick * 5003 + day * 7013 + agent_index * 3019) % 1000000) / 1000000.0
+                if rain_hash <= m5_ss:
+                    day_prcp = m5_rr
+                    m5_inum = m5_inum - 1.0
+            if day == 180 and m5_inum > 0.5:
+                day_prcp = day_prcp + m5_inum * m5_rr
+                m5_inum = 0.0
+        elif day < 212:
+            if m6_inum > 0.5:
+                rain_hash = ((tick * 5003 + day * 7013 + agent_index * 3019) % 1000000) / 1000000.0
+                if rain_hash <= m6_ss:
+                    day_prcp = m6_rr
+                    m6_inum = m6_inum - 1.0
+            if day == 211 and m6_inum > 0.5:
+                day_prcp = day_prcp + m6_inum * m6_rr
+                m6_inum = 0.0
+        elif day < 243:
+            if m7_inum > 0.5:
+                rain_hash = ((tick * 5003 + day * 7013 + agent_index * 3019) % 1000000) / 1000000.0
+                if rain_hash <= m7_ss:
+                    day_prcp = m7_rr
+                    m7_inum = m7_inum - 1.0
+            if day == 242 and m7_inum > 0.5:
+                day_prcp = day_prcp + m7_inum * m7_rr
+                m7_inum = 0.0
+        elif day < 273:
+            if m8_inum > 0.5:
+                rain_hash = ((tick * 5003 + day * 7013 + agent_index * 3019) % 1000000) / 1000000.0
+                if rain_hash <= m8_ss:
+                    day_prcp = m8_rr
+                    m8_inum = m8_inum - 1.0
+            if day == 272 and m8_inum > 0.5:
+                day_prcp = day_prcp + m8_inum * m8_rr
+                m8_inum = 0.0
+        elif day < 304:
+            if m9_inum > 0.5:
+                rain_hash = ((tick * 5003 + day * 7013 + agent_index * 3019) % 1000000) / 1000000.0
+                if rain_hash <= m9_ss:
+                    day_prcp = m9_rr
+                    m9_inum = m9_inum - 1.0
+            if day == 303 and m9_inum > 0.5:
+                day_prcp = day_prcp + m9_inum * m9_rr
+                m9_inum = 0.0
+        elif day < 334:
+            if m10_inum > 0.5:
+                rain_hash = ((tick * 5003 + day * 7013 + agent_index * 3019) % 1000000) / 1000000.0
+                if rain_hash <= m10_ss:
+                    day_prcp = m10_rr
+                    m10_inum = m10_inum - 1.0
+            if day == 333 and m10_inum > 0.5:
+                day_prcp = day_prcp + m10_inum * m10_rr
+                m10_inum = 0.0
+        else:
+            if m11_inum > 0.5:
+                rain_hash = ((tick * 5003 + day * 7013 + agent_index * 3019) % 1000000) / 1000000.0
+                if rain_hash <= m11_ss:
+                    day_prcp = m11_rr
+                    m11_inum = m11_inum - 1.0
+            if day == 364 and m11_inum > 0.5:
+                day_prcp = day_prcp + m11_inum * m11_rr
+                m11_inum = 0.0
 
         day_temp = (day_tmin + day_tmax) / 2.0
 
@@ -733,42 +1087,55 @@ def site_soil_step(
         if day_temp < 0.0:
             freeze_days = freeze_days + 1.0
 
-        # Accumulate atmospheric N from precipitation (mm units)
+        # Accumulate growing degree days (base 5°C, GAPpy model.py:233-236)
+        if day_temp >= 5.0:
+            deg_days = deg_days + (day_temp - 5.0)
+            grow_days_5 = grow_days_5 + 1.0
+
+        # Accumulate atmospheric N from precipitation (already in cm from gap_model.py)
         rain_n = rain_n + day_prcp * PRCP_N
 
-        # Convert mm -> cm for water balance
-        day_prcp = day_prcp / 10.0
+        # === Calculate PET: Hargreaves method (GAPpy climate.py:85-112) ===
+        julia = day + 1  # 1-based Julian day
 
-        # === Calculate Potential Evapotranspiration (Hamon method) ===
-        day_of_year = day + 1
+        # Extraterrestrial radiation (GAPpy ex_rad function)
+        # Note: dr (distance ratio) omitted; not used in erad formula (GAPpy climate.py:100)
+        dairta = H_AS * cp.sin(H_B * float(julia) + H_PHASE)
+        yxd_pet = -cp.tan(lat_rad) * cp.tan(dairta)
 
-        # Solar declination
-        decl = 0.409 * cp.sin(2.0 * PI * day_of_year / 365.0 - 1.39)
-
-        # Day length calculation
-        # Note: cp.acos not available in CuPy JIT, use polynomial approximation
-        # acos(x) ≈ PI/2 - x*(1 + x^2*(1/6 + x^2*3/40)) for |x| < 1
-        cos_arg = -cp.tan(lat_rad) * cp.tan(decl)
-        if cos_arg < -1.0:
-            cos_arg = -1.0
-        if cos_arg > 1.0:
-            cos_arg = 1.0
+        # Clamp for acos
+        if yxd_pet >= 1.0:
+            yxd_pet = 1.0
+        if yxd_pet <= -1.0:
+            yxd_pet = -1.0
 
         # Polynomial approximation for acos (accurate to ~0.01 radians)
-        # acos(x) = PI/2 - asin(x), and asin(x) ≈ x + x^3/6 + 3x^5/40 + ...
-        x2 = cos_arg * cos_arg
-        asin_approx = cos_arg * (1.0 + x2 * (0.16666667 + x2 * 0.075))
-        ws = 1.5707963 - asin_approx  # PI/2 - asin(cos_arg) = acos(cos_arg)
-        daylength_hours = 24.0 * ws / PI
+        # acos(x) = PI/2 - asin(x), asin(x) ≈ x + x^3/6 + 3x^5/40
+        omega = 0.0
+        if yxd_pet >= 1.0:
+            omega = 0.0
+        elif yxd_pet <= -1.0:
+            omega = PI
+        else:
+            x2_pet = yxd_pet * yxd_pet
+            asin_pet = yxd_pet * (1.0 + x2_pet * (0.16666667 + x2_pet * 0.075))
+            omega = 1.5707963 - asin_pet  # PI/2 - asin = acos
 
-        # Potential evapotranspiration
+        erad = H_AMP * cp.cos(lat_rad) * cp.cos(dairta) * (cp.sin(omega) - omega * cp.cos(omega))
+        if erad < 0.0:
+            erad = 0.0
+
+        # Hargreaves PET (GAPpy climate.py:107-112)
         pot_ev_day = 0.0
         if day_temp > 0.0:
-            sat_vap_density = 0.622 * 6.108 * cp.exp(17.27 * day_temp / (237.3 + day_temp))
-            pot_ev_day = 0.1651 * daylength_hours * sat_vap_density / (day_temp + 273.3)
+            tdiff = day_tmax - day_tmin
+            if tdiff < 0.0:
+                tdiff = 0.0
+            pot_ev_day = H_COEFF * (tdiff ** 0.5) * (day_temp + H_ADDON) * erad
 
         # === SOIL WATER BALANCE (from UVAFME soil.py:soil_water) ===
-        freeze = freeze_days / (day + 1.0)  # Running freeze fraction
+        # GAPpy: freeze is always 0.0 (local variable never updated, dead code)
+        freeze = 0.0
 
         # Update water limits based on current A0 carbon
         aow_min = ao_c0 * AO_MIN
@@ -911,7 +1278,10 @@ def site_soil_step(
 
                 runoff = lossslp
 
-            lai_w0 = laiw
+            # GAPpy: lai_w0 is NOT set to laiw in the evaporation path.
+            # In excess path: lai_w0 stays unchanged (original value).
+            # In deficit path: lai_w0 was already decremented by lai_w1 above.
+            # Only the no-evaporation path (pot_ev <= 0) sets lai_w0 = laiw.
 
         # Calculate moisture scaling factors
         aow0_scaled = ao_w0 / aow_max
@@ -923,6 +1293,30 @@ def site_soil_step(
         # UVAFME considers flooding when soil water is at or above field capacity
         if sa_fc > 0.0 and sa_w0 >= sa_fc * 0.95:
             flood_days = flood_days + 1.0
+
+        # Track dry days from soil water state (GAPpy model.py:238-245)
+        sbw0_scaled_by_min = 1.0
+        if sbw_min > 0.001:
+            sbw0_scaled_by_min = sb_w0 / sbw_min
+        sbw0_scaled_by_max = 1.0
+        if sbw_max > 0.001:
+            sbw0_scaled_by_max = sb_w0 / sbw_max
+        saw0_scaled_by_wp = 1.0
+        if sa_pwp > 0.001:
+            saw0_scaled_by_wp = sa_w0 / sa_pwp
+
+        # Upper layer dry: all three conditions below capacity
+        if saw0_scaled < 1.0001 and sbw0_scaled_by_min < 1.0001 and sbw0_scaled_by_max < 1.0001:
+            drydays_upper = drydays_upper + 1.0
+
+        # Base layer dry: A layer water below wilting point
+        if saw0_scaled_by_wp < 1.0001:
+            drydays_base = drydays_base + 1.0
+
+        # Accumulate PET, AET, and runoff
+        total_pet = total_pet + pot_ev_day
+        total_aet = total_aet + act_ev_day
+        annual_runoff = annual_runoff + runoff  # For N balance (GAPpy model.py:227)
 
         # === SOIL DECOMPOSITION (from UVAFME soil.py:soil_decomp) ===
         # A0 layer C/N ratio
@@ -1004,6 +1398,41 @@ def site_soil_step(
 
         day = day + 1
 
+    # ========== NORMALIZE DRY DAYS TO FRACTIONS (GAPpy model.py:261-262) ==========
+    # GAPpy: growdays = count of days with tavg >= 5°C (not 365 - freeze_days)
+    growdays = grow_days_5
+    if growdays < 1.0:
+        growdays = 1.0
+
+    dry_days_frac = drydays_upper / growdays
+    dry_days_base_frac = drydays_base / growdays
+
+    # Cap upper-layer drought by rain/PET ratio (GAPpy)
+    if total_pet > 0.001:
+        rain_ratio = annual_prcp_cm / total_pet
+        if rain_ratio > 1.0:
+            rain_ratio = 1.0
+        aet_ratio = total_aet / total_pet
+        if aet_ratio > 1.0:
+            aet_ratio = 1.0
+        tmp_cap = rain_ratio
+        if aet_ratio > rain_ratio:
+            tmp_cap = aet_ratio
+        cap = 1.0 - tmp_cap
+        if dry_days_frac > cap:
+            dry_days_frac = cap
+
+    if dry_days_frac < 0.0:
+        dry_days_frac = 0.0
+    if dry_days_frac > 1.0:
+        dry_days_frac = 1.0
+    if dry_days_base_frac < 0.0:
+        dry_days_base_frac = 0.0
+    if dry_days_base_frac > 1.0:
+        dry_days_base_frac = 1.0
+
+    dry_days = dry_days_frac
+
     # ========== WRITE FINAL RESULTS ==========
     # Soil pools (params - private)
     params_tensor[agent_index][SITE_P_A0_C] = ao_c0
@@ -1016,6 +1445,10 @@ def site_soil_step(
     params_tensor[agent_index][SITE_P_A_W] = sa_w0
     params_tensor[agent_index][SITE_P_BL_W] = sb_w0
     params_tensor[agent_index][SITE_P_LAI_W0] = lai_w0
+    params_tensor[agent_index][SITE_P_ANNUAL_RUNOFF] = annual_runoff  # For N balance at P10
+
+    # Growing degree days (accumulated daily, base 5°C)
+    states_tensor[agent_index][SITE_S_DEG_DAYS] = deg_days
 
     # Available N = mineralization + atmospheric deposition
     states_tensor[agent_index][SITE_S_AVAIL_N] = total_avail_n + rain_n
@@ -1023,8 +1456,11 @@ def site_soil_step(
     # Flood days for this year
     states_tensor[agent_index][SITE_S_FLOOD_DAYS] = flood_days
 
-    # Dry days recomputed from perturbed annual precipitation
+    # Dry days from soil water balance (fraction 0-1)
     states_tensor[agent_index][SITE_S_DRY_DAYS] = dry_days
+
+    # Base layer drought fraction (for intolerant species dual-metric)
+    states_tensor[agent_index][SITE_S_DRY_DAYS_BASE] = dry_days_base_frac
 
     # ========== FIRE PROBABILITY ==========
     # Fire probability from CSV (per 1000 years, already converted to annual at load)
@@ -1048,7 +1484,7 @@ def site_soil_step(
         fire_prob = 0.15  # Cap at 15% annual probability
 
     # Stochastic fire check (deterministic based on tick)
-    fire_rand = ((tick * 1021 + agent_index * 1019) % 10000) / 10000.0
+    fire_rand = ((tick * 1021 + agent_index * 1019) % 1000000) / 1000000.0
     fire_intensity = 0.0
     if fire_rand < fire_prob:
         # Fire occurs - intensity based on dry conditions
@@ -1057,3 +1493,17 @@ def site_soil_step(
             fire_intensity = 1.0
 
     states_tensor[agent_index][SITE_S_FIRE_INTENSITY] = fire_intensity
+
+    # ========== WIND PROBABILITY (GAPpy model.py:623-655) ==========
+    wind_prob = params_tensor[agent_index][SITE_P_WIND_PROB]
+
+    # Stochastic wind check (separate hash from fire)
+    wind_rand = ((tick * 2039 + agent_index * 2027) % 1000000) / 1000000.0
+    wind_intensity = 0.0
+    if wind_rand < wind_prob and fire_intensity < 0.01:
+        # Wind occurs (only if no fire this year - fire takes precedence, GAPpy model.py:630)
+        wind_intensity = 0.5 + wind_rand * 1.0  # 0.5 to ~1.0 intensity
+        if wind_intensity > 1.0:
+            wind_intensity = 1.0
+
+    states_tensor[agent_index][SITE_S_WIND_INTENSITY] = wind_intensity

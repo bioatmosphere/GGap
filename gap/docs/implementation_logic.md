@@ -4,7 +4,7 @@ This document explains the detailed logic of the GGap model implementation, incl
 
 ## Overview
 
-GGap is a GPU-accelerated forest gap dynamics model that implements GAPpy/UVAFME processes using the SAGESim agent-based framework. It uses a two-phase tree growth pattern with soil-first ordering and renewal-last ordering, matching GAPpy's annual cycle.
+GGap is a GPU-accelerated forest gap dynamics model that implements GAPpy/UVAFME processes using the SAGESim agent-based framework. It uses an 11-priority execution pipeline (P0-P10) with soil-first ordering, two-phase tree growth, and renewal-last ordering, matching GAPpy's annual cycle.
 
 ### Agent Hierarchy
 
@@ -47,20 +47,24 @@ bio_geo_climate → canopy → growth → mortality → renewal
 
 Our priority mapping:
 ```
-P0: Gap litter aggregate   ─┐
-P1: Site soil               ─┘ bio_geo_climate (soil first)
-P2: Tree potential growth      canopy + growth phase 1 (env stress, light, n_demand)
-P3: Gap N demand aggregate  ─┐
-P4: Site nutrient            │ growth phase 2 (nutrient feedback)
-P5: Gap sync                ─┘
-P6: Tree actual growth         growth finalization + mortality + renewal (last)
+P0:  Gap litter aggregate    ─┐
+P1:  Site soil                ─┘ bio_geo_climate (soil first)
+P2:  Gap climate relay           climate Site→Gap (eliminates 1-tick lag)
+P3:  Tree potential growth       canopy + growth phase 1 (env stress, light, n_demand)
+P4:  Gap N demand aggregate  ─┐
+P5:  Gap sync (N ratio)      ─┘ growth phase 2 (per-gap nutrient feedback)
+P6:  Tree template renewal       renewal phase 1 (seedbank/seedling/weight)
+P7:  Gap recruit aggregate       renewal phase 2 (density-based nrenew)
+P8:  Tree actual growth          growth finalization + mortality + recruitment
+P9:  Gap N consumed aggregate ─┐
+P10: Site N balance           ─┘ same-tick N balance
 ```
 
 ---
 
 ## Step Function Execution Flow
 
-Each simulation tick executes seven step functions in priority order:
+Each simulation tick executes eleven step functions in priority order:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -70,233 +74,300 @@ Each simulation tick executes seven step functions in priority order:
 │  Priority 0: gap_litter_aggregate_step (Gap)                    │
 │  ─────────────────────────────────────────────────────────────  │
 │                                                                 │
-│  1. AGGREGATE LITTER FROM TREES                                 │
+│  1. AGGREGATE LITTER + LAI FROM TREES                           │
 │     - Loop through Tree neighbors                               │
-│     - Sum litter_c, litter_n (above-ground) from prev tick P6   │
-│     - Sum litter_c_bg, litter_n_bg (below-ground roots)         │
+│     - Sum litter_c, litter_n (above-ground) from prev tick P8   │
+│     - Compute per-tree LAI = dc² × leafdiam_a                  │
+│     - Sum total LAI, normalize by PLOTSIZE=500                  │
+│     - Sum total_seedling_weight across templates                │
 │     - Count living trees and dormant slots                      │
 │                                                                 │
-│  2. READ GROWMAX FROM TEMPLATES                                 │
-│     - For template neighbors: read env_stress (= regrowth)     │
-│     - growmax = max regrowth across all templates               │
-│     - env_stress written at P6 of previous tick                 │
-│                                                                 │
-│  3. DENSITY-BASED RECRUITMENT (GAPpy model.py:833-837)          │
-│     - total_capacity = living_count + dormant_count             │
-│     - max_renew = total_capacity * growmax - living_count       │
-│     - Cap at half capacity: min(max_renew, total_capacity*0.5)  │
-│     - Floor at 3: max(nrenew, 3)                                │
-│     - Cap by available: min(nrenew, total_capacity - living)    │
-│     - Cap by dormant slots: min(nrenew, dormant_count)          │
-│                                                                 │
 │  WRITES:                                                        │
-│     - states: litter_accum_c/n, litter_accum_c/n_bg (for Site) │
-│     - states: num_to_recruit, recruit_rand_seed (for Trees)     │
+│     - states: litter_accum_c/n (for Site at P1)                │
+│     - states: total_lai (for Site at P1, canopy water balance)  │
+│     - states: total_seedling_weight (for P6 proportional decr.) │
 │                                                                 │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  Priority 1: site_soil_step (Site)                              │
 │  ─────────────────────────────────────────────────────────────  │
 │                                                                 │
-│  1. READ LITTER FROM GAPS                                       │
-│     - Sum litter_accum_c/n + litter_accum_c/n_bg from Gaps     │
+│  1. READ LITTER + LAI FROM GAPS                                 │
+│     - Sum litter_accum_c/n from Gaps (unit scaled: UNIT_CONV)   │
+│     - Average total_lai across Gaps for canopy water balance    │
 │     - Above-ground litter → A0 layer (pulse at year start)     │
-│     - Below-ground litter → A layer (pulse at year start)      │
 │                                                                 │
 │  2. MONTHLY CLIMATE PERTURBATION                                │
 │     - For each month (0-11), generate pseudo-random perturbation│
+│     - BSM inverse normal CDF (rational polynomial approx)       │
 │     - Temperature perturbation clamped to [-1, 1]              │
 │     - Precipitation perturbation clamped to [-0.5, 0.5]        │
 │     - Apply: tmin/tmax += pert * std_dev, prcp += pert * std   │
 │     - Compute annual precip and dry_days from perturbed climate │
-│       dry_days = max(0, 100 - annual_precip_cm)                │
 │                                                                 │
 │  3. DAILY LOOP (365 days)                                       │
 │     For each day:                                               │
 │                                                                 │
-│     a. CLIMATE INTERPOLATION                                    │
-│        - Determine month from day of year                       │
-│        - Get daily tmin, tmax, precip from perturbed monthly    │
-│        - Track freeze days                                      │
-│        - Accumulate atmospheric N from precipitation (mm units) │
-│        - Convert precip mm → cm for water balance               │
+│     a. CLIMATE INTERPOLATION (linear between monthly midpoints) │
+│        - Get daily tmin, tmax from perturbed monthly values     │
+│        - Track freeze days, accumulate degree days (base 5°C)   │
+│        - Accumulate atmospheric N from precipitation            │
 │                                                                 │
-│     b. POTENTIAL EVAPOTRANSPIRATION (Hamon method)              │
-│        - Solar declination, day length, PET from temperature    │
+│     b. PRECIPITATION (Bernoulli rain-day allocation, cov365a)   │
+│        - Per month: raindays = min(25, prcp/4+1)               │
+│        - Each day: hash-based probability of rain event         │
+│        - Rain day gets prcp/ik; dry day gets 0                  │
+│        - Remainder dumped on last day of month                  │
 │                                                                 │
-│     c. SOIL WATER BALANCE                                       │
+│     c. POTENTIAL EVAPOTRANSPIRATION (Hargreaves method)         │
+│        - Solar declination, extraterrestrial radiation           │
+│        - PET from tmin, tmax, temperature range                 │
+│                                                                 │
+│     d. SOIL WATER BALANCE                                       │
 │        - Route precipitation through canopy → A0 → A → Base    │
-│        - Apply slope runoff                                     │
+│        - Apply slope runoff, accumulate annual_runoff           │
 │        - Evapotranspiration draws from layers                   │
 │        - Track flood days (A layer saturated)                   │
 │                                                                 │
-│     d. SOIL DECOMPOSITION (three-layer)                         │
+│     e. SOIL DECOMPOSITION (three-layer)                         │
 │        - A0 respiration → transfer to A layer                   │
 │        - A layer respiration → N mineralization (avail_n)       │
 │        - A layer transfer to Base layer                         │
 │        - Base layer respiration                                 │
 │        - Temperature and moisture adjustments                   │
 │        - Division guards: skip decomposition when C/N ≤ 0.001  │
-│          (prevents NaN when pools deplete with empty start)     │
 │                                                                 │
-│  3. FIRE PROBABILITY                                            │
-│     - Base probability: 1%, increases with dry conditions       │
-│     - Cap at 15%, stochastic fire occurrence                    │
-│     - Fire intensity: 0.3 - 1.0                                │
+│  4. FIRE/WIND PROBABILITY                                       │
+│     - Fire: base 1%, increases with dry conditions, cap 15%    │
+│     - Wind: from CSV wind_prob, fire takes precedence           │
+│     - Stochastic intensity: fire 0.3-1.0, wind 0.5-1.0        │
 │                                                                 │
 │  WRITES:                                                        │
-│     - params: soil pools (A0/A/BL C, N, W)                     │
-│     - states: avail_n, deg_days, dry_days, flood_days,          │
-│              fire_intensity                                      │
+│     - params: soil pools (A0/A/BL C, N, W), annual_runoff      │
+│     - states: deg_days, dry_days, avail_n, flood_days,          │
+│              fire_intensity, wind_intensity, dry_days_base       │
 │                                                                 │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  Priority 2: tree_potential_growth_step (Tree)                  │
+│  Priority 2: gap_climate_relay_step (Gap)                       │
+│  ─────────────────────────────────────────────────────────────  │
+│                                                                 │
+│  - Read all climate + disturbance from Site (P1, same tick)     │
+│  - Copy to own states: deg_days, dry_days, avail_n, flood_days, │
+│    fire_intensity, wind_intensity, dry_days_base                │
+│  - Eliminates 1-tick climate lag for trees at P3                │
+│                                                                 │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Priority 3: tree_potential_growth_step (Tree)                  │
 │  ─────────────────────────────────────────────────────────────  │
 │  Executes for living trees only (is_alive > 0.5)               │
 │                                                                 │
 │  1. ENVIRONMENTAL RESPONSE                                      │
-│     - Read climate from Gap states (deg_days, dry_days, etc.)   │
+│     - Read climate from Gap states (from P2, same tick)         │
 │     - Read neighbor heights from Tree states_db (light comp.)   │
 │     - Calculate growth factors:                                 │
 │       fc_degday:  parabolic temperature response                │
-│       fc_drought: exponential drought response (tol 1-5)        │
+│       fc_drought: exponential drought response (tol 1-6)        │
 │       fc_flood:   linear flood response (tol 1-6)              │
 │       fc_light:   Beer-Lambert canopy light attenuation         │
+│       forska_shade: light at canopy base (self-pruning check)   │
 │                                                                 │
 │  2. POTENTIAL GROWTH                                            │
 │     - env_stress = fc_degday * fc_drought * fc_light * fc_flood │
-│       (NO fc_nutrient — applied later at P6)                    │
+│       (NO fc_nutrient — applied later at P8)                    │
 │     - diam_max = optimal diameter increment for current size    │
 │     - Compute potential biomass change                          │
 │     - Compute n_demand from potential growth                    │
 │                                                                 │
 │  WRITES:                                                        │
-│     - params: env_stress, diam_max, light_avail, fc_* factors   │
-│     - states: n_demand (Gap aggregates at P3)                   │
+│     - params: env_stress, diam_max, light_avail, fc_*,          │
+│              forska_shade                                        │
+│     - states: n_demand (Gap aggregates at P4)                   │
 │                                                                 │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  Priority 3: gap_demand_aggregate_step (Gap)                    │
+│  Priority 4: gap_demand_aggregate_step (Gap)                    │
 │  ─────────────────────────────────────────────────────────────  │
 │                                                                 │
-│  - Sum n_demand from all living Tree neighbors (from P2)        │
-│  - Write total_n_demand to Gap states (Site reads at P4)        │
-│                                                                 │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  Priority 4: site_nutrient_step (Site)                          │
-│  ─────────────────────────────────────────────────────────────  │
-│                                                                 │
-│  - Read avail_n from own states (from P1, same tick)            │
-│  - Sum total_n_demand from all Gap neighbors (from P3)          │
-│  - n_supply_ratio = avail_n / total_n_demand                    │
-│  - Cap at 2.0, guard against small demand (< 0.0001)           │
-│  - Write n_supply_ratio to own states (Gap reads at P5)         │
+│  - Sum n_demand from all living Tree neighbors (from P3)        │
+│  - Write total_n_demand to Gap states (read at P5)              │
 │                                                                 │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  Priority 5: gap_sync_step (Gap)                                │
 │  ─────────────────────────────────────────────────────────────  │
 │                                                                 │
-│  - Read climate + n_supply_ratio from Site neighbor              │
-│  - Copy all values to own states (Trees read at P2 and P6)     │
-│  - Clear litter accumulators (consumed by Site at P1)           │
+│  - Compute PER-GAP n_supply_ratio:                              │
+│    avail_n / (total_n_demand * UNIT_CONV), capped at 1.0       │
+│  - Write n_supply_ratio to own states                           │
+│  - Clear litter_accum, total_lai, n_consumed accumulators       │
 │                                                                 │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  Priority 6: tree_actual_growth_step (Tree)                     │
+│  Priority 6: tree_template_renewal_step (Tree)                  │
 │  ─────────────────────────────────────────────────────────────  │
-│  Three branches based on is_alive:                              │
-│                                                                 │
-│  BRANCH 1: LIVING TREES (is_alive > 0.5)                       │
-│  ─────────────────────────────────────────                      │
-│  a. NUTRIENT RESPONSE                                           │
-│     - Read n_supply_ratio from Gap (written at P5, same tick)   │
-│     - fc_nutrient based on lownutr_tol (1-3)                   │
-│                                                                 │
-│  b. FINAL GROWTH                                                │
-│     - growth_factor = env_stress (from P2) * fc_nutrient        │
-│     - diam_increment = diam_max * growth_factor                 │
-│     - Update diameter, height (Forska equation), biomass        │
-│                                                                 │
-│  c. CANOPY SELF-PRUNING                                         │
-│     - When growth_factor <= 0.05, crown base rises              │
-│     - Biomass difference becomes litter                         │
-│                                                                 │
-│  d. MORTALITY (GAPpy two-check model)                           │
-│     - Age survival: age_check / max_age (tol 1-3)              │
-│     - Growth survival: stress_check if growth below threshold   │
-│     - Tree dies if EITHER check fails                           │
-│     - Dead tree: all biomass → litter (70% above, 30% below)   │
-│     - Surviving tree: annual leaf litter                        │
-│                                                                 │
-│  e. LITTER OUTPUT                                               │
-│     - Living: leaf litter (deciduous 100%, conifer ~32%)        │
-│     - Dying: all biomass as litter (70/30 above/below split)    │
-│                                                                 │
-│  BRANCH 2: TEMPLATE RENEWAL (is_alive < -0.5)                  │
-│  ─────────────────────────────────────────────                  │
+│  Templates only (is_alive < -0.5)                               │
 │  Matches GAPpy renewal() (model.py:792-982)                    │
 │                                                                 │
 │  a. ENVIRONMENTAL RESPONSE                                      │
-│     - Read climate from Gap (same-tick from P5)                 │
+│     - Read climate from Gap (same-tick from P2)                 │
 │     - Compute fc_degday, fc_drought, fc_flood, fc_nutrient      │
 │     - Compute fc_light at ground level (all neighbors shade)    │
+│     - Forska shade self-pruning check                           │
 │                                                                 │
 │  b. REGROWTH                                                    │
 │     - regrowth = fc_degday * fc_drought * fc_flood              │
 │                  * fc_nutrient * fc_light                        │
-│     - If regrowth <= 0.05: set to 0                             │
+│     - Two-threshold: >= 0.05 germinate, >= 0.01 keep seedbank  │
 │                                                                 │
-│  c. SAME-SPECIES COUNT                                          │
-│     - Count living trees with matching species_id (avail_spec)  │
+│  c. AVAIL_SPEC (binary maturity flag)                           │
+│     - 1.0 if any neighbor tree of same species has              │
+│       diam > max_diam * 0.05; else 0.0                          │
 │                                                                 │
-│  d. SEEDBANK UPDATE (GAPpy model.py:843-856)                   │
+│  d. FIRE/WIND SEEDLING RESET (outside avail_N gate)            │
+│     - Fire: seedling = (invader*10 + sprout*avail) * fc_fire    │
+│     - Wind: seedling += invader + sprout * avail                │
+│     - weight = 0 (no recruitment in disturbance year)           │
+│                                                                 │
+│  e. SEEDBANK UPDATE (gated on avail_n > 0)                     │
 │     - seedbank += invader + seed * avail_spec                   │
 │                  + sprout * avail_spec                           │
 │     - If regrowth >= 0.05: seedling += seedbank; seedbank = 0   │
-│     - Else: seedbank *= seed_surv (decay)                       │
+│     - Else if regrowth >= 0.01: seedbank *= seed_surv (decay)  │
+│     - Else: seedbank = 0 (conditions too poor)                  │
 │                                                                 │
-│  e. RECRUITMENT WEIGHT                                          │
+│  f. RECRUITMENT WEIGHT                                          │
 │     - weight = seedling * regrowth                              │
+│     - Floor: if weight > 0 and < 0.01 → weight = 0.01          │
 │                                                                 │
-│  f. SEEDLING SURVIVAL (GAPpy model.py:969-972)                  │
+│  g. SEEDLING DECREMENT (proportional, skipped during fire/wind) │
+│     - my_share = num_to_recruit * old_weight / total_weight     │
+│     - seedling -= my_share / PLOTSIZE                           │
+│                                                                 │
+│  h. SEEDLING SURVIVAL (gated on avail_n > 0)                   │
 │     - seedling *= seedling_lg (annual survival rate)            │
 │                                                                 │
-│  g. OUTPUTS                                                     │
-│     - params: seedbank, seedling, env_stress (= regrowth)       │
-│     - states_db: seedling_weight (dormant reads same priority)  │
+│  i. OUTPUTS                                                     │
+│     - params: seedbank, seedling, env_stress (= regrowth),      │
+│              seedling_weight (P8 dormant slots read same tick)   │
 │                                                                 │
-│  BRANCH 3: DORMANT ACTIVATION (is_alive == 0)                  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Priority 7: gap_recruit_aggregate_step (Gap)                   │
+│  ─────────────────────────────────────────────────────────────  │
+│                                                                 │
+│  - Read template regrowth from Tree.params (from P6, same tick) │
+│  - Count living trees and free slots from Tree.states_db        │
+│  - growmax = max regrowth across all templates                  │
+│  - DENSITY-BASED RECRUITMENT (GAPpy model.py:833-837):          │
+│    max_renew = int(PLOTSIZE * growmax) - living_count            │
+│    cap at int(PLOTSIZE * 0.5), floor at 3                       │
+│    cap by int(PLOTSIZE) - living_count                           │
+│  - recruit_prob = nrenew / free_slot_count                      │
+│  - Write recruit_prob + recruit_rand_seed to Gap states          │
+│                                                                 │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Priority 8: tree_actual_growth_step (Tree)                     │
+│  ─────────────────────────────────────────────────────────────  │
+│  Two branches based on is_alive:                                │
+│                                                                 │
+│  BRANCH 1: LIVING TREES (is_alive > 0.5)                       │
+│  ─────────────────────────────────────────                      │
+│  a. GROWTH (runs first, before fire/wind check)                 │
+│     - Read env_stress, diam_max from params (P3, same tick)     │
+│     - Read n_supply_ratio from Gap (P5, same tick)              │
+│     - fc_nutrient based on lownutr_tol (1-3)                   │
+│     - growth_factor = env_stress * fc_nutrient                  │
+│     - diam_increment = diam_max * growth_factor                 │
+│     - Update diameter, height (Forska equation), biomass        │
+│                                                                 │
+│  b. CANOPY SELF-PRUNING (Forska)                                │
+│     - check = fc_degday * fc_drought * fc_flood * forska_shade  │
+│              * fc_nutrient                                       │
+│     - When check <= 0.5, crown base rises (integer layers)      │
+│     - Biomass difference becomes litter                         │
+│                                                                 │
+│  c. FIRE/WIND MORTALITY (checked after growth)                  │
+│     - If fire_intensity > 0.01 OR wind_intensity > 0.01:       │
+│       immediate death, all post-growth biomass → A0 litter      │
+│                                                                 │
+│  d. NATURAL MORTALITY (GAPpy two-check model)                   │
+│     - Age survival: age_check / max_age (tol 1-3)              │
+│     - Growth survival: stress_check if growth below threshold   │
+│     - Tree dies if EITHER check fails                           │
+│     - Dead tree: all biomass → litter                           │
+│     - Surviving tree: annual leaf litter                        │
+│                                                                 │
+│  e. N CONSUMED (pre-pruning values)                             │
+│     - n_consumed = ΔbiomC/STEM_C_N + Δleaf_N                   │
+│     - Conifer leaf N: CON_LEAF_B * Δleaf / CON_LEAF_C_N        │
+│     - Deciduous leaf N: Δleaf / DEC_LEAF_C_N                   │
+│                                                                 │
+│  BRANCH 2: DORMANT ACTIVATION (is_alive == 0)                  │
 │  ─────────────────────────────────────────────                  │
 │  Recruitment happens last, matching GAPpy ordering.             │
 │  Seedlings don't grow until next tick.                          │
 │                                                                 │
 │  a. READ RECRUITMENT INFO                                       │
-│     - num_to_recruit from Gap (written at P0)                   │
+│     - recruit_prob from Gap (written at P7, same tick)          │
 │     - recruit_rand_seed for deterministic selection             │
 │                                                                 │
-│  b. SLOT PRIORITY                                               │
+│  b. SLOT SELECTION                                              │
 │     - Hash agent_index with rand seed for selection priority    │
-│     - If slot_priority < recruit_threshold: recruit             │
+│     - If slot_priority < recruit_prob: recruit                  │
 │                                                                 │
 │  c. SPECIES SELECTION                                           │
 │     - Iterate template neighbors                                │
-│     - Read seedling_weight from states_db (written same P6)     │
+│     - Read seedling_weight from params (written at P6, same     │
+│       tick via params — no double buffer needed)                 │
 │     - Select species weighted by seedling_weight                │
-│     - Minimum weight 0.01 per template (ensures all species     │
-│       have a chance even with zero seedlings)                   │
+│     - Minimum weight 0.01 per template (baseline chance)        │
 │                                                                 │
 │  d. INITIALIZE SEEDLING                                         │
 │     - Copy species traits [0-21] + seed_surv + seedling_lg      │
-│     - Seedling diameter: uniform [0.5, 2.5] cm                  │
-│       (approximates GAPpy's 1.5 + N(0,1))                      │
+│     - Seedling diameter from species-specific calculation        │
 │     - Height from Forska equation                               │
+│     - Conifer: leaf_bm = 0.0 (first-tick, no leaf mass yet)     │
 │     - Set is_alive = 1.0 (visible next tick via double buffer)  │
 │                                                                 │
+│  e. SEEDLING N CONSUMED                                         │
+│     - n_consumed = leaf/C_N + biomC/STEM_C_N                   │
+│     - Seedling litter: conifer leaf_bm*0.3 + C/N; dec leaf_bm   │
+│                                                                 │
 │  ALL BRANCHES WRITE:                                            │
-│     - states: litter_c/n, litter_c/n_bg (0 for dormant/template)│
+│     - states: litter_c/n, n_consumed                            │
+│                                                                 │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Priority 9: gap_nconsumed_aggregate_step (Gap)                 │
+│  ─────────────────────────────────────────────────────────────  │
+│                                                                 │
+│  - Sum n_consumed from all trees (from P8, same tick)           │
+│  - Skip templates (is_alive < -0.5)                             │
+│  - Write total n_consumed to Gap states (Site reads at P10)     │
+│                                                                 │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Priority 10: site_nbalance_step (Site)                         │
+│  ─────────────────────────────────────────────────────────────  │
+│                                                                 │
+│  - Read avail_n (from P1) + annual_runoff (from P1)             │
+│  - Sum n_consumed from all Gap neighbors (from P9, same tick)   │
+│  - Scale: total_n_consumed * UNIT_CONV / gap_count              │
+│  - surplus = avail_n - scaled_n_consumed                        │
+│  - If surplus > 0: return to A layer minus leach fraction       │
+│    leach_frac = min(annual_runoff/1000, 0.1)                    │
+│  - If surplus ≤ 0: debit A layer (surplus is negative)          │
+│  - Runoff leaching (always): A_n -= 0.00002 * annual_runoff    │
+│  - Transfer leached N×20 C + leached N to base layer            │
+│                                                                 │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Swap double-buffered data (states_db write → read)             │
+│  New is_alive, diam, height, canopy_ht, seedling_weight         │
+│  visible to all readers next tick                               │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -311,37 +382,51 @@ Each simulation tick executes seven step functions in priority order:
 
     ┌────────────────────────────────────────────────────────────┐
     │                                                            │
-    │   P0: Gap reads Tree litter/counts from prev tick          │
-    │        → writes litter_accum, num_to_recruit               │
+    │   P0: Gap reads Tree litter/LAI/counts from prev tick      │
+    │        → writes litter_accum, total_lai, seedling_weights  │
     │                     │                                      │
     │                     ↓                                      │
-    │   P1: Site reads Gap litter_accum                          │
+    │   P1: Site reads Gap litter + LAI                          │
     │        → soil decomposition (365 daily steps)              │
-    │        → writes avail_n, flood_days, fire_intensity        │
+    │        → writes avail_n, fire/wind, climate                │
     │                     │                                      │
     │                     ↓                                      │
-    │   P2: Trees read Gap climate (from P5 prev tick)           │
+    │   P2: Gap relays Site climate (same tick!)                 │
+    │        → copies deg_days, avail_n, fire/wind to Gap states │
+    │                     │                                      │
+    │                     ↓                                      │
+    │   P3: Trees read Gap climate (from P2, same tick)          │
     │        + read Tree heights (states_db, double buffered)    │
-    │        → potential growth, light competition               │
+    │        → potential growth, light competition, forska shade │
     │        → writes env_stress, diam_max, n_demand             │
     │                     │                                      │
     │                     ↓                                      │
-    │   P3: Gap reads Tree n_demand                              │
-    │        → writes total_n_demand                             │
+    │   P4: Gap reads Tree n_demand → total_n_demand             │
     │                     │                                      │
     │                     ↓                                      │
-    │   P4: Site reads own avail_n + Gap total_n_demand          │
-    │        → n_supply_ratio = avail_n / total_n_demand         │
+    │   P5: Gap computes per-gap N ratio + clears accumulators   │
+    │        → n_supply_ratio = avail_n / (demand * UNIT_CONV)   │
     │                     │                                      │
     │                     ↓                                      │
-    │   P5: Gap reads Site climate + n_supply_ratio              │
-    │        → relays to own states, clears litter accumulators  │
+    │   P6: Templates compute renewal (seedbank/seedling/weight) │
+    │        → fire/wind seedling reset (outside N gate)         │
+    │        → writes seedling_weight to params (P8 reads)       │
     │                     │                                      │
     │                     ↓                                      │
-    │   P6: Trees read Gap n_supply_ratio (same tick!)           │
-    │        Living: final growth + mortality + litter            │
-    │        Templates: renewal (seedbank/seedling/weight)       │
+    │   P7: Gap counts recruits from template regrowth           │
+    │        → recruit_prob = nrenew / free_slots                │
+    │                     │                                      │
+    │                     ↓                                      │
+    │   P8: Trees read n_supply_ratio (same tick!)               │
+    │        Living: growth → fire/wind → mortality → litter     │
     │        Dormant: species selection + activation              │
+    │        → writes litter, n_consumed                         │
+    │                     │                                      │
+    │                     ↓                                      │
+    │   P9: Gap aggregates n_consumed from trees                 │
+    │                     │                                      │
+    │                     ↓                                      │
+    │   P10: Site applies N balance (surplus/deficit + leaching) │
     │                     │                                      │
     │                     ↓                                      │
     │   ┌─────────────────────────────────────────────┐          │
@@ -360,14 +445,17 @@ Each simulation tick executes seven step functions in priority order:
 | GAPpy Process | GGap Implementation |
 |---------------|---------------------|
 | `bio_geo_climate()` | P1: site_soil_step (daily climate + soil decomposition) |
-| `canopy()` (light competition) | P2: tree_potential_growth_step (Beer-Lambert) |
-| `growth()` first loop (env stress) | P2: tree_potential_growth_step |
-| `growth()` second loop (nutrient + final growth) | P6: tree_actual_growth_step (living branch) |
-| `growth()` third loop (canopy pruning) | P6: tree_actual_growth_step (self-pruning section) |
-| `mortality()` | P6: tree_actual_growth_step (mortality section) |
-| `renewal()` | P6: tree_actual_growth_step (template + dormant branches) |
-| `sum_litter()` (in bio_geo_climate) | P0: gap_litter_aggregate_step |
-| N ratio computation | P3→P4→P5 chain: demand aggregate → nutrient allocation → sync |
+| `canopy()` (light competition) | P3: tree_potential_growth_step (Beer-Lambert, XT=-0.40) |
+| `growth()` first loop (env stress) | P3: tree_potential_growth_step |
+| `growth()` second loop (nutrient + final growth) | P8: tree_actual_growth_step (living branch) |
+| `growth()` third loop (canopy pruning) | P8: tree_actual_growth_step (Forska self-pruning) |
+| `mortality()` fire/wind | P8: tree_actual_growth_step (after growth, before natural mort.) |
+| `mortality()` natural | P8: tree_actual_growth_step (age + stress two-check) |
+| `renewal()` | P6: tree_template_renewal_step (templates) + P8 (dormant activation) |
+| `sum_litter()` (in bio_geo_climate) | P0: gap_litter_aggregate_step (litter + LAI) |
+| N ratio computation | P4→P5: demand aggregate → per-gap N ratio |
+| Climate relay | P2: gap_climate_relay_step (Site→Gap, eliminates 1-tick lag) |
+| N balance | P9→P10: n_consumed aggregate → site N balance (same-tick) |
 
 ---
 
@@ -382,9 +470,9 @@ where a = (dd_opt - dd_min)/(dd_max - dd_min)
 ```
 
 ### Drought Response (fc_drought)
-Inverse square root based on drought tolerance (1-5):
+Inverse square root based on drought tolerance (1-6):
 ```
-gamma = [0.50, 0.45, 0.35, 0.25, 0.15] by tolerance class
+gamma = [0.50, 0.45, 0.35, 0.25, 0.15, 0.05] by tolerance class
 if dry_days < gamma * 365:
     fc_drought = sqrt((gamma*365 - dry_days) / (gamma*365))
 ```
@@ -418,91 +506,128 @@ else:
 
 ## Light Competition
 
-Beer-Lambert light attenuation with species-specific extinction coefficients:
+Beer-Lambert light attenuation matching GAPpy's canopy model (model.py:280-362):
 
 ```
-for each taller neighbor:
-    neighbor_lai = (diam^2 * 0.01) / canopy_depth
-    overlap = min(neighbor_height - my_height, canopy_depth)
+XT = -0.40  (extinction coefficient, GAPpy model.py:280)
 
-    if neighbor_evergreen:
-        xt = -0.70  (Conifer)
-    else:
-        xt = -0.80  (Deciduous)
+for each neighbor (all living trees in gap):
+    neighbor_lai = dc² × leafdiam_a  (canopy diameter + species leaf area)
+    canopy_layers = int(height) - int(canopy_ht)
 
-    total_lai += neighbor_lai * overlap * (xt / -0.80)
+    Distribute LAI across integer height layers:
+    for each layer from int(canopy_ht) to int(height):
+        if neighbor_evergreen:
+            con_lai[layer] += layer_lai    (100%)
+            dec_lai[layer] += layer_lai    (100%)
+        else:
+            con_lai[layer] += layer_lai * 0.8  (80%)
+            dec_lai[layer] += layer_lai        (100%)
 
-light_avail = exp(-0.80 * total_lai)
+    cumLAI = sum of LAI in layers above int(my_height)
+    light_avail = exp(XT * cumLAI / PLOTSIZE)
 ```
 
-Templates compute light at ground level (height = 0), so all living neighbors shade them.
+- Conifers read con_light, deciduous read dec_light (separate accumulations)
+- PLOTSIZE = 500.0 constant, matching GAPpy's /plotsize
+- Templates compute light at ground level (height = 0), so all living neighbors shade them
+- Forska shade: light at canopy base height (int(canopy_ht)), stored in params[40]
+- Used at both P3 (living trees) and P6 (template renewal)
 
 ---
 
 ## Renewal Process (GAPpy renewal())
 
-Renewal is the last step in each tick (P6), matching GAPpy's ordering where `renewal()` runs after `mortality()`. This ensures seedlings don't grow until the next year.
+Renewal spans three priorities (P6→P7→P8), matching GAPpy's ordering where `renewal()` runs after `mortality()`. Seedlings don't grow until the next year.
 
 ### 1. Template Renewal (P6, templates)
 
 Each template represents one species and maintains persistent seedbank/seedling state:
 
-**Seedbank accumulation:**
+**avail_spec (binary maturity flag):**
+```
+avail_spec = 1.0 if any neighbor tree has diam > max_diam * 0.05
+             0.0 otherwise
+```
+Matches GAPpy model.py:411-414 (binary flag, not count).
+
+**Fire/wind seedling reset (outside avail_N gate):**
+```
+fire: seedling = (invader*10 + sprout*avail_spec) * fc_fire
+wind: seedling += invader + sprout * avail_spec
+both: weight = 0 (no recruitment in disturbance year)
+```
+
+**Seedbank accumulation (gated on avail_n > 0):**
 ```
 seedbank += invader + seed * avail_spec + sprout * avail_spec
 ```
 - `invader`: base colonization rate (species trait from CSV)
 - `seed`: seed production rate per tree
-- `avail_spec`: count of living trees of same species
+- `avail_spec`: binary flag (0 or 1) for species presence with maturity threshold
 
-**Seedbank → Seedling transfer:**
+**Seedbank → Seedling transfer (two-threshold):**
 ```
 if regrowth >= 0.05:
     seedling += seedbank    (conditions favorable, seeds germinate)
     seedbank = 0
+elif regrowth >= 0.01:
+    seedbank *= seed_surv   (marginal conditions, seedbank decays)
 else:
-    seedbank *= seed_surv   (conditions poor, seedbank decays)
+    seedbank = 0            (conditions too poor)
 ```
 
 **Recruitment weight:**
 ```
 weight = seedling * regrowth
+if weight > 0.0 and weight < 0.01: weight = 0.01  (floor)
 ```
-Higher weight means this species has both more seedlings AND better environmental conditions.
 
-**Annual seedling survival:**
+**Seedling decrement (proportional, skipped during fire/wind):**
+```
+my_share = num_to_recruit * old_weight / total_seedling_weight
+seedling -= my_share / PLOTSIZE
+```
+
+**Annual seedling survival (gated on avail_n > 0):**
 ```
 seedling *= seedling_lg
 ```
 
-### 2. Density-Based nrenew (P0, Gap)
+### 2. Density-Based nrenew (P7, Gap)
 
 The number of recruits per tick is density-dependent (GAPpy model.py:833-837):
 ```
-total_capacity = living_count + dormant_count
-max_renew = total_capacity * growmax - living_count
-nrenew = clamp(max_renew, min=3, max=total_capacity*0.5)
-nrenew = min(nrenew, total_capacity - living_count, dormant_count)
+growmax = max regrowth across all templates (from P6, same tick)
+max_renew = int(PLOTSIZE * growmax) - living_count
+nrenew = min(max_renew, int(PLOTSIZE * 0.5))
+nrenew = max(nrenew, 3)
+nrenew = min(nrenew, int(PLOTSIZE) - living_count)
+recruit_prob = nrenew / free_slot_count
 ```
-- `growmax`: max regrowth across all templates (from prev tick)
+- PLOTSIZE = 500.0 (GAPpy plotsize), NOT maxtrees (1000)
+- `growmax`: max regrowth across all templates (from P6, same tick)
 - When forest is near capacity, nrenew is small
 - When forest is sparse, nrenew can be up to half capacity
+- recruit_prob is per-slot probability (not raw count)
 
-### 3. Dormant Slot Activation (P6, dormant slots)
+### 3. Dormant Slot Activation (P8, dormant slots)
 
 Dormant slots compete for recruitment based on a priority hash:
 ```
-slot_priority = hash(agent_index, recruit_rand_seed) / 10000
-if slot_priority < num_to_recruit / 100:
+slot_priority = hash(agent_index, recruit_rand_seed) / 1000000
+if slot_priority < recruit_prob:
     select species from templates weighted by seedling_weight
     copy traits, initialize as seedling
 ```
 
-Species selection uses templates' `seedling_weight` from `states_db` (double-buffered, written same priority). A minimum weight of 0.01 ensures all species have a baseline recruitment chance.
+Species selection reads `seedling_weight` from template `params[41]` (written at P6, same tick — no double buffer needed since P8 > P6). A minimum weight of 0.01 ensures all species have a baseline recruitment chance.
+
+Conifer seedlings are initialized with `leaf_bm = 0.0` (matching GAPpy's zeroed local arrays in growth()).
 
 ### One-Tick Lag (Double Buffering)
 
-Template renewal writes to `states_db` at P6 tick T. Dormant slots read from `states_db` at P6 tick T (same priority, same buffer). However, the newly activated seedling's `is_alive = 1.0` is written to the states_db **write buffer** and becomes visible at P2 of tick T+1 after the buffer swap. This means seedlings don't participate in light competition or growth until the next year.
+The newly activated seedling's `is_alive = 1.0` is written to the states_db **write buffer** and becomes visible at P3 of tick T+1 after the buffer swap. This means seedlings don't participate in light competition or growth until the next year.
 
 ---
 
@@ -531,6 +656,14 @@ if growth_below_threshold AND random < stress_check: growth_dies
 
 Three-layer model (A0 → A → Base):
 
+### Daily Climate
+- Temperature: linear interpolation between monthly midpoints (GAPpy cov365)
+- Precipitation: Bernoulli rain-day allocation (GAPpy cov365a)
+  - raindays = min(25, prcp/4+1), each day has prob raindays/days_in_month
+  - Rain days get prcp/ik; dry days get 0; remainder on last day of month
+- PET: Hargreaves method (GAPpy climate.py:85-112)
+- Climate perturbation: BSM inverse normal CDF (hash-based RNG)
+
 ### A0 Layer (Litter)
 - Receives above-ground tree litter as pulse at year start
 - Respiration rate: `AO_RESP = 5.24e-4`
@@ -538,7 +671,7 @@ Three-layer model (A0 → A → Base):
 - Division guard: skip decomposition when C/N ratio ≤ 0.001
 
 ### A Layer (Humus)
-- Receives from A0 decomposition + below-ground root litter (pulse at year start)
+- Receives from A0 decomposition
 - Respiration rate: `SA_RESP = 1.24e-5`
 - **N mineralization**: main source of available N
 - N efficiency: `max(0.5, (sa_cn - SA_CN_0) / sa_cn)`
@@ -546,15 +679,27 @@ Three-layer model (A0 → A → Base):
 - Division guard: skip mineralization when C/N ratio ≤ 0.001
 
 ### Base Layer
-- Receives from A layer
+- Receives from A layer + leached N/C from P10
 - Respiration rate: `SB_RESP = 2.74e-7`
 - Slow turnover, long-term storage
+
+### N Balance (P10, same-tick)
+- surplus = avail_N - total_N_consumed (scaled by UNIT_CONV / gap_count)
+- Surplus > 0: return to A layer minus leach fraction (min(runoff/1000, 0.1))
+- Surplus ≤ 0: debit A layer
+- Runoff leaching (always): A_n -= 0.00002 × annual_runoff
+- Leached N×20 C + leached N transferred to base layer
 
 ### Division Guards (Empty-Start Protection)
 
 With empty-start initialization, soil pools can deplete before the first trees produce litter. When C/N ratio reaches 0 (carbon = 0 but nitrogen > 0), direct division would produce NaN. Guards skip decomposition when C/N ≤ 0.001, which is physically correct: zero carbon means nothing to decompose.
 
 Note: GAPpy's `soil.py` does not include these guards because its renewal process produces trees (and litter) quickly enough that pools never fully deplete. The GPU double-buffering lag in GGap can delay litter production, making this guard necessary.
+
+### Unit Scaling
+- Tree/Gap data in raw kg; Site/soil data in tn/ha
+- UNIT_CONV = 0.02 (= HEC_TO_M2 / PLOTSIZE / 1000 = 10000/500/1000)
+- Applied at P1 (litter input) and P10 (N consumed input)
 
 ### Moisture Effects
 - Decomposition scaled by moisture function
@@ -568,19 +713,30 @@ Note: GAPpy's `soil.py` does not include these guards because its renewal proces
 
 ---
 
-## Fire Dynamics
+## Fire/Wind Disturbance
 
-1. **Fire probability** (Site P1):
-   - Base: 1% annual
-   - Increases with dry soil moisture
-   - Cap: 15% annual
+1. **Probability** (Site P1):
+   - Fire: base 1%, increases with dry soil conditions, cap 15%
+   - Wind: from CSV wind_prob, fire takes precedence
+   - Both stochastic (hash-based random)
 
-2. **Fire intensity** (if fire occurs):
-   - Range: 0.3 - 1.0
-   - Based on dry conditions
+2. **Intensity** (if event occurs):
+   - Fire: 0.3 - 1.0 (based on dry conditions)
+   - Wind: 0.5 - 1.0 (based on hash)
 
-3. **Fire mortality** (Tree P6):
-   - Currently simplified; full fire mortality not yet implemented
+3. **Propagation**: Site states → Gap relay (P2) → Trees read at P6/P8
+
+4. **Living tree mortality** (Tree P8):
+   - If fire_intensity > 0.01 OR wind_intensity > 0.01: immediate death
+   - Growth runs BEFORE fire check (post-growth biomass goes to litter)
+   - All biomass → A0 litter, fire-killed trees contribute to n_consumed
+
+5. **Template seedling reset** (Tree P6):
+   - Fire: seedling = (invader×10 + sprout×avail_spec) × fc_fire
+     - fc_fire uses gama table indexed by fire_tol (1-6)
+   - Wind: seedling += invader + sprout × avail_spec
+   - Both: weight = 0 (no recruitment in disturbance year)
+   - Both: outside avail_N gate (GAPpy mortality runs before renewal)
 
 ---
 
@@ -588,13 +744,17 @@ Note: GAPpy's `soil.py` does not include these guards because its renewal proces
 
 | File | Priority | Breed | Purpose |
 |------|----------|-------|---------|
-| `step_functions/gap/gap_litter_aggregate_step.py` | P0 | Gap | Aggregate litter, density-based nrenew |
-| `step_functions/site/soil_step.py` | P1 | Site | Soil biogeochemistry (365-day loop) |
-| `step_functions/tree/tree_potential_growth_step.py` | P2 | Tree | Env stress, light competition, n_demand |
-| `step_functions/gap/gap_demand_aggregate_step.py` | P3 | Gap | Aggregate N demand from trees |
-| `step_functions/site/site_nutrient_step.py` | P4 | Site | Compute n_supply_ratio |
-| `step_functions/gap/gap_sync_step.py` | P5 | Gap | Relay climate + clear accumulators |
-| `step_functions/tree/tree_actual_growth_step.py` | P6 | Tree | Final growth + mortality + renewal + recruitment |
+| `step_functions/gap/gap_litter_aggregate_step.py` | P0 | Gap | Aggregate litter + LAI + seedling weights |
+| `step_functions/site/soil_step.py` | P1 | Site | Soil biogeochemistry (365-day loop, Bernoulli rain) |
+| `step_functions/gap/gap_climate_relay_step.py` | P2 | Gap | Relay climate Site→Gap (eliminates 1-tick lag) |
+| `step_functions/tree/tree_potential_growth_step.py` | P3 | Tree | Env stress, light competition, n_demand |
+| `step_functions/gap/gap_demand_aggregate_step.py` | P4 | Gap | Aggregate N demand from trees |
+| `step_functions/gap/gap_sync_step.py` | P5 | Gap | Per-gap N ratio + clear accumulators |
+| `step_functions/tree/tree_template_renewal_step.py` | P6 | Tree | Seedbank/seedling dynamics + regrowth (templates) |
+| `step_functions/gap/gap_recruit_aggregate_step.py` | P7 | Gap | Density-based nrenew from template regrowth |
+| `step_functions/tree/tree_actual_growth_step.py` | P8 | Tree | Final growth + mortality + recruitment |
+| `step_functions/gap/gap_nconsumed_aggregate_step.py` | P9 | Gap | Aggregate N consumed from trees |
+| `step_functions/site/site_nbalance_step.py` | P10 | Site | N surplus/deficit + leaching |
 
 ---
 

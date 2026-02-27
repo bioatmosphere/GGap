@@ -45,83 +45,109 @@ Data Flow by Priority (matching GAPpy: soil first, two-phase tree growth):
 
   Priority 0 - Gap Litter Aggregate (gap_litter_aggregate_step):
     Reads from Tree neighbors:
-      - states: litter_c, litter_n (from P6 of previous tick)
-      - states_db: is_alive (count living/free)
-      - params: env_stress from templates (regrowth/growmax)
+      - states: litter_c, litter_n (from P8 of previous tick)
+      - states_db: is_alive (count living/free), dimensions (for LAI)
     Writes to own:
-      - states: litter_accum_c/n, num_to_recruit
+      - states: litter_accum_c/n, total_lai, total_seedling_weight
 
   Priority 1 - Site Soil Step (site_soil_step):
     Reads from Gap neighbors:
-      - states: litter_accum_c, litter_accum_n (from P0, same tick)
+      - states: litter_accum_c/n, total_lai (from P0, same tick)
     Writes to own:
-      - params: soil pools (A0/A/BL carbon, nitrogen, moisture)
-      - states: avail_n, flood_days, fire_intensity
+      - params: soil pools (A0/A/BL carbon, nitrogen, moisture), annual_runoff
+      - states: avail_n, deg_days, dry_days, flood_days, fire/wind_intensity
 
-  Priority 2 - Tree Potential Growth (tree_potential_growth_step):
+  Priority 2 - Gap Climate Relay (gap_climate_relay_step):
+    Reads from Site neighbor:
+      - states: deg_days, dry_days, avail_n, flood_days, fire/wind, dry_days_base (from P1)
+    Writes to own:
+      - states: climate (copied from Site, available to trees at P3)
+
+  Priority 3 - Tree Potential Growth (tree_potential_growth_step):
     Reads from Gap neighbor:
-      - states: deg_days, dry_days, flood_days
+      - states: deg_days, dry_days, flood_days (from P2, current-tick climate)
     Reads from Tree neighbors:
       - states_db: is_alive, diam, height, canopy_ht (for light competition)
     Writes to own:
       - params: env_stress, diam_max, light_avail, fc_degday/drought/flood
-      - states: n_demand (for Gap to aggregate at P3)
+      - states: n_demand (for Gap to aggregate at P4)
 
-  Priority 3 - Gap N Demand Aggregate (gap_demand_aggregate_step):
+  Priority 4 - Gap N Demand Aggregate (gap_demand_aggregate_step):
     Reads from Tree neighbors:
-      - states: n_demand (from P2, same tick)
+      - states: n_demand (from P3, same tick)
     Writes to own:
       - params: total_n_demand (internal)
-      - states: total_n_demand (public, Site reads at P4)
-
-  Priority 4 - Site Nutrient Allocation (site_nutrient_step):
-    Reads from own:
-      - states: avail_n (from P1, same tick)
-    Reads from Gap neighbors:
-      - states: total_n_demand (from P3, same tick)
-    Writes to own:
-      - states: n_supply_ratio (Gap reads at P5)
+      - states: total_n_demand (public, own Gap reads at P5)
 
   Priority 5 - Gap Sync Step (gap_sync_step):
-    Reads from Site neighbor:
-      - states: climate, n_supply_ratio (from P1/P4, same tick)
+    Reads from own:
+      - states: avail_n (from P2), total_n_demand (from P4)
+    Computes per-gap:
+      - n_supply_ratio = avail_n / (gap_n_demand * UNIT_CONV)
+      (matches GAPpy per-plot ratio, model.py:475-488)
     Writes to own:
-      - states: climate (copied from Site), n_supply_ratio (relayed)
+      - states: n_supply_ratio (computed per-gap)
     Clears:
-      - states: litter_accum_c/n, num_to_recruit (consumed)
+      - states: litter_accum_c/n, total_lai, n_consumed (consumed)
 
-  Priority 6 - Tree Actual Growth + Renewal (tree_actual_growth_step):
-    Living trees:
-      Reads from own params (written at P2, same tick):
-        - env_stress, diam_max, light_avail
-      Reads from Gap neighbor:
-        - states: n_supply_ratio (from P5, same tick), fire_intensity
-      Writes to own:
-        - params: age, biomC, biomN, leaf_bm
-        - states: litter_c, litter_n
-        - states_db: is_alive, diam, height, canopy_ht
-    Templates:
-      Reads from Gap neighbor: climate, n_supply_ratio (same tick)
+  Priority 6 - Tree Template Renewal (tree_template_renewal_step):
+    Templates only (is_alive < -0.5):
+      Reads from Gap neighbor: climate (from P2), n_supply_ratio (from P5)
       Reads from Tree neighbors: structure (for light), species_id (for avail_spec)
       Writes to own:
-        - params: seedbank, seedling, env_stress (regrowth)
-        - states_db: seedling_weight (free slots read same priority)
+        - params: seedbank, seedling, env_stress (regrowth), seedling_weight
+        - states_db: seedling_weight (P0 reads next tick via read buffer)
+
+  Priority 7 - Gap Recruit Aggregate (gap_recruit_aggregate_step):
+    Reads from Tree neighbors:
+      - params: env_stress (regrowth from templates, written at P6 same tick)
+      - states_db: is_alive (count living/free)
+    Writes to own:
+      - states: num_to_recruit, recruit_rand_seed
+
+  Priority 8 - Tree Actual Growth + Activation (tree_actual_growth_step):
+    Living trees:
+      Reads from own params (written at P3, same tick):
+        - env_stress, diam_max, light_avail
+      Reads from Gap neighbor:
+        - states: n_supply_ratio (from P5), fire/wind_intensity (from P2)
+      Writes to own:
+        - params: age, biomC, biomN, leaf_bm
+        - states: litter_c, litter_n, n_consumed
+        - states_db: is_alive, diam, height, canopy_ht
     Free slots:
-      Reads from Gap neighbor: num_to_recruit, recruit_rand_seed (from P0)
-      Reads from Template neighbors: seedling_weight (from states_db)
+      Reads from Gap neighbor: num_to_recruit, recruit_rand_seed (from P7, same tick)
+      Reads from Template neighbors: seedling_weight (from params, written at P6 same tick)
       Writes to own:
         - params: species traits, physiology (seedling init)
+        - states: n_consumed, litter_c/n (seedling contribution)
         - states_db: is_alive=1, diam, height, canopy_ht (visible next tick)
+
+  Priority 9 - Gap N Consumed Aggregate (gap_nconsumed_aggregate_step):
+    Reads from Tree neighbors:
+      - states: n_consumed (from P8, same tick)
+    Writes to own:
+      - states: n_consumed (total for P10)
+
+  Priority 10 - Site N Balance (site_nbalance_step):
+    Reads from own:
+      - states: avail_n (from P1, same tick)
+      - params: annual_runoff (from P1, same tick), soil pools
+    Reads from Gap neighbors:
+      - states: n_consumed (from P9, same tick)
+    Writes to own:
+      - params: A_n, A_c, BL_c, BL_n (surplus/deficit + leaching)
+    Matches GAPpy model.py:993-1005 (end of renewal, same year).
 
 See docs/agent_properties.md for detailed property indices.
 See docs/implementation_logic.md for step function details.
 
 Property Arrays by Breed:
-  Tree: params[40], states[5], states_db[5]
-        (params includes species traits[22] + physiology[10] + intermediates[2] + renewal[4] + leaf_area[2])
-  Gap:  params[2],  states[14], states_db[1]
-        (states includes climate[5] + litter[4] + recruitment[3] + flood[1] + fire[1] + n_demand[1])
-  Site: params[116], states[6], states_db[1]
+  Tree: params[42], states[5], states_db[5]
+        (params includes species traits[22] + physiology[10] + intermediates[2] + renewal[4] + leaf_area[2] + seedling_weight[1])
+  Gap:  params[2],  states[16], states_db[1]
+        (states includes climate[5] + litter[4] + recruitment[3] + flood[1] + fire[1] + wind[1] + n_demand[1] + dry_days_base[1])
+  Site: params[116], states[8], states_db[1]
         (params includes soil pools[9] + monthly climate[36] + site properties[8] + fire/wind/soil[3] + climate_std[36] + lapse_rates[24])
 """
 
@@ -147,9 +173,13 @@ from gap.step_functions.gap.gap_litter_aggregate_step import gap_litter_aggregat
 from gap.step_functions.site.soil_step import site_soil_step
 from gap.step_functions.tree.tree_potential_growth_step import tree_potential_growth_step
 from gap.step_functions.gap.gap_demand_aggregate_step import gap_demand_aggregate_step
-from gap.step_functions.site.site_nutrient_step import site_nutrient_step
+from gap.step_functions.gap.gap_climate_relay_step import gap_climate_relay_step
 from gap.step_functions.gap.gap_sync_step import gap_sync_step
+from gap.step_functions.tree.tree_template_renewal_step import tree_template_renewal_step
+from gap.step_functions.gap.gap_recruit_aggregate_step import gap_recruit_aggregate_step
 from gap.step_functions.tree.tree_actual_growth_step import tree_actual_growth_step
+from gap.step_functions.gap.gap_nconsumed_aggregate_step import gap_nconsumed_aggregate_step
+from gap.step_functions.site.site_nbalance_step import site_nbalance_step
 
 CURRENT_DIR = Path(__file__).resolve().parent
 
@@ -159,7 +189,7 @@ CURRENT_DIR = Path(__file__).resolve().parent
 # ============================================================
 
 # --- Tree breed ---
-# params[40]: species traits (static) + physiology (dynamic) + intermediates (P2->P6) + renewal (template-only) + leaf_area
+# params[42]: species traits (static) + physiology (dynamic) + intermediates (P2->P8) + renewal (template-only) + leaf_area + seedling_weight
 #   Species traits [0-21]:
 TREE_P_SPECIES_ID = 0
 TREE_P_MAX_AGE = 1
@@ -205,6 +235,10 @@ TREE_P_SEEDLING = 37        # Persistent seedling pool (template-only)
 #   Leaf area params [38-39]:
 TREE_P_LEAFDIAM_A = 38     # Leaf diameter (adjusted by shade_tol)
 TREE_P_LEAFAREA_C = 39     # Leaf area coefficient (normalized by HEC_TO_M2)
+#   Self-pruning intermediate [40] (P2 writes, P6 reads):
+TREE_P_FORSKA_SHADE = 40   # Light response at canopy base (GAPpy forska_shade), P2 -> P6
+#   Seedling weight [41] (P6 template writes, P8 free slots read same tick):
+TREE_P_SEEDLING_WEIGHT = 41  # Non-buffered seedling weight for same-tick species selection
 
 # states[5]: litter output (public, Gap reads at P0)
 TREE_S_LITTER_C = 0      # Above-ground litter carbon
@@ -225,7 +259,7 @@ TREE_DB_SEEDLING_WEIGHT = 4  # seedling * regrowth (written by templates at P6, 
 GAP_P_GAP_ID = 0
 GAP_P_TOTAL_N_DEMAND = 1
 
-# states[14]: climate + nutrients + litter_pool + recruitment + seed_bank + fire + n_demand + bg_litter (public)
+# states[16]: climate + nutrients + litter_pool + recruitment + seedling_weight + fire + wind + n_demand + bg_litter + dry_days_base (public)
 #   Trees read climate at P2, Site reads litter at P1, Site reads n_demand at P4
 GAP_S_DEG_DAYS = 0
 GAP_S_DRY_DAYS = 1
@@ -237,11 +271,13 @@ GAP_S_LITTER_ACCUM_N = 5
 GAP_S_NUM_TO_RECRUIT = 6    # Number of free slots to activate this tick
 GAP_S_RECRUIT_RAND_SEED = 7 # Random seed for species selection
 GAP_S_FLOOD_DAYS = 8        # Annual flood days (from Site)
-GAP_S_SEED_BANK = 9         # Accumulated seeds from previous years
+GAP_S_TOTAL_SEEDLING_WEIGHT = 9  # Sum of all templates' seedling weights (aggregated at P0)
 GAP_S_FIRE_INTENSITY = 10   # Fire intensity this year (0-1, 0=no fire)
 GAP_S_TOTAL_N_DEMAND = 11   # Total N demand from trees (public, Site reads at P4)
 GAP_S_LITTER_ACCUM_C_BG = 12  # Below-ground litter carbon aggregate
 GAP_S_LITTER_ACCUM_N_BG = 13  # Below-ground litter nitrogen aggregate
+GAP_S_DRY_DAYS_BASE = 14      # Base layer drought fraction (for intolerant species)
+GAP_S_WIND_INTENSITY = 15     # Wind intensity this year (0-1, 0=no wind)
 
 # states_db[1]: placeholder (not used, but keeps uniform signature)
 GAP_DB_PLACEHOLDER = 0
@@ -285,13 +321,15 @@ SITE_P_PRCP_LAPSE_BASE = 104 # prcp_lapse[0..11] at 104-115
 
 SITE_PARAMS_SIZE = 116
 
-# states[6]: climate + available + flood_days + fire + n_supply_ratio (public)
+# states[8]: climate + available + flood_days + fire + n_supply_ratio + dry_days_base + wind (public)
 SITE_S_DEG_DAYS = 0
 SITE_S_DRY_DAYS = 1
 SITE_S_AVAIL_N = 2
 SITE_S_FLOOD_DAYS = 3       # Days when A layer is saturated
 SITE_S_FIRE_INTENSITY = 4   # Fire intensity this year (0-1, 0=no fire)
-SITE_S_N_SUPPLY_RATIO = 5   # N supply ratio (computed at P4 by site_nutrient_step)
+SITE_S_N_SUPPLY_RATIO = 5   # N supply ratio (no longer used; per-gap ratio at P5)
+SITE_S_DRY_DAYS_BASE = 6    # Base layer drought fraction (for intolerant species)
+SITE_S_WIND_INTENSITY = 7   # Wind intensity this year (0-1, 0=no wind)
 
 # states_db[1]: placeholder (not used)
 SITE_DB_PLACEHOLDER = 0
@@ -316,14 +354,18 @@ class GAPModel(Model):
     - BREED_GAP = 1
     - BREED_SITE = 2
 
-    Data Flow (per tick, matching GAPpy: soil first, two-phase tree growth):
-    0. Gap (P0): aggregate litter from trees (prev tick)
-    1. Site (P1): decompose litter, compute avail_n
-    2. Trees (P2): recruitment + env stress + potential growth + N demand
-    3. Gap (P3): aggregate N demand from trees
-    4. Site (P4): compute n_supply_ratio = avail_n / total_n_demand
-    5. Gap (P5): relay climate + n_supply_ratio from Site to Gap
-    6. Trees (P6): apply nutrient factor, final growth, mortality, litter
+    Data Flow (per tick, matching GAPpy: soil first, three-phase tree growth):
+     0. Gap (P0):  aggregate litter + LAI from trees (prev tick)
+     1. Site (P1): decompose litter, 365-day soil loop, compute avail_n
+     2. Gap (P2):  relay climate from Site to Gap (current-tick)
+     3. Trees (P3): env stress + potential growth + N demand (living only)
+     4. Gap (P4):  aggregate N demand from trees
+     5. Gap (P5):  compute per-gap n_supply_ratio + clear accumulators
+     6. Trees (P6): template renewal (seedbank/seedling dynamics)
+     7. Gap (P7):  recruitment aggregate (growmax → num_to_recruit)
+     8. Trees (P8): living tree growth + mortality + free slot activation
+     9. Gap (P9):  aggregate N consumed from trees (same tick)
+    10. Site (P10): N balance — surplus/deficit adjusts soil pools
     """
 
     def __init__(self) -> None:
@@ -332,24 +374,31 @@ class GAPModel(Model):
 
         # === Create Tree breed (breed_id = 0) ===
         self._tree_breed = Breed("Tree")
-        # params[40]: species traits + physiology + intermediates + renewal + leaf_area (private)
-        self._tree_breed.register_property("params", [0.0] * 40, neighbor_visible=False)
+        # params[42]: species traits + physiology + intermediates + renewal + leaf_area + seedling_weight (private)
+        self._tree_breed.register_property("params", [0.0] * 42, neighbor_visible=False)
         # states[5]: litter output (public, Gap reads at P0)
         self._tree_breed.register_property("states", [0.0] * 5, neighbor_visible=True)
         # states_db[5]: structure + seedling weight (public, other Trees read at P2)
         self._tree_breed.register_property("states_db", [0.0] * 5, neighbor_visible=True)
-        # Phase A (P2): recruitment + env stress + potential growth + N demand
+        # Phase A (P3): env stress + potential growth + N demand (reads current-tick climate from P2)
         self._tree_breed.register_step_func(
             tree_potential_growth_step,
             CURRENT_DIR / "step_functions" / "tree" / "tree_potential_growth_step.py",
-            priority=2,
+            priority=3,
             no_double_buffer=["params", "states"],
         )
-        # Phase B (P6): nutrient response + final growth + mortality + litter
+        # Phase B (P6): template renewal (current-tick climate, seedbank/seedling)
+        self._tree_breed.register_step_func(
+            tree_template_renewal_step,
+            CURRENT_DIR / "step_functions" / "tree" / "tree_template_renewal_step.py",
+            priority=6,
+            no_double_buffer=["params", "states"],
+        )
+        # Phase C (P8): nutrient response + final growth + mortality + litter + free slot activation
         self._tree_breed.register_step_func(
             tree_actual_growth_step,
             CURRENT_DIR / "step_functions" / "tree" / "tree_actual_growth_step.py",
-            priority=6,
+            priority=8,
             no_double_buffer=["params", "states"],
         )
         self.register_breed(breed=self._tree_breed)
@@ -361,8 +410,8 @@ class GAPModel(Model):
         self._gap_breed = Breed("Gap")
         # params[2]: internal only (private)
         self._gap_breed.register_property("params", [0.0] * 2, neighbor_visible=False)
-        # states[14]: climate + nutrients + litter_pool + recruitment + flood + seed_bank + fire + n_demand + bg_litter (public)
-        self._gap_breed.register_property("states", [0.0] * 14, neighbor_visible=True)
+        # states[16]: climate + nutrients + litter_pool + recruitment + flood + seedling_weight + fire + wind + n_demand + bg_litter + dry_days_base (public)
+        self._gap_breed.register_property("states", [0.0] * 16, neighbor_visible=True)
         # states_db[1]: placeholder (public but unused)
         self._gap_breed.register_property("states_db", [0.0] * 1, neighbor_visible=True)
         # P0: aggregate litter from trees (prev tick)
@@ -372,11 +421,18 @@ class GAPModel(Model):
             priority=0,
             no_double_buffer=["params", "states"],
         )
-        # P3: aggregate N demand from trees (same tick, after tree potential growth)
+        # P2: relay climate from Site to Gap (before tree potential growth)
+        self._gap_breed.register_step_func(
+            gap_climate_relay_step,
+            CURRENT_DIR / "step_functions" / "gap" / "gap_climate_relay_step.py",
+            priority=2,
+            no_double_buffer=["params", "states"],
+        )
+        # P4: aggregate N demand from trees (same tick, after tree potential growth P3)
         self._gap_breed.register_step_func(
             gap_demand_aggregate_step,
             CURRENT_DIR / "step_functions" / "gap" / "gap_demand_aggregate_step.py",
-            priority=3,
+            priority=4,
             no_double_buffer=["params", "states"],
         )
         # P5: relay climate + n_supply_ratio from Site to Gap
@@ -386,14 +442,28 @@ class GAPModel(Model):
             priority=5,
             no_double_buffer=["params", "states"],
         )
+        # P7: recruitment aggregate (reads P6 template regrowth → growmax → num_to_recruit)
+        self._gap_breed.register_step_func(
+            gap_recruit_aggregate_step,
+            CURRENT_DIR / "step_functions" / "gap" / "gap_recruit_aggregate_step.py",
+            priority=7,
+            no_double_buffer=["params", "states"],
+        )
+        # P9: aggregate N consumed from trees (same tick as P8, for same-tick N balance)
+        self._gap_breed.register_step_func(
+            gap_nconsumed_aggregate_step,
+            CURRENT_DIR / "step_functions" / "gap" / "gap_nconsumed_aggregate_step.py",
+            priority=9,
+            no_double_buffer=["params", "states"],
+        )
         self.register_breed(breed=self._gap_breed)
 
         # === Create Site breed (breed_id = 2) ===
         self._site_breed = Breed("Site")
         # params[116]: soil pools + monthly climate + site properties + fire/wind/soil + climate_std + lapse_rates (private)
         self._site_breed.register_property("params", [0.0] * SITE_PARAMS_SIZE, neighbor_visible=False)
-        # states[6]: climate + available + flood_days + fire + n_supply_ratio (public)
-        self._site_breed.register_property("states", [0.0] * 6, neighbor_visible=True)
+        # states[8]: climate + available + flood_days + fire + n_supply_ratio + dry_days_base + wind (public)
+        self._site_breed.register_property("states", [0.0] * 8, neighbor_visible=True)
         # states_db[1]: placeholder (public but unused)
         self._site_breed.register_property("states_db", [0.0] * 1, neighbor_visible=True)
         # P1: soil decomposition (reads litter from Gap P0)
@@ -403,11 +473,14 @@ class GAPModel(Model):
             priority=1,
             no_double_buffer=["params", "states"],
         )
-        # P4: compute n_supply_ratio (reads n_demand from Gap P3, avail_n from P1)
+        # P4: removed (was site_nutrient_step computing site-level N ratio)
+        # N supply ratio is now computed per-gap at P5 (gap_sync_step),
+        # matching GAPpy's per-plot N_supply_demand (model.py:475-488).
+        # P10: N balance (reads same-tick avail_N from P1 + N consumed from P9)
         self._site_breed.register_step_func(
-            site_nutrient_step,
-            CURRENT_DIR / "step_functions" / "site" / "site_nutrient_step.py",
-            priority=4,
+            site_nbalance_step,
+            CURRENT_DIR / "step_functions" / "site" / "site_nbalance_step.py",
+            priority=10,
             no_double_buffer=["params", "states"],
         )
         self.register_breed(breed=self._site_breed)
@@ -490,13 +563,9 @@ class GAPModel(Model):
             if tavg > BASE_TEMP:
                 deg_days += (tavg - BASE_TEMP) * days_per_month[i]
 
-        # Estimate dry days from precipitation (simplified)
-        # UVAFME uses daily soil water balance; this is a rough approximation
-        total_precip = sum(float(climate_row[f'prcp_{m}']) for m in months)
-        # precip values appear to be in mm/10, so total_precip/10 = annual mm
-        annual_precip_mm = total_precip / 10.0
-        # Rough estimate: fewer dry days with more precipitation
-        dry_days = max(0.0, 100.0 - annual_precip_mm / 10.0)
+        # Initial dry_days = 0 (fraction 0-1); soil_step computes real value from
+        # daily soil water balance on first tick
+        dry_days = 0.0
 
         # === Load species range list (which species present at this site) ===
         range_file = os.path.join(base_path, f"{prefix}_rangelist.csv")
@@ -533,7 +602,7 @@ class GAPModel(Model):
                     HEC_TO_M2 = 10000.0
 
                     shade_tol = int(row['l'])
-                    rootdepth = float(row.get('rootdepth', 2.0))
+                    rootdepth = float(row.get('rootdepth', 0.8))
 
                     # Adjust g by shade tolerance
                     g_adj = float(row['g']) * ss[shade_tol - 1]
@@ -570,7 +639,7 @@ class GAPModel(Model):
                         'drought_tol': int(row['d']),        # Drought tolerance (1-5)
                         'evergreen': int(row['evergreen']),  # 1=evergreen/conifer, 0=deciduous
                         'fire_tol': int(row['fire']),        # Fire tolerance (1-6)
-                        'rootdepth': rootdepth,              # Root depth (m), default 2.0
+                        'rootdepth': rootdepth,              # Root depth (m), default 0.8
                         'stress_tol': int(row['stress']),    # Stress tolerance (1-5)
                         'age_tol': int(row['old']),           # Age tolerance (1-3)
                         'genus': row['Genus'],
@@ -648,9 +717,10 @@ class GAPModel(Model):
                 if tavg > BASE_TEMP:
                     deg_days += (tavg - BASE_TEMP) * days_per_month[i]
 
-            total_precip = sum(float(climate_row[f'prcp_{m}']) for m in months)
-            annual_precip_mm = total_precip / 10.0
-            dry_days = max(0.0, 100.0 - annual_precip_mm / 10.0)
+            # dry_days stays 0.0; soil_step computes real fraction from water balance
+
+        # Global rootdepth for soil A-layer scaling (GAPpy parameters.py:60, sitelist.py:118-120)
+        soil_rootdepth = 0.8
 
         # === Build params[116] for Site (soil pools + monthly climate + site properties + new fields) ===
         params = [0.0] * SITE_PARAMS_SIZE
@@ -663,7 +733,7 @@ class GAPModel(Model):
         params[SITE_P_BL_C] = float(site_row['sbase_c0'])     # Base layer carbon
         params[SITE_P_BL_N] = float(site_row['sbase_n0'])     # Base layer nitrogen
         params[SITE_P_A0_W] = float(site_row['soilAO_w0'])    # A0 moisture
-        params[SITE_P_A_W] = float(site_row['soilA_w0'])      # A moisture
+        params[SITE_P_A_W] = float(site_row['soilA_w0']) * soil_rootdepth  # A moisture (scaled by rootdepth, GAPpy sitelist.py:118)
         params[SITE_P_BL_W] = float(site_row['sbase_w0'])     # Base moisture
 
         # Monthly climate [9-44] from climate CSV
@@ -673,8 +743,8 @@ class GAPModel(Model):
             params[SITE_P_PRCP_BASE + i] = float(climate_row[f'prcp_{month}']) / 10.0  # Convert to cm
 
         # Additional soil/site parameters [45-52] from site CSV
-        params[SITE_P_FIELD_CAP] = float(site_row['soilA_field_cap'])
-        params[SITE_P_PERM_WP] = float(site_row['soilA_perm_wp'])
+        params[SITE_P_FIELD_CAP] = float(site_row['soilA_field_cap']) * soil_rootdepth  # Scaled by rootdepth (GAPpy sitelist.py:119)
+        params[SITE_P_PERM_WP] = float(site_row['soilA_perm_wp']) * soil_rootdepth   # Scaled by rootdepth (GAPpy sitelist.py:120)
         params[SITE_P_SLOPE] = float(site_row['slope'])
         params[SITE_P_SIGMA] = float(site_row['sigma'])
         params[SITE_P_LAI] = float(site_row['lai'])
@@ -698,13 +768,15 @@ class GAPModel(Model):
             params[SITE_P_TMP_LAPSE_BASE + i] = tmp_lapse[i]
             params[SITE_P_PRCP_LAPSE_BASE + i] = prcp_lapse[i]
 
-        # === Build states[6] for Site (climate + flood_days + fire + n_supply_ratio - public) ===
-        states = [0.0] * 6
+        # === Build states[8] for Site (climate + flood_days + fire + n_supply_ratio + dry_days_base + wind - public) ===
+        states = [0.0] * 8
         states[SITE_S_DEG_DAYS] = deg_days
         states[SITE_S_DRY_DAYS] = dry_days
         states[SITE_S_AVAIL_N] = 0.1  # Initial available nitrogen
         states[SITE_S_FLOOD_DAYS] = 0.0  # Will be calculated during simulation
         states[SITE_S_FIRE_INTENSITY] = 0.0  # Fire intensity (calculated probabilistically)
+        states[SITE_S_DRY_DAYS_BASE] = 0.0  # Base layer drought fraction
+        states[SITE_S_WIND_INTENSITY] = 0.0  # Wind intensity (calculated probabilistically)
 
         # Create site agent
         site_agent_id = self.create_agent_of_breed(
@@ -748,15 +820,15 @@ class GAPModel(Model):
 
         # Get climate from site_info (calculated from CSV)
         deg_days = site.get('deg_days', 2500.0)
-        dry_days = site.get('dry_days', 30.0)
+        dry_days = site.get('dry_days', 0.0)
 
         # Build params[2] for Gap (internal only)
         params = [0.0] * 2
         params[GAP_P_GAP_ID] = float(gap_id)
         params[GAP_P_TOTAL_N_DEMAND] = 0.0
 
-        # Build states[14] for Gap (climate + nutrients + litter_pool + recruitment + flood + seed_bank + fire + n_demand + bg_litter)
-        states = [0.0] * 14
+        # Build states[16] for Gap (climate + nutrients + litter_pool + recruitment + flood + seedling_weight + fire + wind + n_demand + bg_litter + dry_days_base)
+        states = [0.0] * 16
         states[GAP_S_DEG_DAYS] = deg_days
         states[GAP_S_DRY_DAYS] = dry_days
         states[GAP_S_AVAIL_N] = 0.1
@@ -766,8 +838,10 @@ class GAPModel(Model):
         states[GAP_S_NUM_TO_RECRUIT] = 0.0
         states[GAP_S_RECRUIT_RAND_SEED] = 0.0
         states[GAP_S_FLOOD_DAYS] = 0.0
-        states[GAP_S_SEED_BANK] = 0.0
+        states[GAP_S_TOTAL_SEEDLING_WEIGHT] = 0.0
         states[GAP_S_FIRE_INTENSITY] = 0.0
+        states[GAP_S_WIND_INTENSITY] = 0.0
+        states[GAP_S_DRY_DAYS_BASE] = 0.0
 
         gap_agent_id = self.create_agent_of_breed(
             self._gap_breed,
@@ -894,7 +968,7 @@ class GAPModel(Model):
 
             # Calculate biomass (GAPpy: stem + twig + root)
             wood_bulk_dens = species_info['wood_bulk_dens']
-            rootdepth = species_info.get('rootdepth', 2.0)
+            rootdepth = species_info.get('rootdepth', 0.8)
             canopy_ht = STD_HT
 
             # Basal diameter (canopy at ground level)
@@ -924,8 +998,9 @@ class GAPModel(Model):
                 root_c = stembc * rootdepth / forska_ht + twigbc * 0.5
 
             biomC = stembc + twigbc + root_c
-            biomN = biomC / 400.0
-            leaf_bm = biomC * 0.1
+            biomN = biomC / 450.0  # STEM_C_N = 450.0 (GAPpy constants.py:77)
+            # Leaf biomass (GAPpy: dc² * leafdiam_a * leafarea_c * 2.0, tonnes→kg)
+            leaf_bm = dc * dc * species_info['leafdiam_a'] * species_info['leafarea_c'] * 2.0 * 1000.0
         else:
             # Free slot - minimal values
             forska_ht = 0.0
@@ -933,8 +1008,8 @@ class GAPModel(Model):
             biomN = 0.0
             leaf_bm = 0.0
 
-        # Build params[40] for Tree (species traits + physiology + intermediates + renewal + leaf_area)
-        params = [0.0] * 40
+        # Build params[42] for Tree (species traits + physiology + intermediates + renewal + leaf_area + seedling_weight)
+        params = [0.0] * 42
         # Species traits [0-18]
         params[TREE_P_SPECIES_ID] = float(species_info['global_id'])
         params[TREE_P_MAX_AGE] = float(species_info['max_age'])
@@ -955,7 +1030,7 @@ class GAPModel(Model):
         params[TREE_P_DROUGHT_TOL] = float(species_info['drought_tol'])
         params[TREE_P_EVERGREEN] = float(species_info['evergreen'])
         params[TREE_P_FIRE_TOL] = float(species_info['fire_tol'])
-        params[TREE_P_ROOTDEPTH] = float(species_info.get('rootdepth', 2.0))
+        params[TREE_P_ROOTDEPTH] = float(species_info.get('rootdepth', 0.8))
         params[TREE_P_STRESS_TOL] = float(species_info.get('stress_tol', 3))
         params[TREE_P_AGE_TOL] = float(species_info.get('age_tol', 3))
         # Renewal params [34-37]

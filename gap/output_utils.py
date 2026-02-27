@@ -212,14 +212,14 @@ class OutputWriter:
 
     def write_site_data(self, year, latitude, longitude, elevation, slope,
                         deg_days, flood_days, dry_days, annual_rain_mm,
-                        grow_days=0):
+                        grow_days=0, dry_days_base=0.0):
         """Write one row of site data."""
         self.writers['site'].writerow([
             self.site_id, year,
             latitude, longitude, elevation, slope,
             0.0,  # leaf_area_ind (not yet computed)
             grow_days, deg_days,
-            flood_days, dry_days, 0.0,  # dry_days_base
+            flood_days, dry_days, dry_days_base,
             0.0, 0.0,  # pot_evap_day, act_evap_day
             annual_rain_mm,
         ])

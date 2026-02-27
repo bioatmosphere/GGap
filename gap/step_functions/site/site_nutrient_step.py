@@ -24,12 +24,16 @@ BREED_TREE = 0
 BREED_GAP = 1
 BREED_SITE = 2
 
-# === Site states[6] (public) ===
+# === Site states[8] (public) ===
 SITE_S_AVAIL_N = 2
 SITE_S_N_SUPPLY_RATIO = 5
 
-# === Gap states[14] (for reading total_n_demand from Gap neighbors) ===
+# === Gap states[16] (for reading total_n_demand from Gap neighbors) ===
 GAP_S_TOTAL_N_DEMAND = 11
+
+# Unit conversion: kg (tree-level) → tn/ha (soil pools)
+# = HEC_TO_M2 / plotsize / 1000 = 10000 / 500 / 1000
+UNIT_CONV = 0.02
 
 
 @jit.rawkernel(device="cuda")
@@ -57,6 +61,7 @@ def site_nutrient_step(
 
     # Sum total N demand from all Gap neighbors
     site_total_n_demand = 0.0
+    gap_count = 0.0
 
     neighbor_indices = locations[agent_index]
     i = 0
@@ -67,12 +72,17 @@ def site_nutrient_step(
         if neighbor_breed == BREED_GAP:
             gap_n_demand = states_tensor[neighbor_idx][GAP_S_TOTAL_N_DEMAND]
             site_total_n_demand = site_total_n_demand + gap_n_demand
+            gap_count = gap_count + 1.0
 
         i = i + 1
 
+    # Convert N demand from kg to tn/ha (GAPpy uconvert)
+    if gap_count > 0.5:
+        site_total_n_demand = site_total_n_demand * UNIT_CONV / gap_count
+
     # Compute n_supply_ratio = avail_n / total_n_demand
     n_supply_ratio = 1.0
-    if site_total_n_demand > 0.0001:
+    if site_total_n_demand > 0.00001:
         n_supply_ratio = avail_n / site_total_n_demand
         if n_supply_ratio > 2.0:
             n_supply_ratio = 2.0  # Cap at 2x supply
