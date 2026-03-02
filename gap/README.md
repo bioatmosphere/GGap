@@ -4,250 +4,218 @@ GGap integrates the UVAFME (University of Virginia Forest Model Enhanced) forest
 
 ## Overview
 
-This implementation translates UVAFME's traditional forest gap model into a scalable, GPU-enabled simulation using:
+This implementation translates UVAFME's forest gap model into a scalable, GPU-enabled simulation using:
 
-- **Individual tree agents** with UVAFME-based properties and processes
-- **Species-specific parameters** for 6 common Eastern US tree species
-- **Environmental response functions** for temperature, drought, and light
-- **Allometric growth equations** from UVAFME
-- **GPU-accelerated computation** via CuPy JIT kernels
-- **MPI parallelization** for large-scale forests
+- **3-level agent hierarchy** (Site → Gap → Tree) with SAGESim breeds
+- **32 tree species** loaded from UVAFME CSV input files (20 genera)
+- **7-priority step function pipeline** running on GPU via CuPy JIT
+- **Full soil biogeochemistry** with daily timestep (365 days/year)
+- **GAPpy-compatible CSV output** (5 files matching GAPpy format)
+- **MPI parallelization** for multi-rank execution
 
 ## Architecture
 
-### Core Components
+### Agent Hierarchy
 
-1. **tree_species_data.py** - Species parameter definitions
-   - 6 Eastern US species with UVAFME parameters
-   - Maximum sizes, growth rates, tolerance classes
-   - Temperature and environmental response parameters
+```
+Site Agent (1 per simulation)
+├── Soil pools: A0, A, Base layers (C and N)
+├── Climate: 12 months × (tmin, tmax, prcp, prcp_std, tmin_std, tmax_std)
+├── State: avail_n, deg_days, dry_days, flood_days
+│
+├── Gap Agent (num_gaps per site, default 200)
+│   ├── Light profile, seedbank, seedling arrays
+│   ├── Aggregated litter (C/N) and N demand from trees
+│   │
+│   ├── Tree Agent (pool_size slots per gap, default 1000)
+│   │   ├── Species params: max_age, max_diam, max_ht, growth rate, tolerances
+│   │   ├── State: diam, height, canopy_ht, biomC, biomN, leaf_bm, age
+│   │   └── Growth factors: light_rsp, temp_rsp, drought_rsp, nutrient_rsp
+│   └── ...
+└── ...
+```
 
-2. **tree_breed.py** - TreeBreed class defining agent properties
-   - Core attributes: species, age, diameter, height
-   - Biomass: carbon, nitrogen, leaf biomass
-   - Environmental factors: light, temperature, drought, flood responses
-   - Spatial location: x, y coordinates
+### Step Function Pipeline (7 Priorities)
 
-3. **tree_step_func.py** - GPU kernels for tree dynamics
-   - `light_step`: Calculate light competition from neighbors
-   - `growth_step`: Tree growth based on UVAFME equations
-   - `mortality_step`: Age and stress-dependent mortality
+Each simulation tick (= 1 year) executes these GPU kernels in order:
 
-4. **gap_model.py** - GAPModel main simulation class
-   - Forest initialization and tree creation
-   - Environmental parameter management
-   - Statistics collection and reporting
+| Priority | Step Function | Agent | Description |
+|----------|--------------|-------|-------------|
+| P0 | `gap_litter_aggregate_step` | Gap | Aggregate litter from trees, density-based recruitment count |
+| P1 | `soil_step` | Site | Daily soil biogeochemistry (365 days), climate variability, water balance |
+| P2 | `tree_potential_growth_step` | Tree | Environmental responses, potential diameter growth |
+| P3 | `gap_demand_aggregate_step` | Gap | Sum nitrogen demand across trees per gap |
+| P4 | `site_nutrient_step` | Site | Compute N supply ratio from available N vs demand |
+| P5 | `gap_sync_step` | Gap | Relay climate and N ratio to trees, clear accumulators |
+| P6 | `tree_actual_growth_step` | Tree | N-limited actual growth, mortality check, biomass update, renewal |
 
-5. **run.py** - Command-line runner with MPI support
+### Core Files
+
+| File | Description |
+|------|-------------|
+| `gap_model.py` | GAPModel class: breed registration, CSV initialization, agent creation, data collection |
+| `run_one_site.py` | Main simulation runner with CLI arguments and console output |
+| `output_utils.py` | OutputWriter: 5 GAPpy-compatible CSV files with proper scaling |
+| `plot_outputs.py` | Plotting script: 4 plot types from CSV output data |
+| `step_func_code.py` | Auto-generated GPU kernel code (do not edit manually) |
+| `__init__.py` | Package exports |
+
+### Step Functions (`step_functions/`)
+
+```
+step_functions/
+├── gap/
+│   ├── gap_litter_aggregate_step.py    # P0: litter aggregation, recruitment count
+│   ├── gap_demand_aggregate_step.py    # P3: N demand aggregation
+│   └── gap_sync_step.py               # P5: relay climate/N, clear accumulators
+├── site/
+│   ├── soil_step.py                    # P1: daily soil biogeochemistry
+│   └── site_nutrient_step.py           # P4: compute N supply ratio
+└── tree/
+    ├── tree_potential_growth_step.py    # P2: env responses, potential growth
+    └── tree_actual_growth_step.py       # P6: actual growth, mortality, renewal
+```
 
 ## Species
 
-Six common Eastern US tree species are pre-configured:
+32 species loaded from `input_data/UVAFME2012_specieslist.csv`, filtered by site range. Species are grouped into 20 genera:
 
-1. **Red Maple** (Acer rubrum) - Mid-successional, moderate shade tolerance
-2. **Loblolly Pine** (Pinus taeda) - Early successional, shade intolerant
-3. **White Oak** (Quercus alba) - Late successional, moderate tolerance
-4. **Sweetgum** (Liquidambar styraciflua) - Mid successional
-5. **Eastern Hemlock** (Tsuga canadensis) - Late successional, very shade tolerant
-6. **Tulip Poplar** (Liriodendron tulipifera) - Early successional, very intolerant
+Acer, Betula, Carya, Castanea, Cornus, Fagus, Fraxinus, Juniperus, Liquidambar, Liriodendron, Magnolia, Nyssa, Oxydendrum, Picea, Pinus, Prunus, Quercus, Robinia, Tilia, Tsuga
 
-Each species has unique parameters for:
-- Maximum age, diameter, and height
-- Growth rates
-- Shade, drought, and flood tolerance
-- Temperature requirements (degree day ranges)
+Each species has parameters for: max age/diameter/height, growth rate (g), shade/drought/flood tolerance, degree-day range (dd_min/dd_max), leaf area, wood density, conifer flag, and more.
 
 ## Model Processes
 
-### Growth (UVAFME-based)
+### Growth (P2 + P6)
 
-Trees grow each year based on:
+Trees grow each year through a two-phase process:
 
-1. **Temperature Response** - Parabolic function of degree days
-   - Optimal growth at species-specific temperature
-   - Reduced growth outside optimal range
+**Phase 1 - Potential Growth (P2):**
+1. Temperature response — parabolic function of degree days
+2. Light response — exponential saturation based on shade tolerance
+3. Drought response — exponential decay with dry days
+4. Flood response — tolerance-based factor
+5. Potential diameter increment from species growth parameters
 
-2. **Light Response** - Exponential saturation curve
-   - Species-specific shade tolerance
-   - More tolerant species grow better in low light
+**Phase 2 - Actual Growth (P6):**
+1. Nitrogen demand calculated from potential growth
+2. Gap-level N limitation applied (demand vs available)
+3. Final diameter/height/biomass update
+4. Mortality check (age-dependent + stress-induced)
+5. Renewal: seedbank → seedling → new tree recruitment
 
-3. **Diameter Growth** - Modified by environmental factors
-   - Species-specific base growth rate (g parameter)
-   - Asymptotic approach to maximum diameter
+### Soil Biogeochemistry (P1)
 
-4. **Height Calculation** - Forska height-diameter relationship
-   - Height = STD_HT + (max_ht - STD_HT) * (1 - exp(-arfa_0 * D / delta_ht))
-   - Links height to diameter allometrically
+Daily timestep (365 iterations per tick):
+1. Monthly climate perturbation (temperature ±1°C, precip ±50%)
+2. Daily temperature and precipitation from monthly values
+3. PET calculation (Hamon method)
+4. Soil water balance with freeze/thaw, runoff, percolation
+5. Three-layer decomposition (A0 → A → Base)
+6. Nitrogen mineralization and availability
+7. Annual dry_days recomputation from perturbed precipitation
 
-5. **Biomass Estimation** - Allometric relationships
-   - Volume from diameter and height
-   - Carbon content from wood density
+### Light Competition (P0 + P5)
 
-### Mortality
-
-Trees die based on:
-
-1. **Age-dependent mortality** - Increases as tree approaches max age
-2. **Stress-induced mortality** - Low growth factor indicates poor conditions
-3. **Combined probability** - Total mortality from age + stress factors
-
-### Light Competition (Simplified)
-
-- Taller neighboring trees cast shade
-- Light availability reduced based on neighbor height and proximity
-- Species-specific response to reduced light
+- Gap-level light profile calculated from tree heights and leaf areas
+- Beer-Lambert law attenuation through canopy layers
+- Deciduous vs coniferous light arrays
+- Distributed back to individual trees at their canopy height
 
 ## Usage
 
-### Quick Demo
-
-From project root:
-
-```bash
-python main.py
-```
-
-This creates a small demonstration forest but does not run the GPU simulation.
-
-### Full MPI Simulation
+### Running a Simulation
 
 ```bash
 cd gap
-mpirun -n 4 python run.py --num_trees 200 --years 100
+python run_one_site.py --num_gaps 200 --pool_size 1000 --years 500
 ```
 
 ### Command-Line Options
 
-```bash
-python run.py [OPTIONS]
-
+```
 Options:
-  --num_trees INT           Number of trees (default: 100)
-  --forest_size FLOAT       Forest size in meters (default: 100.0)
-  --years INT               Simulation duration in years (default: 50)
-  --neighborhood_radius     Radius for interactions (default: 10.0)
-  --deg_days FLOAT          Annual degree days (default: 2500.0)
-  --dry_days FLOAT          Annual drought days (default: 30.0)
-  --base_mortality FLOAT    Base mortality rate (default: 0.02)
-  --report_interval INT     Years between reports (default: 10)
-  --species_dist STRING     Species distribution (default: equal)
+  --num_gaps INT          Number of gaps per site (default: 200)
+  --pool_size INT         Max tree slots per gap (default: 1000)
+  --years INT             Simulation duration in years (default: 1000)
+  --report_interval INT   Years between reports and CSV output (default: 10)
+  --site_id INT           Site ID from UVAFME CSV files (default: 0)
+  --data_dir PATH         Directory with UVAFME CSV files (default: input_data)
+  --prefix STRING         File prefix for CSV files (default: UVAFME2012)
+  --output_dir PATH       Directory for output CSV files (default: output_data)
+  --no_tree_data          Skip writing tree_data.csv
 ```
 
-### Species Distribution Options
+### Plotting Results
 
-- `equal` - Equal distribution across all species
-- `mixed` - Realistic mixed forest (more mid-successional)
-- `single:ID` - Single species forest (ID = 1-6)
-
-### Example Runs
-
-**Small test:**
 ```bash
-mpirun -n 2 python run.py --num_trees 50 --forest_size 50 --years 50
+python plot_outputs.py --output-dir ../output_data --format png
 ```
 
-**Large-scale simulation:**
-```bash
-mpirun -n 8 python run.py --num_trees 5000 --forest_size 200 --years 200
-```
+Generates 4 plot types:
+- **forest_dynamics** — biomass, basal area, tree counts, species composition over time
+- **soil_biogeochemistry** — soil C/N pools, available N, biomass N over time
+- **environmental_conditions** — degree days, dry days, flood days, precipitation
+- **summary_dashboard** — combined overview of key metrics
 
-**Oak-dominated forest:**
-```bash
-mpirun -n 4 python run.py --num_trees 500 --species_dist single:3 --years 150
-```
+### Output Files
 
-**High competition:**
-```bash
-mpirun -n 4 python run.py --num_trees 1000 --forest_size 50 --neighborhood_radius 15
-```
+Five GAPpy-compatible CSV files in `output_dir/`:
 
-## Implementation Notes
+| File | Content |
+|------|---------|
+| `site_data.csv` | Annual site-level climate and conditions |
+| `soil_data.csv` | Soil C/N pools (A0, A, Base layers), available N, biomass |
+| `genus_data.csv` | Per-genus biomass, basal area, tree counts, diameter classes |
+| `species_data.csv` | Per-species biomass, basal area, tree counts, diameter classes |
+| `tree_data.csv` | Individual tree data (optional, can be very large) |
 
-### UVAFME Features Implemented
+Scaling follows GAPpy conventions: plotscale = HEC_TO_M2/plotsize, plotadj = plotscale/num_gaps.
 
-- ✅ Species-specific parameters
-- ✅ Temperature response (parabolic)
-- ✅ Light response (exponential saturation)
-- ✅ Forska height-diameter relationship
-- ✅ Allometric biomass estimation
-- ✅ Age-dependent mortality
-- ✅ Stress-induced mortality
-- ✅ Multiple tree species
+## Input Data
 
-### UVAFME Features Simplified
+Required CSV files in `input_data/` (with configurable prefix):
 
-- ⚠️ Light competition - Simplified neighbor shading (not full canopy model)
-- ⚠️ Biomass - Cylindrical approximation (not full stem shape)
-- ⚠️ Drought/flood - Parameters present but not fully integrated
-- ⚠️ Regeneration - Not yet implemented
-
-### Future Enhancements
-
-Priority improvements:
-
-1. **Full light competition model** - UVAFME canopy layers and shading
-2. **Spatial indexing** - Efficient neighbor queries for large forests
-3. **Seedling recruitment** - Gap-based regeneration
-4. **Soil processes** - UVAFME biogeochemistry integration
-5. **Climate variability** - Year-to-year environmental variation
-6. **Output files** - Time series data export
-7. **Visualization** - Forest structure plots
+| File | Content |
+|------|---------|
+| `{prefix}_specieslist.csv` | Species trait parameters (32+ species) |
+| `{prefix}_site.csv` | Site characteristics (location, elevation, soil) |
+| `{prefix}_climate.csv` | Monthly temperature and precipitation |
+| `{prefix}_climate_stddev.csv` | Climate variability (std dev) |
+| `{prefix}_rangelist.csv` | Species range by site |
+| `{prefix}_altitudes.csv` | Elevation data |
 
 ## GPU/CuPy Constraints
 
-The step functions are compiled to GPU kernels with strict constraints:
+Step functions are compiled to GPU kernels with strict constraints:
 
 - No Python dicts, objects, or nested functions
 - No `return`, `break`, or `continue` statements
 - Must use CuPy operations, not NumPy
 - Cannot use `-1` indexing (use `len(array)-1`)
-- Variables cannot be reassigned in `if`/`for` blocks
+- Variables cannot be reassigned in `if`/`for` blocks — declare at function top level
+- For-each loops not supported (use `for i in range(n)`)
 
-See CLAUDE.md for complete list of CuPy JIT limitations.
+See `CLAUDE.md` for complete CuPy JIT limitation details.
 
-## Performance Characteristics
+## Documentation
 
-Typical performance (NVIDIA A100 GPU):
-
-- **100 trees, 50 years**: ~2 seconds
-- **1000 trees, 100 years**: ~10 seconds
-- **10000 trees, 200 years**: ~2 minutes
-
-Performance scales with:
-- Number of trees (linear)
-- Number of years (linear)
-- Neighborhood radius (quadratic)
-- Number of MPI ranks (near-linear speedup)
-
-## Validation
-
-To validate against UVAFME:
-
-1. Run single-species forests with known parameters
-2. Compare growth trajectories to UVAFME outputs
-3. Check species succession patterns
-4. Verify biomass accumulation rates
-
-Validation scripts and test cases are planned for future releases.
+- `docs/AGENT_PROPERTIES.md` — Complete listing of all agent properties (params, states, states_db)
+- `docs/implementation_logic.md` — Detailed implementation logic for each step function
 
 ## References
 
 ### UVAFME
 - University of Virginia Forest Model Enhanced
 - Translated from Fortran to Python
-- See `UVAFME/` directory for original implementation
+- See `UVAFME/` and `GAPpy/` directories
 
 ### SAGESim
 - GPU-accelerated agent-based modeling framework
-- Uses CuPy for GPU computation
-- MPI for parallel execution
-- See `SAGESim/` directory for framework code
+- CuPy for GPU computation, MPI for parallel execution
+- See `SAGESim/` directory
 
 ### Forest Gap Models
 - Botkin, D.B., et al. (1972). "Some Ecological Consequences of a Computer Model of Forest Growth"
 - Shugart, H.H. (1984). "A Theory of Forest Dynamics"
 - Bugmann, H. (2001). "A Review of Forest Gap Models"
-
-## License
-
-This implementation maintains compatibility with both UVAFME and SAGESim licenses.

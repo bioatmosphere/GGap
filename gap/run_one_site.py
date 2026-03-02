@@ -202,12 +202,16 @@ def main():
         print(f"  Init time: {t_init_end - t_init_start:.2f}s, GPU setup time: {t_setup_end - t_init_end:.2f}s")
         print("Starting simulation...")
         print()
-        print(f"{'Year':<6} {'Alive':<7} {'Seedlings':<10} {'Free':<8} {'NetChg':<8} {'Biomass':<10} {'Avail_N':<10} {'BatchTime':<10}")
-        print("-" * 80)
+        print(f"{'Year':<6} {'Alive':<7} {'Seedlings':<10} {'Free':<8} {'NetChg':<8} {'Biomass':<10} {'Avail_N':<10} "
+              f"{'Simulate':<10} {'Collect':<10} {'CSV':<10} {'Batch':<10}")
+        print("-" * 110)
 
     # Track living trees for net change calculation
     prev_alive = total_alive
     t_sim_start = time.time()
+    cum_simulate = 0.0
+    cum_collect = 0.0
+    cum_csv = 0.0
 
     # Run simulation
     for year_batch in range(0, args.years, args.report_interval):
@@ -217,15 +221,16 @@ def main():
 
         # Simulate
         model.simulate(ticks=years_to_run, sync_workers_every_n_ticks=1)
+        t_sim_end = time.time()
 
         current_year = year_batch + years_to_run
 
-        # All ranks must participate in MPI collective calls
-        site_params = model.get_agent_property_value(site_agent_id, "params")
-        site_states = model.get_agent_property_value(site_agent_id, "states")
+        # Bulk download site data via breed API (no per-agent sync)
+        site_params, site_states = model.collect_site_data()
 
-        # Collect tree data for output
+        # Collect tree data for output (returns dict of numpy arrays)
         tree_data = model.collect_tree_data()
+        t_collect_end = time.time()
 
         # Compute derived values
         annual_rain, grow_days = compute_site_extras(
@@ -257,11 +262,12 @@ def main():
             writer.write_genus_data(current_year, tree_data, model.gap_agents)
             if not args.no_tree_data:
                 writer.write_tree_data(current_year, tree_data, model.gap_agents)
+            t_csv_end = time.time()
 
             # Console output
-            num_living = len(tree_data)
-            num_seedlings = sum(1 for t in tree_data if t['age'] <= 2.0)
-            total_biomass = sum(t['biomC'] for t in tree_data)
+            num_living = tree_data['count']
+            num_seedlings = int((tree_data['age'] <= 2.0).sum())
+            total_biomass = float(tree_data['biomC'].sum())
             num_free = len(model.tree_ids) - num_living - num_templates
             avail_n = site_states[SITE_S_AVAIL_N] if isinstance(site_states, list) else site_states
 
@@ -270,11 +276,17 @@ def main():
             prev_alive = num_living
 
             t_batch_elapsed = time.time() - t_batch_start
-            print(f"{current_year:<6} {num_living:<7} {num_seedlings:<10} {num_free:<8} {net_str:<8} {total_biomass:<10.1f} {avail_n:<10.4f} {t_batch_elapsed:<10.2f}s")
+            t_sim_elapsed_batch = t_sim_end - t_batch_start
+            t_collect_elapsed = t_collect_end - t_sim_end
+            t_csv_elapsed = t_csv_end - t_collect_end
+            cum_simulate += t_sim_elapsed_batch
+            cum_collect += t_collect_elapsed
+            cum_csv += t_csv_elapsed
+            print(f"{current_year:<6} {num_living:<7} {num_seedlings:<10} {num_free:<8} {net_str:<8} {total_biomass:<10.1f} {avail_n:<10.4f} "
+                  f"{t_sim_elapsed_batch:<10.2f} {t_collect_elapsed:<10.2f} {t_csv_elapsed:<10.2f} {t_batch_elapsed:<10.2f}")
 
     # Final state
-    site_params = model.get_agent_property_value(site_agent_id, "params")
-    site_states = model.get_agent_property_value(site_agent_id, "states")
+    site_params, site_states = model.collect_site_data()
 
     t_total_end = time.time()
 
@@ -297,10 +309,13 @@ def main():
         print(f"  Available N: {avail_n:.4f} tn/ha/yr")
 
         print(f"\nTiming Summary:")
-        print(f"  Initialization: {t_init_end - t_init_start:.2f}s")
-        print(f"  GPU setup:      {t_setup_end - t_init_end:.2f}s")
-        print(f"  Simulation:     {t_sim_elapsed:.2f}s ({t_sim_elapsed / args.years:.3f}s/year)")
-        print(f"  Total:          {t_total_elapsed:.2f}s")
+        print(f"  Initialization:   {t_init_end - t_init_start:.2f}s")
+        print(f"  GPU setup:        {t_setup_end - t_init_end:.2f}s")
+        print(f"  Simulation loop:  {t_sim_elapsed:.2f}s ({t_sim_elapsed / args.years:.3f}s/year)")
+        print(f"    GPU simulate:   {cum_simulate:.2f}s ({cum_simulate / t_sim_elapsed * 100:.1f}%)")
+        print(f"    collect_tree:   {cum_collect:.2f}s ({cum_collect / t_sim_elapsed * 100:.1f}%)")
+        print(f"    CSV writing:    {cum_csv:.2f}s ({cum_csv / t_sim_elapsed * 100:.1f}%)")
+        print(f"  Total:            {t_total_elapsed:.2f}s")
 
         print(f"\nOutput files written to {args.output_dir}/")
 

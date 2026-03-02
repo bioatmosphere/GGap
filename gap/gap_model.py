@@ -157,6 +157,7 @@ Property Arrays by Breed:
 import sys
 import os
 import csv
+import numpy as np
 
 try:
     import sagesim
@@ -1133,28 +1134,47 @@ class GAPModel(Model):
         return stats
 
     def collect_tree_data(self):
-        """Collect current data for all living trees.
+        """Collect data for all living trees. Returns dict of numpy arrays.
 
-        Returns list of dicts with per-tree data for output.
-        Each dict has: gap_agent_id, species_id, diam, height,
+        Uses SAGESim breed-level bulk GPU download (handles MPI gather).
+        Returns dict with keys: count, gap_agent_id, species_id, diam, height,
         biomC, biomN, leaf_bm, age, canopy_ht, evergreen.
         """
-        trees = []
-        for tree_id in self.tree_ids:
-            states_db = self.get_agent_property_value(tree_id, "states_db")
-            if not isinstance(states_db, list) or states_db[TREE_DB_IS_ALIVE] < 0.5:
-                continue
-            params = self.get_agent_property_value(tree_id, "params")
-            trees.append({
-                'gap_agent_id': self.tree_to_gap[tree_id],
-                'species_id': int(params[TREE_P_SPECIES_ID]),
-                'diam': states_db[TREE_DB_DIAM],
-                'height': states_db[TREE_DB_HEIGHT],
-                'biomC': params[TREE_P_BIOMC],
-                'biomN': params[TREE_P_BIOMN],
-                'leaf_bm': params[TREE_P_LEAF_BM],
-                'age': params[TREE_P_AGE],
-                'canopy_ht': states_db[TREE_DB_CANOPY_HT],
-                'evergreen': params[TREE_P_EVERGREEN] > 0.5,
-            })
-        return trees
+        # Bulk download via SAGESim breed API (handles MPI gather)
+        params_np = self.get_breed_data("Tree", "params")
+        states_db_np = self.get_breed_data("Tree", "states_db")
+        agent_ids_np = self.get_breed_agent_ids("Tree")
+
+        # Vectorized alive filter
+        alive_mask = states_db_np[:, TREE_DB_IS_ALIVE] > 0.5
+        alive_params = params_np[alive_mask]
+        alive_sdb = states_db_np[alive_mask]
+        alive_ids = agent_ids_np[alive_mask].astype(np.int32)
+
+        # Map agent IDs to gap IDs
+        gap_ids = np.array([self.tree_to_gap[int(a)] for a in alive_ids], dtype=np.int32)
+
+        return {
+            'count': int(alive_mask.sum()),
+            'gap_agent_id': gap_ids,
+            'species_id': alive_params[:, TREE_P_SPECIES_ID].astype(np.int32),
+            'diam': alive_sdb[:, TREE_DB_DIAM],
+            'height': alive_sdb[:, TREE_DB_HEIGHT],
+            'biomC': alive_params[:, TREE_P_BIOMC],
+            'biomN': alive_params[:, TREE_P_BIOMN],
+            'leaf_bm': alive_params[:, TREE_P_LEAF_BM],
+            'age': alive_params[:, TREE_P_AGE],
+            'canopy_ht': alive_sdb[:, TREE_DB_CANOPY_HT],
+            'evergreen': alive_params[:, TREE_P_EVERGREEN] > 0.5,
+        }
+
+    def collect_site_data(self):
+        """Collect site params and states. Returns (params_list, states_list).
+
+        Uses direct GPU read via get_agent_property_value (single agent).
+        Returns Python lists compatible with site_params[SITE_P_...] indexing.
+        """
+        site_id = self.site_agents[0]
+        params = self.get_agent_property_value(site_id, "params")
+        states = self.get_agent_property_value(site_id, "states")
+        return params, states

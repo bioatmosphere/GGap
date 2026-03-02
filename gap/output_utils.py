@@ -17,6 +17,7 @@ Scaling conventions (from GAPpy):
 import os
 import csv
 import math
+import numpy as np
 
 # Constants matching GAPpy
 HEC_TO_M2 = 10000.0
@@ -88,22 +89,20 @@ def compute_soil_biomass(tree_data, plotadj):
     GAPpy includes leaf biomass for conifers but not deciduous.
 
     Args:
-        tree_data: list of tree dicts from collect_tree_data()
+        tree_data: dict of numpy arrays from collect_tree_data()
         plotadj: scaling factor (HEC_TO_M2 / plotsize / num_gaps)
 
     Returns:
         (total_biomC, total_biomN) scaled to per-hectare units
     """
-    biomC = 0.0
-    biomN = 0.0
-    for t in tree_data:
-        if t['evergreen']:
-            biomC += t['biomC'] + t['leaf_bm']
-            biomN += t['biomN'] + t['leaf_bm'] / CON_LEAF_C_N
-        else:
-            biomC += t['biomC']
-            biomN += t['biomN']
-    return biomC * plotadj, biomN * plotadj
+    if tree_data['count'] == 0:
+        return 0.0, 0.0
+    ev = tree_data['evergreen']
+    biomC = np.where(ev, tree_data['biomC'] + tree_data['leaf_bm'], tree_data['biomC']).sum()
+    biomN = np.where(ev,
+        tree_data['biomN'] + tree_data['leaf_bm'] / CON_LEAF_C_N,
+        tree_data['biomN']).sum()
+    return float(biomC) * plotadj, float(biomN) * plotadj
 
 
 class OutputWriter:
@@ -239,17 +238,28 @@ class OutputWriter:
         ])
 
     def write_tree_data(self, year, tree_data, gap_agents):
-        """Write per-tree data rows."""
+        """Write per-tree data rows. tree_data is dict of numpy arrays."""
+        if tree_data['count'] == 0:
+            return
         gap_idx = {gid: i + 1 for i, gid in enumerate(gap_agents)}
+        # Convert numpy columns to Python lists once for fast iteration
+        gap_ids = tree_data['gap_agent_id'].tolist()
+        sp_ids = tree_data['species_id'].tolist()
+        diams = tree_data['diam'].tolist()
+        heights = tree_data['height'].tolist()
+        biomCs = tree_data['biomC'].tolist()
+        biomNs = tree_data['biomN'].tolist()
+        leaf_bms = tree_data['leaf_bm'].tolist()
+        ages = tree_data['age'].tolist()
         tree_num = {}
-        for t in tree_data:
-            plot = gap_idx.get(t['gap_agent_id'], 0)
+        for i in range(tree_data['count']):
+            plot = gap_idx.get(gap_ids[i], 0)
             tree_num[plot] = tree_num.get(plot, 0) + 1
             self.writers['tree'].writerow([
                 self.site_id, year, plot, tree_num[plot],
-                t['species_id'], t['diam'], t['height'],
-                t['biomC'], t['biomN'], t['leaf_bm'],
-                t['age'], 0.0,  # crown_area
+                sp_ids[i], diams[i], heights[i],
+                biomCs[i], biomNs[i], leaf_bms[i],
+                ages[i], 0.0,  # crown_area
             ])
 
     def _write_bio_data(self, writer_key, year, tree_data, gap_agents, group_by):
@@ -257,6 +267,7 @@ class OutputWriter:
 
         Matches GAPpy output_module.py scaling and aggregation.
         Per-gap accumulation -> cross-gap totals -> scaling.
+        tree_data is dict of numpy arrays.
         """
         gap_idx = {gid: i for i, gid in enumerate(gap_agents)}
         num_gaps = len(gap_agents)
@@ -277,39 +288,53 @@ class OutputWriter:
         max_diam = [[0.0] * num_groups for _ in range(num_gaps)]
         diam_cats = [[[0] * NHC for _ in range(num_groups)] for _ in range(num_gaps)]
 
-        # Accumulate per-gap, per-group
-        for t in tree_data:
-            gi = gap_idx.get(t['gap_agent_id'])
-            if gi is None:
-                continue
-            sp_id = t['species_id']
-            code = self._species_id_to_code.get(sp_id)
-            if code is None:
-                continue
+        # Convert numpy columns to Python lists once for fast iteration
+        n = tree_data['count']
+        if n == 0:
+            # Still need to write zero rows for each group
+            pass
+        else:
+            t_gap_ids = tree_data['gap_agent_id'].tolist()
+            t_sp_ids = tree_data['species_id'].tolist()
+            t_diams = tree_data['diam'].tolist()
+            t_heights = tree_data['height'].tolist()
+            t_biomCs = tree_data['biomC'].tolist()
+            t_biomNs = tree_data['biomN'].tolist()
+            t_leaf_bms = tree_data['leaf_bm'].tolist()
+            t_evergreens = tree_data['evergreen'].tolist()
 
-            if group_by == 'genus':
-                genus = self._species_id_to_genus.get(sp_id)
-                grp_i = self._genus_to_idx.get(genus)
-            else:
-                grp_i = self._species_code_to_idx.get(code)
+            # Accumulate per-gap, per-group
+            for i in range(n):
+                gi = gap_idx.get(t_gap_ids[i])
+                if gi is None:
+                    continue
+                sp_id = t_sp_ids[i]
+                code = self._species_id_to_code.get(sp_id)
+                if code is None:
+                    continue
 
-            if grp_i is None:
-                continue
+                if group_by == 'genus':
+                    genus = self._species_id_to_genus.get(sp_id)
+                    grp_i = self._genus_to_idx.get(genus)
+                else:
+                    grp_i = self._species_code_to_idx.get(code)
 
-            diam = t['diam']
-            lf = t['leaf_bm']
-            # GAPpy plot.py sum_over_sg always includes leaf in totals
-            l_cn = CON_LEAF_C_N if t['evergreen'] else DEC_LEAF_C_N
-            tot_bc = t['biomC'] + lf
-            tot_bn = t['biomN'] + lf / l_cn
+                if grp_i is None:
+                    continue
 
-            biomC[gi][grp_i] += tot_bc
-            biomN[gi][grp_i] += tot_bn
-            basal[gi][grp_i] += 0.25 * PI * diam ** 2
-            leaf[gi][grp_i] += lf
-            max_ht[gi][grp_i] = max(max_ht[gi][grp_i], t['height'])
-            max_diam[gi][grp_i] = max(max_diam[gi][grp_i], diam)
-            diam_cats[gi][grp_i][get_diam_class(diam)] += 1
+                diam = t_diams[i]
+                lf = t_leaf_bms[i]
+                l_cn = CON_LEAF_C_N if t_evergreens[i] else DEC_LEAF_C_N
+                tot_bc = t_biomCs[i] + lf
+                tot_bn = t_biomNs[i] + lf / l_cn
+
+                biomC[gi][grp_i] += tot_bc
+                biomN[gi][grp_i] += tot_bn
+                basal[gi][grp_i] += 0.25 * PI * diam ** 2
+                leaf[gi][grp_i] += lf
+                max_ht[gi][grp_i] = max(max_ht[gi][grp_i], t_heights[i])
+                max_diam[gi][grp_i] = max(max_diam[gi][grp_i], diam)
+                diam_cats[gi][grp_i][get_diam_class(diam)] += 1
 
         # Compute totals and write rows
         for grp_i in range(num_groups):
