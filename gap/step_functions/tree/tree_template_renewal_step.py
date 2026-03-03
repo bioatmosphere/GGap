@@ -2,7 +2,7 @@
 Tree template renewal step function for GGap model (Priority 6).
 Computes per-species seedbank/seedling dynamics using current-tick climate.
 
-Runs AFTER gap_sync_step (P5) relays fresh climate from Site to Gap,
+Runs AFTER gap_demand_aggregate_step (P4) computes per-gap N supply ratio,
 so templates read current-tick deg_days, dry_days, n_supply_ratio, etc.
 
 P7 (gap_recruit_aggregate_step) reads template regrowth from params
@@ -12,7 +12,7 @@ P8 (tree_actual_growth_step) free slots read seedling_weight from params
 (same tick, no double buffer) for species selection.
 
 Execution Flow:
-    1. Read current-tick climate + disturbance from Gap (written by P5)
+    1. Read current-tick climate + disturbance from Gap (written by P2/P4)
     2. Compute fc_degday, fc_drought, fc_flood, fc_nutrient, fc_light
     3. Compute regrowth = product of factors (if avail_n > 0)
     4. Detect avail_spec (mature trees of same species)
@@ -98,7 +98,7 @@ def tree_template_renewal_step(
     Template renewal step (priority 6).
 
     Computes per-species seedbank/seedling dynamics using current-tick climate
-    (relayed by P5). Writes regrowth to params for P7 growmax aggregation,
+    (relayed by P2/P4). Writes regrowth to params for P7 growmax aggregation,
     and seedling_weight to params for P8 free slot species selection.
     Only processes templates (is_alive < -0.5); living/free trees skip.
     """

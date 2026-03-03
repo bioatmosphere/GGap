@@ -5,7 +5,7 @@ Phase A: computes environmental stress and potential growth for LIVING TREES onl
 The nutrient factor is applied later in tree_actual_growth_step (Priority 8) after
 the soil N cycle computes the same-tick n_supply_ratio.
 
-Templates are handled by tree_template_renewal_step (P6) after P5 syncs current-tick
+Templates are handled by tree_template_renewal_step (P6) after P4 syncs current-tick
 climate. Free slots are handled by tree_actual_growth_step (P8) after P7 computes
 num_to_recruit.
 

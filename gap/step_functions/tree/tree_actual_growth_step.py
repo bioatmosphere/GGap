@@ -8,7 +8,7 @@ counting is in gap_recruit_aggregate_step (P7).
 Execution Flow:
     1. FINAL GROWTH (living trees, is_alive > 0.5):
        - Read env_stress and diam_max from own params (written at P3, same tick)
-       - Read n_supply_ratio from Gap neighbor states (written at P5, same tick)
+       - Read n_supply_ratio from Gap neighbor states (written at P4, same tick)
        - Compute fc_nutrient from n_supply_ratio + lownutr_tol
        - Compute growth_factor = env_stress * fc_nutrient
        - Compute final diam_increment = diam_max * growth_factor
@@ -146,7 +146,7 @@ def tree_actual_growth_step(
     """
     Phase C (P8): Nutrient response + final growth + mortality + litter + free slot activation.
 
-    Living trees: reads env_stress/diam_max from P3, n_supply_ratio from P5.
+    Living trees: reads env_stress/diam_max from P3, n_supply_ratio from P4.
     Free slots: reads num_to_recruit from P7, seedling_weight from P6 templates.
     Templates: skipped (handled at P6).
     """
@@ -184,7 +184,7 @@ def tree_actual_growth_step(
         env_stress = params_tensor[agent_index][TREE_P_ENV_STRESS]
         diam_max = params_tensor[agent_index][TREE_P_DIAM_MAX_CALC]
 
-        # ===== READ FROM GAP NEIGHBOR (written at P5, same tick) =====
+        # ===== READ FROM GAP NEIGHBOR (written at P4, same tick) =====
         n_supply_ratio = 1.0
         fire_intensity = 0.0
         wind_intensity = 0.0

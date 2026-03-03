@@ -39,7 +39,7 @@ Network Connections:
 Property Scheme (3 properties per breed):
 - params:    neighbor_visible=False  (private data, not shared)
 - states:    neighbor_visible=True, no double buffer (public, cross-priority reads)
-- states_db: neighbor_visible=True, double buffered (public, same-priority reads)
+- states_db: neighbor_visible=True, no double buffer (public, cross-priority reads)
 
 Data Flow by Priority (matching GAPpy: soil first, two-phase tree growth):
 
@@ -75,27 +75,22 @@ Data Flow by Priority (matching GAPpy: soil first, two-phase tree growth):
       - params: env_stress, diam_max, light_avail, fc_degday/drought/flood
       - states: n_demand (for Gap to aggregate at P4)
 
-  Priority 4 - Gap N Demand Aggregate (gap_demand_aggregate_step):
+  Priority 4 - Gap N Demand Aggregate + Sync (gap_demand_aggregate_step):
     Reads from Tree neighbors:
       - states: n_demand (from P3, same tick)
+    Reads from own:
+      - states: avail_n (from P2)
     Writes to own:
       - params: total_n_demand (internal)
-      - states: total_n_demand (public, own Gap reads at P5)
-
-  Priority 5 - Gap Sync Step (gap_sync_step):
-    Reads from own:
-      - states: avail_n (from P2), total_n_demand (from P4)
-    Computes per-gap:
-      - n_supply_ratio = avail_n / (gap_n_demand * UNIT_CONV)
-      (matches GAPpy per-plot ratio, model.py:475-488)
-    Writes to own:
-      - states: n_supply_ratio (computed per-gap)
+      - states: total_n_demand (public)
+      - states: n_supply_ratio = avail_n / (gap_n_demand * UNIT_CONV)
+        (matches GAPpy per-plot ratio, model.py:475-488)
     Clears:
       - states: litter_accum_c/n, total_lai, n_consumed (consumed)
 
   Priority 6 - Tree Template Renewal (tree_template_renewal_step):
     Templates only (is_alive < -0.5):
-      Reads from Gap neighbor: climate (from P2), n_supply_ratio (from P5),
+      Reads from Gap neighbor: climate (from P2), n_supply_ratio (from P4),
         cum_lai at ground (from P0, O(1)), avail_spec (from P0, O(1))
       Writes to own:
         - params: seedbank, seedling, env_stress (regrowth), seedling_weight
@@ -113,7 +108,7 @@ Data Flow by Priority (matching GAPpy: soil first, two-phase tree growth):
       Reads from own params (written at P3, same tick):
         - env_stress, diam_max, light_avail
       Reads from Gap neighbor:
-        - states: n_supply_ratio (from P5), fire/wind_intensity (from P2)
+        - states: n_supply_ratio (from P4), fire/wind_intensity (from P2)
       Writes to own:
         - params: age, biomC, biomN, leaf_bm
         - states: litter_c, litter_n, n_consumed
@@ -178,7 +173,6 @@ from gap.step_functions.site.soil_step import site_soil_step
 from gap.step_functions.tree.tree_potential_growth_step import tree_potential_growth_step
 from gap.step_functions.gap.gap_demand_aggregate_step import gap_demand_aggregate_step
 from gap.step_functions.gap.gap_climate_relay_step import gap_climate_relay_step
-from gap.step_functions.gap.gap_sync_step import gap_sync_step
 from gap.step_functions.tree.tree_template_renewal_step import tree_template_renewal_step
 from gap.step_functions.gap.gap_recruit_aggregate_step import gap_recruit_aggregate_step
 from gap.step_functions.tree.tree_actual_growth_step import tree_actual_growth_step
@@ -339,7 +333,7 @@ SITE_S_DRY_DAYS = 1
 SITE_S_AVAIL_N = 2
 SITE_S_FLOOD_DAYS = 3       # Days when A layer is saturated
 SITE_S_FIRE_INTENSITY = 4   # Fire intensity this year (0-1, 0=no fire)
-SITE_S_N_SUPPLY_RATIO = 5   # N supply ratio (no longer used; per-gap ratio at P5)
+SITE_S_N_SUPPLY_RATIO = 5   # N supply ratio (no longer used; per-gap ratio at P4)
 SITE_S_DRY_DAYS_BASE = 6    # Base layer drought fraction (for intolerant species)
 SITE_S_WIND_INTENSITY = 7   # Wind intensity this year (0-1, 0=no wind)
 SITE_S_ANNUAL_RAIN = 8      # Perturbed annual rainfall (cm)
@@ -367,7 +361,7 @@ class GAPModel(Model):
     Property Scheme:
     - params:    neighbor_visible=False  (private)
     - states:    neighbor_visible=True, no double buffer (public, cross-priority)
-    - states_db: neighbor_visible=True, double buffered (public, same-priority)
+    - states_db: neighbor_visible=True, no double buffer (public, cross-priority)
 
     Breed IDs (registration order):
     - BREED_TREE = 0
@@ -380,7 +374,7 @@ class GAPModel(Model):
      2. Gap (P2):  relay climate from Site to Gap (current-tick)
      3. Trees (P3): env stress + potential growth + N demand (living only)
      4. Gap (P4):  aggregate N demand from trees
-     5. Gap (P5):  compute per-gap n_supply_ratio + clear accumulators
+     5. Gap (P4):  aggregate N demand + compute per-gap n_supply_ratio + clear accumulators
      6. Trees (P6): template renewal (seedbank/seedling dynamics)
      7. Gap (P7):  recruitment aggregate (growmax → num_to_recruit)
      8. Trees (P8): living tree growth + mortality + free slot activation
@@ -405,21 +399,21 @@ class GAPModel(Model):
             tree_potential_growth_step,
             CURRENT_DIR / "step_functions" / "tree" / "tree_potential_growth_step.py",
             priority=3,
-            no_double_buffer=["params", "states"],
+            no_double_buffer=["params", "states", "states_db"],
         )
         # Phase B (P6): template renewal (current-tick climate, seedbank/seedling)
         self._tree_breed.register_step_func(
             tree_template_renewal_step,
             CURRENT_DIR / "step_functions" / "tree" / "tree_template_renewal_step.py",
             priority=6,
-            no_double_buffer=["params", "states"],
+            no_double_buffer=["params", "states", "states_db"],
         )
         # Phase C (P8): nutrient response + final growth + mortality + litter + free slot activation
         self._tree_breed.register_step_func(
             tree_actual_growth_step,
             CURRENT_DIR / "step_functions" / "tree" / "tree_actual_growth_step.py",
             priority=8,
-            no_double_buffer=["params", "states"],
+            no_double_buffer=["params", "states", "states_db"],
         )
         self.register_breed(breed=self._tree_breed)
 
@@ -439,42 +433,35 @@ class GAPModel(Model):
             gap_litter_aggregate_step,
             CURRENT_DIR / "step_functions" / "gap" / "gap_litter_aggregate_step.py",
             priority=0,
-            no_double_buffer=["params", "states"],
+            no_double_buffer=["params", "states", "states_db"],
         )
         # P2: relay climate from Site to Gap (before tree potential growth)
         self._gap_breed.register_step_func(
             gap_climate_relay_step,
             CURRENT_DIR / "step_functions" / "gap" / "gap_climate_relay_step.py",
             priority=2,
-            no_double_buffer=["params", "states"],
+            no_double_buffer=["params", "states", "states_db"],
         )
-        # P4: aggregate N demand from trees (same tick, after tree potential growth P3)
+        # P4: aggregate N demand from trees + compute per-gap N supply ratio + clear accumulators
         self._gap_breed.register_step_func(
             gap_demand_aggregate_step,
             CURRENT_DIR / "step_functions" / "gap" / "gap_demand_aggregate_step.py",
             priority=4,
-            no_double_buffer=["params", "states"],
-        )
-        # P5: relay climate + n_supply_ratio from Site to Gap
-        self._gap_breed.register_step_func(
-            gap_sync_step,
-            CURRENT_DIR / "step_functions" / "gap" / "gap_sync_step.py",
-            priority=5,
-            no_double_buffer=["params", "states"],
+            no_double_buffer=["params", "states", "states_db"],
         )
         # P7: recruitment aggregate (reads P6 template regrowth → growmax → num_to_recruit)
         self._gap_breed.register_step_func(
             gap_recruit_aggregate_step,
             CURRENT_DIR / "step_functions" / "gap" / "gap_recruit_aggregate_step.py",
             priority=7,
-            no_double_buffer=["params", "states"],
+            no_double_buffer=["params", "states", "states_db"],
         )
         # P9: aggregate N consumed from trees (same tick as P8, for same-tick N balance)
         self._gap_breed.register_step_func(
             gap_nconsumed_aggregate_step,
             CURRENT_DIR / "step_functions" / "gap" / "gap_nconsumed_aggregate_step.py",
             priority=9,
-            no_double_buffer=["params", "states"],
+            no_double_buffer=["params", "states", "states_db"],
         )
         self.register_breed(breed=self._gap_breed)
 
@@ -491,17 +478,16 @@ class GAPModel(Model):
             site_soil_step,
             CURRENT_DIR / "step_functions" / "site" / "soil_step.py",
             priority=1,
-            no_double_buffer=["params", "states"],
+            no_double_buffer=["params", "states", "states_db"],
         )
-        # P4: removed (was site_nutrient_step computing site-level N ratio)
-        # N supply ratio is now computed per-gap at P5 (gap_sync_step),
+        # N supply ratio is computed per-gap at P4 (gap_demand_aggregate_step),
         # matching GAPpy's per-plot N_supply_demand (model.py:475-488).
         # P10: N balance (reads same-tick avail_N from P1 + N consumed from P9)
         self._site_breed.register_step_func(
             site_nbalance_step,
             CURRENT_DIR / "step_functions" / "site" / "site_nbalance_step.py",
             priority=10,
-            no_double_buffer=["params", "states"],
+            no_double_buffer=["params", "states", "states_db"],
         )
         self.register_breed(breed=self._site_breed)
 

@@ -122,7 +122,7 @@ SITE_S_NET_N_INTO_A0 = 15  # Net N leached to base layer (tn N/ha)
 # === Gap states[16] (for reading from Gap neighbors) ===
 GAP_S_LITTER_ACCUM_C = 4       # Above-ground litter -> A0 layer
 GAP_S_LITTER_ACCUM_N = 5
-GAP_S_TOTAL_N_DEMAND = 11      # N demand from trees (written at P4, used by P5 for N ratio)
+GAP_S_TOTAL_N_DEMAND = 11      # N demand from trees (written at P4)
 GAP_S_TOTAL_LAI = 12           # Per-gap normalized LAI (from P0, GAPpy canopy())
 GAP_S_N_CONSUMED = 13          # N consumed by trees (now aggregated at P9, read at P10)
 
