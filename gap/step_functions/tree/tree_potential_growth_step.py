@@ -5,8 +5,8 @@ Phase A: computes environmental stress and potential growth for LIVING TREES onl
 The nutrient factor is applied later in tree_actual_growth_step (Priority 8) after
 the soil N cycle computes the same-tick n_supply_ratio.
 
-Templates are handled by tree_template_renewal_step (P6) after P4 syncs current-tick
-climate. Free slots are handled by tree_actual_growth_step (P8) after P7 computes
+Templates are handled by tree_template_renewal_step (P5) after P4 syncs current-tick
+climate. Free slots are handled by tree_actual_growth_step (P7) after P6 computes
 num_to_recruit.
 
 Execution Flow:
@@ -75,7 +75,7 @@ TREE_P_LIGHT_AVAIL = 28
 TREE_P_FC_DEGDAY = 29
 TREE_P_FC_DROUGHT = 30
 TREE_P_FC_FLOOD = 31
-# Intermediates [32-33] (P2 writes, P6 reads, same tick via no_double_buffer):
+# Intermediates [32-33] (P3 writes, P5 reads, same tick via no_double_buffer):
 TREE_P_ENV_STRESS = 32
 TREE_P_DIAM_MAX_CALC = 33
 # Renewal params [34-37] (template-only):
@@ -86,7 +86,7 @@ TREE_P_SEEDLING = 37
 # Leaf area params [38-39]:
 TREE_P_LEAFDIAM_A = 38
 TREE_P_LEAFAREA_C = 39
-TREE_P_FORSKA_SHADE = 40  # Light response at canopy base (P2->P6 for self-pruning)
+TREE_P_FORSKA_SHADE = 40  # Light response at canopy base (P3->P7 for self-pruning)
 
 # === Tree states[5] (public, no buffer) ===
 TREE_S_LITTER_C = 0       # Above-ground litter carbon
@@ -143,7 +143,7 @@ def tree_potential_growth_step(
     Phase A (P2): Recruitment + environmental stress + potential growth + N demand.
 
     Computes env_stress = fc_degday * fc_drought * fc_light * fc_flood (no nutrient).
-    Stores env_stress and diam_max in params for P6 to consume same-tick.
+    Stores env_stress and diam_max in params for P5 to consume same-tick.
     """
     # ===== GET CURRENT STATE =====
     is_alive = states_db_tensor[agent_index][TREE_DB_IS_ALIVE]
@@ -327,7 +327,7 @@ def tree_potential_growth_step(
             fc_light = 1.0
 
         # Forska shade: light response at canopy BASE (GAPpy model.py:428-431)
-        # Used for self-pruning check in P6 (GAPpy third tree loop, model.py:564-565)
+        # Used for self-pruning check in P7 (GAPpy third tree loop, model.py:564-565)
         light_at_base = 1.0
         if evergreen > 0:
             light_at_base = cp.exp(XT * cum_con_lai_base / PLOTSIZE)

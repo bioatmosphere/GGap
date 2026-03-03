@@ -1,14 +1,14 @@
 """
-Gap N consumed aggregate step function for GGap model (Priority 9).
-Aggregates actual N consumed from trees after tree_actual_growth_step (P8).
+Gap N consumed aggregate step function for GGap model (Priority 8).
+Aggregates actual N consumed from trees after tree_actual_growth_step (P7).
 
-This runs AFTER P8 so it reads the CURRENT tick's n_consumed values,
-enabling same-tick N balance at P10 (no 1-tick delay).
+This runs AFTER P7 so it reads the CURRENT tick's n_consumed values,
+enabling same-tick N balance at P9 (no 1-tick delay).
 
 Execution Flow:
     1. Loop through Tree neighbors
-    2. Sum n_consumed from living trees and newly recruited seedlings (written at P8, same tick)
-    3. Write total to Gap states (Site reads at P10 for N balance)
+    2. Sum n_consumed from living trees and newly recruited seedlings (written at P7, same tick)
+    3. Write total to Gap states (Site reads at P9 for N balance)
 """
 
 import cupy as cp  # noqa: F401
@@ -20,7 +20,7 @@ BREED_GAP = 1
 BREED_SITE = 2
 
 # === Gap states[16] (public, no buffer) ===
-GAP_S_N_CONSUMED = 13  # Total N consumed by trees (for P10 N balance)
+GAP_S_N_CONSUMED = 13  # Total N consumed by trees (for P9 N balance)
 
 # === Tree states[5] (for reading n_consumed) ===
 TREE_S_N_CONSUMED = 3
@@ -42,10 +42,10 @@ def gap_nconsumed_aggregate_step(
     states_db_tensor,
 ):
     """
-    Gap N consumed aggregate step (priority 9).
+    Gap N consumed aggregate step (priority 8).
 
-    Reads n_consumed from tree neighbors (written at P8, same tick).
-    Writes total to Gap states (Site reads at P10 for same-tick N balance).
+    Reads n_consumed from tree neighbors (written at P7, same tick).
+    Writes total to Gap states (Site reads at P9 for same-tick N balance).
     """
     total_n_consumed = 0.0
 

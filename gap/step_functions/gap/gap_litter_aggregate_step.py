@@ -8,19 +8,19 @@ Litter must be aggregated before site_soil_step (P1) can decompose it.
 Execution Flow:
     1. Zero cumulative LAI bins (50 dec + 50 con) and avail_spec flags (50)
     2. Loop through Tree neighbors:
-       - Sum litter_c, litter_n from living trees (written at P8 of previous tick)
+       - Sum litter_c, litter_n from living trees (written at P7 of previous tick)
        - Compute per-tree LAI, distribute across height-layer bins (dec/con split)
        - Check avail_spec: set flag if mature tree of species exists
-       - Sum seedling weights from templates (for proportional decrement at P6)
-    3. Top-down cumulative prefix sum over LAI bins (trees read O(1) at P3/P6)
+       - Sum seedling weights from templates (for proportional decrement at P5)
+    3. Top-down cumulative prefix sum over LAI bins (trees read O(1) at P3/P5)
     4. Write aggregated litter, total_lai, seedling_weight
 
     Writes: litter_accum_c/n (above-ground), total_lai (for soil water balance),
             total_seedling_weight, cum_dec_lai[0..49], cum_con_lai[0..49],
             avail_spec[0..49]
 
-Note: N consumed aggregation moved to gap_nconsumed_aggregate_step (P9)
-which runs AFTER P8, enabling same-tick N balance at P10.
+Note: N consumed aggregation moved to gap_nconsumed_aggregate_step (P8)
+which runs AFTER P7, enabling same-tick N balance at P9.
 """
 
 import cupy as cp  # noqa: F401
@@ -37,7 +37,7 @@ GAP_S_LITTER_ACCUM_N = 5
 GAP_S_TOTAL_SEEDLING_WEIGHT = 9  # Sum of all templates' seedling weights (for proportional decrement)
 GAP_S_TOTAL_LAI = 12  # Per-gap normalized LAI (sum of tree LAI / PLOTSIZE, GAPpy canopy())
 
-# Pre-aggregated light competition bins (P3/P6 read O(1))
+# Pre-aggregated light competition bins (P3/P5 read O(1))
 GAP_S_CUM_DEC_LAI_BASE = 16   # cum_dec_lai[0..49] at slots 16-65
 GAP_S_CUM_CON_LAI_BASE = 66   # cum_con_lai[0..49] at slots 66-115
 GAP_S_AVAIL_SPEC_BASE = 116   # avail_spec[0..49] at slots 116-165
@@ -81,7 +81,7 @@ def gap_litter_aggregate_step(
     """
     Gap litter aggregate step (priority 0).
 
-    Aggregates litter from tree neighbors (written at P8 of previous tick).
+    Aggregates litter from tree neighbors (written at P7 of previous tick).
     Bins LAI by height layer and computes top-down cumulative sums.
     Sets avail_spec flags for species with mature trees.
     Must run before site_soil_step (P1) which reads aggregated litter.
@@ -109,7 +109,7 @@ def gap_litter_aggregate_step(
             tree_alive = states_db_tensor[neighbor_idx][TREE_DB_IS_ALIVE]
 
             # Read litter from ALL trees (alive + recently dead)
-            # When a tree dies at P8, is_alive=0 in states_db but litter is in states.
+            # When a tree dies at P7, is_alive=0 in states_db but litter is in states.
             # Free slot/template trees have litter=0, so reading is harmless.
             if tree_alive > -0.5:
                 tree_litter_c = states_tensor[neighbor_idx][TREE_S_LITTER_C]
@@ -197,5 +197,5 @@ def gap_litter_aggregate_step(
     gap_lai = total_lai / PLOTSIZE
     states_tensor[agent_index][GAP_S_TOTAL_LAI] = gap_lai
 
-    # Total seedling weight for proportional decrement (templates read at P6)
+    # Total seedling weight for proportional decrement (templates read at P5)
     states_tensor[agent_index][GAP_S_TOTAL_SEEDLING_WEIGHT] = total_seedling_weight

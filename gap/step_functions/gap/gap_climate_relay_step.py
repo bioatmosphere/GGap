@@ -11,7 +11,7 @@ This step matches that by relaying climate before tree growth.
 Execution Flow:
     1. Find Site neighbor
     2. Copy deg_days, dry_days, flood_days, fire/wind intensity, dry_days_base
-    3. Copy avail_n (for P6 templates and P8 disturbance gate)
+    3. Copy avail_n (for P5 templates and P7 disturbance gate)
 """
 
 import cupy as cp  # noqa: F401

@@ -1,14 +1,14 @@
 """
-Tree template renewal step function for GGap model (Priority 6).
+Tree template renewal step function for GGap model (Priority 5).
 Computes per-species seedbank/seedling dynamics using current-tick climate.
 
 Runs AFTER gap_demand_aggregate_step (P4) computes per-gap N supply ratio,
 so templates read current-tick deg_days, dry_days, n_supply_ratio, etc.
 
-P7 (gap_recruit_aggregate_step) reads template regrowth from params
+P6 (gap_recruit_aggregate_step) reads template regrowth from params
 (same tick, no double buffer) to compute growmax and num_to_recruit.
 
-P8 (tree_actual_growth_step) free slots read seedling_weight from params
+P7 (tree_actual_growth_step) free slots read seedling_weight from params
 (same tick, no double buffer) for species selection.
 
 Execution Flow:
@@ -19,8 +19,8 @@ Execution Flow:
     5. Seedbank/seedling pipeline (fire reset / wind accumulate / normal)
     6. Seedling decrement (proportional allocation, skipped during fire/wind)
     7. Annual survival (seedling *= seedling_lg, inside avail_N gate)
-    8. Write regrowth to params (P7 reads same tick for growmax)
-    9. Write seedling_weight to params (P8 free slots read same tick)
+    8. Write regrowth to params (P6 reads same tick for growmax)
+    9. Write seedling_weight to params (P7 free slots read same tick)
 
 Property scheme:
 - params[42]: reads species traits, writes seedbank/seedling/regrowth/weight
@@ -50,12 +50,12 @@ TREE_P_FLOOD_TOL = 15
 TREE_P_DROUGHT_TOL = 16
 TREE_P_EVERGREEN = 17
 TREE_P_FIRE_TOL = 18
-TREE_P_ENV_STRESS = 32       # Regrowth output (P7 reads same tick for growmax)
+TREE_P_ENV_STRESS = 32       # Regrowth output (P6 reads same tick for growmax)
 TREE_P_SEED_SURV = 34
 TREE_P_SEEDLING_LG = 35
 TREE_P_SEEDBANK = 36
 TREE_P_SEEDLING = 37
-TREE_P_SEEDLING_WEIGHT = 41  # Non-buffered seedling weight (P8 free slots read same tick)
+TREE_P_SEEDLING_WEIGHT = 41  # Non-buffered seedling weight (P7 free slots read same tick)
 
 # === Tree states_db[5] (public, double buffered) ===
 TREE_DB_IS_ALIVE = 0
@@ -95,11 +95,11 @@ def tree_template_renewal_step(
     states_db_tensor,
 ):
     """
-    Template renewal step (priority 6).
+    Template renewal step (priority 5).
 
     Computes per-species seedbank/seedling dynamics using current-tick climate
-    (relayed by P2/P4). Writes regrowth to params for P7 growmax aggregation,
-    and seedling_weight to params for P8 free slot species selection.
+    (relayed by P2/P4). Writes regrowth to params for P6 growmax aggregation,
+    and seedling_weight to params for P7 free slot species selection.
     Only processes templates (is_alive < -0.5); living/free trees skip.
     """
     is_alive = states_db_tensor[agent_index][TREE_DB_IS_ALIVE]
@@ -389,6 +389,6 @@ def tree_template_renewal_step(
         # --- 8. Write outputs ---
         params_tensor[agent_index][TREE_P_SEEDBANK] = seedbank
         params_tensor[agent_index][TREE_P_SEEDLING] = seedling
-        params_tensor[agent_index][TREE_P_ENV_STRESS] = regrowth         # P7 reads same tick
-        params_tensor[agent_index][TREE_P_SEEDLING_WEIGHT] = weight      # P8 free slots read same tick
+        params_tensor[agent_index][TREE_P_ENV_STRESS] = regrowth         # P6 reads same tick
+        params_tensor[agent_index][TREE_P_SEEDLING_WEIGHT] = weight      # P7 free slots read same tick
         states_db_tensor[agent_index][TREE_DB_SEEDLING_WEIGHT] = weight  # P0 reads next tick via read buffer

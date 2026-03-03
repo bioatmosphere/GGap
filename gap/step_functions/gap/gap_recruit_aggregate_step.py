@@ -1,15 +1,15 @@
 """
-Gap recruitment aggregate step function for GGap model (Priority 7).
-Reads template regrowth (written at P6, same tick) to compute growmax
+Gap recruitment aggregate step function for GGap model (Priority 6).
+Reads template regrowth (written at P5, same tick) to compute growmax
 and density-based num_to_recruit.
 
-Runs AFTER tree_template_renewal_step (P6) so it reads current-tick
+Runs AFTER tree_template_renewal_step (P5) so it reads current-tick
 regrowth from template params (no double buffer, immediately visible).
 
 Execution Flow:
     1. Loop through Tree neighbors
     2. Count living trees and free slots
-    3. Read growmax from templates (params[ENV_STRESS], written at P6 same tick)
+    3. Read growmax from templates (params[ENV_STRESS], written at P5 same tick)
     4. Compute density-based num_to_recruit (GAPpy model.py:833-837)
     5. Convert num_to_recruit to per-slot probability (nrenew / free_slots)
     6. Generate random seed for species selection
@@ -29,7 +29,7 @@ GAP_S_NUM_TO_RECRUIT = 6
 GAP_S_RECRUIT_RAND_SEED = 7
 
 # === Tree params (for reading template regrowth) ===
-TREE_P_ENV_STRESS = 32  # Templates store regrowth here (written at P6, same tick)
+TREE_P_ENV_STRESS = 32  # Templates store regrowth here (written at P5, same tick)
 
 # === Constants ===
 PLOTSIZE = 500.0  # GAPpy parameters.py:59 — plot area m² (also max trees per plot)
@@ -51,11 +51,11 @@ def gap_recruit_aggregate_step(
     states_db_tensor,
 ):
     """
-    Gap recruitment aggregate step (priority 7).
+    Gap recruitment aggregate step (priority 6).
 
-    Reads regrowth from template neighbors (written at P6, same tick).
+    Reads regrowth from template neighbors (written at P5, same tick).
     Computes num_to_recruit from growmax (GAPpy model.py:833-837).
-    Writes recruitment info to Gap states for P8 free slots to read.
+    Writes recruitment info to Gap states for P7 free slots to read.
     """
     living_tree_count = 0.0
     free_slot_tree_count = 0.0
@@ -118,6 +118,6 @@ def gap_recruit_aggregate_step(
     # Generate pseudo-random seed for species selection
     recruit_rand_seed = float((tick * 997 + agent_index * 991) % 10000)
 
-    # Write recruitment probability + seed (P8 free slots read from Gap)
+    # Write recruitment probability + seed (P7 free slots read from Gap)
     states_tensor[agent_index][GAP_S_NUM_TO_RECRUIT] = recruit_prob
     states_tensor[agent_index][GAP_S_RECRUIT_RAND_SEED] = recruit_rand_seed

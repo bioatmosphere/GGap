@@ -1,5 +1,5 @@
 """
-Site N balance step function for GGap model (Priority 10).
+Site N balance step function for GGap model (Priority 9).
 Closes the nitrogen loop in the SAME tick (no 1-tick delay).
 
 Matches GAPpy model.py:993-1005 where N balance is applied at end of renewal(),
@@ -8,7 +8,7 @@ after all growth and recruitment N consumption is known.
 Execution Flow:
     1. Read avail_N from own states (computed at P1, same tick)
     2. Read annual_runoff from own params (computed at P1, same tick)
-    3. Read total N consumed from all Gap neighbors (aggregated at P9, same tick)
+    3. Read total N consumed from all Gap neighbors (aggregated at P8, same tick)
     4. Apply unit conversion (kg -> tn/ha)
     5. Compute surplus = avail_N - total_N_consumed
     6. If surplus > 0: return to A layer minus leach fraction
@@ -57,9 +57,9 @@ def site_nbalance_step(
     states_db_tensor,
 ):
     """
-    Site N balance step (priority 10).
+    Site N balance step (priority 9).
 
-    Reads avail_N (P1 same tick), N consumed (P9 same tick), annual_runoff (P1 same tick).
+    Reads avail_N (P1 same tick), N consumed (P8 same tick), annual_runoff (P1 same tick).
     Applies surplus/deficit to A layer, leaching to base layer.
     Matches GAPpy model.py:993-1005.
     """
@@ -69,7 +69,7 @@ def site_nbalance_step(
     # Read annual runoff computed by P1 this tick
     annual_runoff = params_tensor[agent_index][SITE_P_ANNUAL_RUNOFF]
 
-    # Sum N consumed from all Gap neighbors (aggregated at P9, same tick)
+    # Sum N consumed from all Gap neighbors (aggregated at P8, same tick)
     total_n_consumed = 0.0
     gap_count = 0.0
 

@@ -27,14 +27,14 @@ Why Gap Agents Exist (Design Rationale):
        - Gap-specific microclimate variations
        - Disturbance propagation across gaps
 
-    The Gap agent acts as an aggregator (collecting litter from Trees at P1) and
-    a relay (copying climate from Site to Trees at P3), keeping the neighbor
+    The Gap agent acts as an aggregator (collecting litter from Trees at P0) and
+    a relay (copying climate from Site to Trees at P2), keeping the neighbor
     graph sparse while enabling hierarchical data flow.
 
 Network Connections:
 - Site <-> Gap: each gap connects to its parent site (bidirectional)
 - Gap <-> Tree: each tree connects to its parent gap (bidirectional)
-- Free -> Template: each free slot connects to all templates (directed, for P8 species selection)
+- Free -> Template: each free slot connects to all templates (directed, for P7 species selection)
 
 Property Scheme (3 properties per breed):
 - params:    neighbor_visible=False  (private data, not shared)
@@ -45,14 +45,14 @@ Data Flow by Priority (matching GAPpy: soil first, two-phase tree growth):
 
   Priority 0 - Gap Litter Aggregate (gap_litter_aggregate_step):
     Reads from Tree neighbors:
-      - states: litter_c, litter_n (from P8 of previous tick)
+      - states: litter_c, litter_n (from P7 of previous tick)
       - states_db: is_alive, dimensions (for LAI binning), seedling_weight
       - params: species_id, max_diam, evergreen, leafdiam_a
     Writes to own:
       - states: litter_accum_c/n, total_lai, total_seedling_weight
-      - states[16-65]: cum_dec_lai[0..49] (top-down cumulative, P3/P6 read O(1))
-      - states[66-115]: cum_con_lai[0..49] (top-down cumulative, P3/P6 read O(1))
-      - states[116-165]: avail_spec[0..49] (binary maturity flags, P6 reads O(1))
+      - states[16-65]: cum_dec_lai[0..49] (top-down cumulative, P3/P5 read O(1))
+      - states[66-115]: cum_con_lai[0..49] (top-down cumulative, P3/P5 read O(1))
+      - states[116-165]: avail_spec[0..49] (binary maturity flags, P5 reads O(1))
 
   Priority 1 - Site Soil Step (site_soil_step):
     Reads from Gap neighbors:
@@ -88,7 +88,7 @@ Data Flow by Priority (matching GAPpy: soil first, two-phase tree growth):
     Clears:
       - states: litter_accum_c/n, total_lai, n_consumed (consumed)
 
-  Priority 6 - Tree Template Renewal (tree_template_renewal_step):
+  Priority 5 - Tree Template Renewal (tree_template_renewal_step):
     Templates only (is_alive < -0.5):
       Reads from Gap neighbor: climate (from P2), n_supply_ratio (from P4),
         cum_lai at ground (from P0, O(1)), avail_spec (from P0, O(1))
@@ -96,14 +96,14 @@ Data Flow by Priority (matching GAPpy: soil first, two-phase tree growth):
         - params: seedbank, seedling, env_stress (regrowth), seedling_weight
         - states_db: seedling_weight (P0 reads next tick via read buffer)
 
-  Priority 7 - Gap Recruit Aggregate (gap_recruit_aggregate_step):
+  Priority 6 - Gap Recruit Aggregate (gap_recruit_aggregate_step):
     Reads from Tree neighbors:
-      - params: env_stress (regrowth from templates, written at P6 same tick)
+      - params: env_stress (regrowth from templates, written at P5 same tick)
       - states_db: is_alive (count living/free)
     Writes to own:
       - states: num_to_recruit, recruit_rand_seed
 
-  Priority 8 - Tree Actual Growth + Activation (tree_actual_growth_step):
+  Priority 7 - Tree Actual Growth + Activation (tree_actual_growth_step):
     Living trees:
       Reads from own params (written at P3, same tick):
         - env_stress, diam_max, light_avail
@@ -114,25 +114,25 @@ Data Flow by Priority (matching GAPpy: soil first, two-phase tree growth):
         - states: litter_c, litter_n, n_consumed
         - states_db: is_alive, diam, height, canopy_ht
     Free slots:
-      Reads from Gap neighbor: num_to_recruit, recruit_rand_seed (from P7, same tick)
-      Reads from Template neighbors: seedling_weight (from params, written at P6 same tick)
+      Reads from Gap neighbor: num_to_recruit, recruit_rand_seed (from P6, same tick)
+      Reads from Template neighbors: seedling_weight (from params, written at P5 same tick)
       Writes to own:
         - params: species traits, physiology (seedling init)
         - states: n_consumed, litter_c/n (seedling contribution)
         - states_db: is_alive=1, diam, height, canopy_ht (visible next tick)
 
-  Priority 9 - Gap N Consumed Aggregate (gap_nconsumed_aggregate_step):
+  Priority 8 - Gap N Consumed Aggregate (gap_nconsumed_aggregate_step):
     Reads from Tree neighbors:
-      - states: n_consumed (from P8, same tick)
+      - states: n_consumed (from P7, same tick)
     Writes to own:
-      - states: n_consumed (total for P10)
+      - states: n_consumed (total for P9)
 
-  Priority 10 - Site N Balance (site_nbalance_step):
+  Priority 9 - Site N Balance (site_nbalance_step):
     Reads from own:
       - states: avail_n (from P1, same tick)
       - params: annual_runoff (from P1, same tick), soil pools
     Reads from Gap neighbors:
-      - states: n_consumed (from P9, same tick)
+      - states: n_consumed (from P8, same tick)
     Writes to own:
       - params: A_n, A_c, BL_c, BL_n (surplus/deficit + leaching)
     Matches GAPpy model.py:993-1005 (end of renewal, same year).
@@ -373,13 +373,12 @@ class GAPModel(Model):
      1. Site (P1): decompose litter, 365-day soil loop, compute avail_n
      2. Gap (P2):  relay climate from Site to Gap (current-tick)
      3. Trees (P3): env stress + potential growth + N demand (living only)
-     4. Gap (P4):  aggregate N demand from trees
-     5. Gap (P4):  aggregate N demand + compute per-gap n_supply_ratio + clear accumulators
-     6. Trees (P6): template renewal (seedbank/seedling dynamics)
-     7. Gap (P7):  recruitment aggregate (growmax → num_to_recruit)
-     8. Trees (P8): living tree growth + mortality + free slot activation
-     9. Gap (P9):  aggregate N consumed from trees (same tick)
-    10. Site (P10): N balance — surplus/deficit adjusts soil pools
+     4. Gap (P4):  aggregate N demand + compute per-gap n_supply_ratio + clear accumulators
+     5. Trees (P5): template renewal (seedbank/seedling dynamics)
+     6. Gap (P6):  recruitment aggregate (growmax → num_to_recruit)
+     7. Trees (P7): living tree growth + mortality + free slot activation
+     8. Gap (P8):  aggregate N consumed from trees (same tick)
+     9. Site (P9): N balance — surplus/deficit adjusts soil pools
     """
 
     def __init__(self) -> None:
@@ -401,18 +400,18 @@ class GAPModel(Model):
             priority=3,
             no_double_buffer=["params", "states", "states_db"],
         )
-        # Phase B (P6): template renewal (current-tick climate, seedbank/seedling)
+        # Phase B (P5): template renewal (current-tick climate, seedbank/seedling)
         self._tree_breed.register_step_func(
             tree_template_renewal_step,
             CURRENT_DIR / "step_functions" / "tree" / "tree_template_renewal_step.py",
-            priority=6,
+            priority=5,
             no_double_buffer=["params", "states", "states_db"],
         )
-        # Phase C (P8): nutrient response + final growth + mortality + litter + free slot activation
+        # Phase C (P7): nutrient response + final growth + mortality + litter + free slot activation
         self._tree_breed.register_step_func(
             tree_actual_growth_step,
             CURRENT_DIR / "step_functions" / "tree" / "tree_actual_growth_step.py",
-            priority=8,
+            priority=7,
             no_double_buffer=["params", "states", "states_db"],
         )
         self.register_breed(breed=self._tree_breed)
@@ -449,18 +448,18 @@ class GAPModel(Model):
             priority=4,
             no_double_buffer=["params", "states", "states_db"],
         )
-        # P7: recruitment aggregate (reads P6 template regrowth → growmax → num_to_recruit)
+        # P6: recruitment aggregate (reads P5 template regrowth → growmax → num_to_recruit)
         self._gap_breed.register_step_func(
             gap_recruit_aggregate_step,
             CURRENT_DIR / "step_functions" / "gap" / "gap_recruit_aggregate_step.py",
-            priority=7,
+            priority=6,
             no_double_buffer=["params", "states", "states_db"],
         )
-        # P9: aggregate N consumed from trees (same tick as P8, for same-tick N balance)
+        # P8: aggregate N consumed from trees (same tick as P7, for same-tick N balance)
         self._gap_breed.register_step_func(
             gap_nconsumed_aggregate_step,
             CURRENT_DIR / "step_functions" / "gap" / "gap_nconsumed_aggregate_step.py",
-            priority=9,
+            priority=8,
             no_double_buffer=["params", "states", "states_db"],
         )
         self.register_breed(breed=self._gap_breed)
@@ -482,11 +481,11 @@ class GAPModel(Model):
         )
         # N supply ratio is computed per-gap at P4 (gap_demand_aggregate_step),
         # matching GAPpy's per-plot N_supply_demand (model.py:475-488).
-        # P10: N balance (reads same-tick avail_N from P1 + N consumed from P9)
+        # P9: N balance (reads same-tick avail_N from P1 + N consumed from P8)
         self._site_breed.register_step_func(
             site_nbalance_step,
             CURRENT_DIR / "step_functions" / "site" / "site_nbalance_step.py",
-            priority=10,
+            priority=9,
             no_double_buffer=["params", "states", "states_db"],
         )
         self.register_breed(breed=self._site_breed)

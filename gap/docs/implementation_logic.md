@@ -4,7 +4,7 @@ This document explains the detailed logic of the GGap model implementation, incl
 
 ## Overview
 
-GGap is a GPU-accelerated forest gap dynamics model that implements GAPpy/UVAFME processes using the SAGESim agent-based framework. It uses an 11-priority execution pipeline (P0-P10) with soil-first ordering, two-phase tree growth, and renewal-last ordering, matching GAPpy's annual cycle.
+GGap is a GPU-accelerated forest gap dynamics model that implements GAPpy/UVAFME processes using the SAGESim agent-based framework. It uses a 10-priority execution pipeline (P0-P9) with soil-first ordering, two-phase tree growth, and renewal-last ordering, matching GAPpy's annual cycle.
 
 ### Agent Hierarchy
 
@@ -51,20 +51,19 @@ P0:  Gap litter aggregate    ─┐
 P1:  Site soil                ─┘ bio_geo_climate (soil first)
 P2:  Gap climate relay           climate Site→Gap (eliminates 1-tick lag)
 P3:  Tree potential growth       canopy + growth phase 1 (env stress, light, n_demand)
-P4:  Gap N demand aggregate  ─┐
-P5:  Gap sync (N ratio)      ─┘ growth phase 2 (per-gap nutrient feedback)
-P6:  Tree template renewal       renewal phase 1 (seedbank/seedling/weight)
-P7:  Gap recruit aggregate       renewal phase 2 (density-based nrenew)
-P8:  Tree actual growth          growth finalization + mortality + recruitment
-P9:  Gap N consumed aggregate ─┐
-P10: Site N balance           ─┘ same-tick N balance
+P4:  Gap N demand aggregate      growth phase 2 (per-gap nutrient feedback + clear accumulators)
+P5:  Tree template renewal       renewal phase 1 (seedbank/seedling/weight)
+P6:  Gap recruit aggregate       renewal phase 2 (density-based nrenew)
+P7:  Tree actual growth          growth finalization + mortality + recruitment
+P8:  Gap N consumed aggregate ─┐
+P9:  Site N balance           ─┘ same-tick N balance
 ```
 
 ---
 
 ## Step Function Execution Flow
 
-Each simulation tick executes eleven step functions in priority order:
+Each simulation tick executes ten step functions in priority order:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -76,7 +75,7 @@ Each simulation tick executes eleven step functions in priority order:
 │                                                                 │
 │  1. AGGREGATE LITTER + LAI FROM TREES                           │
 │     - Loop through Tree neighbors                               │
-│     - Sum litter_c, litter_n (above-ground) from prev tick P8   │
+│     - Sum litter_c, litter_n (above-ground) from prev tick P7   │
 │     - Compute per-tree LAI = dc² × leafdiam_a                  │
 │     - Sum total LAI, normalize by PLOTSIZE=500                  │
 │     - Sum total_seedling_weight across templates                │
@@ -85,7 +84,7 @@ Each simulation tick executes eleven step functions in priority order:
 │  WRITES:                                                        │
 │     - states: litter_accum_c/n (for Site at P1)                │
 │     - states: total_lai (for Site at P1, canopy water balance)  │
-│     - states: total_seedling_weight (for P6 proportional decr.) │
+│     - states: total_seedling_weight (for P5 proportional decr.) │
 │                                                                 │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
@@ -175,7 +174,7 @@ Each simulation tick executes eleven step functions in priority order:
 │                                                                 │
 │  2. POTENTIAL GROWTH                                            │
 │     - env_stress = fc_degday * fc_drought * fc_light * fc_flood │
-│       (NO fc_nutrient — applied later at P8)                    │
+│       (NO fc_nutrient — applied later at P7)                    │
 │     - diam_max = optimal diameter increment for current size    │
 │     - Compute potential biomass change                          │
 │     - Compute n_demand from potential growth                    │
@@ -191,13 +190,6 @@ Each simulation tick executes eleven step functions in priority order:
 │  ─────────────────────────────────────────────────────────────  │
 │                                                                 │
 │  - Sum n_demand from all living Tree neighbors (from P3)        │
-│  - Write total_n_demand to Gap states (read at P5)              │
-│                                                                 │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  Priority 5: gap_sync_step (Gap)                                │
-│  ─────────────────────────────────────────────────────────────  │
-│                                                                 │
 │  - Compute PER-GAP n_supply_ratio:                              │
 │    avail_n / (total_n_demand * UNIT_CONV), capped at 1.0       │
 │  - Write n_supply_ratio to own states                           │
@@ -205,7 +197,7 @@ Each simulation tick executes eleven step functions in priority order:
 │                                                                 │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  Priority 6: tree_template_renewal_step (Tree)                  │
+│  Priority 5: tree_template_renewal_step (Tree)                  │
 │  ─────────────────────────────────────────────────────────────  │
 │  Templates only (is_alive < -0.5)                               │
 │  Matches GAPpy renewal() (model.py:792-982)                    │
@@ -250,14 +242,14 @@ Each simulation tick executes eleven step functions in priority order:
 │                                                                 │
 │  i. OUTPUTS                                                     │
 │     - params: seedbank, seedling, env_stress (= regrowth),      │
-│              seedling_weight (P8 dormant slots read same tick)   │
+│              seedling_weight (P7 dormant slots read same tick)   │
 │                                                                 │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  Priority 7: gap_recruit_aggregate_step (Gap)                   │
+│  Priority 6: gap_recruit_aggregate_step (Gap)                   │
 │  ─────────────────────────────────────────────────────────────  │
 │                                                                 │
-│  - Read template regrowth from Tree.params (from P6, same tick) │
+│  - Read template regrowth from Tree.params (from P5, same tick) │
 │  - Count living trees and free slots from Tree.states_db        │
 │  - growmax = max regrowth across all templates                  │
 │  - DENSITY-BASED RECRUITMENT (GAPpy model.py:833-837):          │
@@ -269,7 +261,7 @@ Each simulation tick executes eleven step functions in priority order:
 │                                                                 │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  Priority 8: tree_actual_growth_step (Tree)                     │
+│  Priority 7: tree_actual_growth_step (Tree)                     │
 │  ─────────────────────────────────────────────────────────────  │
 │  Two branches based on is_alive:                                │
 │                                                                 │
@@ -277,7 +269,7 @@ Each simulation tick executes eleven step functions in priority order:
 │  ─────────────────────────────────────────                      │
 │  a. GROWTH (runs first, before fire/wind check)                 │
 │     - Read env_stress, diam_max from params (P3, same tick)     │
-│     - Read n_supply_ratio from Gap (P5, same tick)              │
+│     - Read n_supply_ratio from Gap (P4, same tick)              │
 │     - fc_nutrient based on lownutr_tol (1-3)                   │
 │     - growth_factor = env_stress * fc_nutrient                  │
 │     - diam_increment = diam_max * growth_factor                 │
@@ -311,7 +303,7 @@ Each simulation tick executes eleven step functions in priority order:
 │  Seedlings don't grow until next tick.                          │
 │                                                                 │
 │  a. READ RECRUITMENT INFO                                       │
-│     - recruit_prob from Gap (written at P7, same tick)          │
+│     - recruit_prob from Gap (written at P6, same tick)          │
 │     - recruit_rand_seed for deterministic selection             │
 │                                                                 │
 │  b. SLOT SELECTION                                              │
@@ -320,7 +312,7 @@ Each simulation tick executes eleven step functions in priority order:
 │                                                                 │
 │  c. SPECIES SELECTION                                           │
 │     - Iterate template neighbors                                │
-│     - Read seedling_weight from params (written at P6, same     │
+│     - Read seedling_weight from params (written at P5, same     │
 │       tick via params — no double buffer needed)                 │
 │     - Select species weighted by seedling_weight                │
 │     - Minimum weight 0.01 per template (baseline chance)        │
@@ -341,20 +333,20 @@ Each simulation tick executes eleven step functions in priority order:
 │                                                                 │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  Priority 9: gap_nconsumed_aggregate_step (Gap)                 │
+│  Priority 8: gap_nconsumed_aggregate_step (Gap)                 │
 │  ─────────────────────────────────────────────────────────────  │
 │                                                                 │
-│  - Sum n_consumed from all trees (from P8, same tick)           │
+│  - Sum n_consumed from all trees (from P7, same tick)           │
 │  - Skip templates (is_alive < -0.5)                             │
-│  - Write total n_consumed to Gap states (Site reads at P10)     │
+│  - Write total n_consumed to Gap states (Site reads at P9)      │
 │                                                                 │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  Priority 10: site_nbalance_step (Site)                         │
+│  Priority 9: site_nbalance_step (Site)                          │
 │  ─────────────────────────────────────────────────────────────  │
 │                                                                 │
 │  - Read avail_n (from P1) + annual_runoff (from P1)             │
-│  - Sum n_consumed from all Gap neighbors (from P9, same tick)   │
+│  - Sum n_consumed from all Gap neighbors (from P8, same tick)   │
 │  - Scale: total_n_consumed * UNIT_CONV / gap_count              │
 │  - surplus = avail_n - scaled_n_consumed                        │
 │  - If surplus > 0: return to A layer minus leach fraction       │
@@ -402,31 +394,29 @@ Each simulation tick executes eleven step functions in priority order:
     │                     │                                      │
     │                     ↓                                      │
     │   P4: Gap reads Tree n_demand → total_n_demand             │
-    │                     │                                      │
-    │                     ↓                                      │
-    │   P5: Gap computes per-gap N ratio + clears accumulators   │
+    │        → per-gap N ratio + clears accumulators             │
     │        → n_supply_ratio = avail_n / (demand * UNIT_CONV)   │
     │                     │                                      │
     │                     ↓                                      │
-    │   P6: Templates compute renewal (seedbank/seedling/weight) │
+    │   P5: Templates compute renewal (seedbank/seedling/weight) │
     │        → fire/wind seedling reset (outside N gate)         │
-    │        → writes seedling_weight to params (P8 reads)       │
+    │        → writes seedling_weight to params (P7 reads)       │
     │                     │                                      │
     │                     ↓                                      │
-    │   P7: Gap counts recruits from template regrowth           │
+    │   P6: Gap counts recruits from template regrowth           │
     │        → recruit_prob = nrenew / free_slots                │
     │                     │                                      │
     │                     ↓                                      │
-    │   P8: Trees read n_supply_ratio (same tick!)               │
+    │   P7: Trees read n_supply_ratio (same tick!)               │
     │        Living: growth → fire/wind → mortality → litter     │
     │        Dormant: species selection + activation              │
     │        → writes litter, n_consumed                         │
     │                     │                                      │
     │                     ↓                                      │
-    │   P9: Gap aggregates n_consumed from trees                 │
+    │   P8: Gap aggregates n_consumed from trees                 │
     │                     │                                      │
     │                     ↓                                      │
-    │   P10: Site applies N balance (surplus/deficit + leaching) │
+    │   P9: Site applies N balance (surplus/deficit + leaching)  │
     │                     │                                      │
     │                     ↓                                      │
     │   ┌─────────────────────────────────────────────┐          │
@@ -447,15 +437,15 @@ Each simulation tick executes eleven step functions in priority order:
 | `bio_geo_climate()` | P1: site_soil_step (daily climate + soil decomposition) |
 | `canopy()` (light competition) | P3: tree_potential_growth_step (Beer-Lambert, XT=-0.40) |
 | `growth()` first loop (env stress) | P3: tree_potential_growth_step |
-| `growth()` second loop (nutrient + final growth) | P8: tree_actual_growth_step (living branch) |
-| `growth()` third loop (canopy pruning) | P8: tree_actual_growth_step (Forska self-pruning) |
-| `mortality()` fire/wind | P8: tree_actual_growth_step (after growth, before natural mort.) |
-| `mortality()` natural | P8: tree_actual_growth_step (age + stress two-check) |
-| `renewal()` | P6: tree_template_renewal_step (templates) + P8 (dormant activation) |
+| `growth()` second loop (nutrient + final growth) | P7: tree_actual_growth_step (living branch) |
+| `growth()` third loop (canopy pruning) | P7: tree_actual_growth_step (Forska self-pruning) |
+| `mortality()` fire/wind | P7: tree_actual_growth_step (after growth, before natural mort.) |
+| `mortality()` natural | P7: tree_actual_growth_step (age + stress two-check) |
+| `renewal()` | P5: tree_template_renewal_step (templates) + P7 (dormant activation) |
 | `sum_litter()` (in bio_geo_climate) | P0: gap_litter_aggregate_step (litter + LAI) |
-| N ratio computation | P4→P5: demand aggregate → per-gap N ratio |
+| N ratio computation | P4: demand aggregate + per-gap N ratio |
 | Climate relay | P2: gap_climate_relay_step (Site→Gap, eliminates 1-tick lag) |
-| N balance | P9→P10: n_consumed aggregate → site N balance (same-tick) |
+| N balance | P8→P9: n_consumed aggregate → site N balance (same-tick) |
 
 ---
 
@@ -532,15 +522,15 @@ for each neighbor (all living trees in gap):
 - PLOTSIZE = 500.0 constant, matching GAPpy's /plotsize
 - Templates compute light at ground level (height = 0), so all living neighbors shade them
 - Forska shade: light at canopy base height (int(canopy_ht)), stored in params[40]
-- Used at both P3 (living trees) and P6 (template renewal)
+- Used at both P3 (living trees) and P5 (template renewal)
 
 ---
 
 ## Renewal Process (GAPpy renewal())
 
-Renewal spans three priorities (P6→P7→P8), matching GAPpy's ordering where `renewal()` runs after `mortality()`. Seedlings don't grow until the next year.
+Renewal spans three priorities (P5→P6→P7), matching GAPpy's ordering where `renewal()` runs after `mortality()`. Seedlings don't grow until the next year.
 
-### 1. Template Renewal (P6, templates)
+### 1. Template Renewal (P5, templates)
 
 Each template represents one species and maintains persistent seedbank/seedling state:
 
@@ -594,11 +584,11 @@ seedling -= my_share / PLOTSIZE
 seedling *= seedling_lg
 ```
 
-### 2. Density-Based nrenew (P7, Gap)
+### 2. Density-Based nrenew (P6, Gap)
 
 The number of recruits per tick is density-dependent (GAPpy model.py:833-837):
 ```
-growmax = max regrowth across all templates (from P6, same tick)
+growmax = max regrowth across all templates (from P5, same tick)
 max_renew = int(PLOTSIZE * growmax) - living_count
 nrenew = min(max_renew, int(PLOTSIZE * 0.5))
 nrenew = max(nrenew, 3)
@@ -606,12 +596,12 @@ nrenew = min(nrenew, int(PLOTSIZE) - living_count)
 recruit_prob = nrenew / free_slot_count
 ```
 - PLOTSIZE = 500.0 (GAPpy plotsize), NOT maxtrees (1000)
-- `growmax`: max regrowth across all templates (from P6, same tick)
+- `growmax`: max regrowth across all templates (from P5, same tick)
 - When forest is near capacity, nrenew is small
 - When forest is sparse, nrenew can be up to half capacity
 - recruit_prob is per-slot probability (not raw count)
 
-### 3. Dormant Slot Activation (P8, dormant slots)
+### 3. Dormant Slot Activation (P7, dormant slots)
 
 Dormant slots compete for recruitment based on a priority hash:
 ```
@@ -621,7 +611,7 @@ if slot_priority < recruit_prob:
     copy traits, initialize as seedling
 ```
 
-Species selection reads `seedling_weight` from template `params[41]` (written at P6, same tick — no double buffer needed since P8 > P6). A minimum weight of 0.01 ensures all species have a baseline recruitment chance.
+Species selection reads `seedling_weight` from template `params[41]` (written at P5, same tick — no double buffer needed since P7 > P5). A minimum weight of 0.01 ensures all species have a baseline recruitment chance.
 
 Conifer seedlings are initialized with `leaf_bm = 0.0` (matching GAPpy's zeroed local arrays in growth()).
 
@@ -679,11 +669,11 @@ Three-layer model (A0 → A → Base):
 - Division guard: skip mineralization when C/N ratio ≤ 0.001
 
 ### Base Layer
-- Receives from A layer + leached N/C from P10
+- Receives from A layer + leached N/C from P9
 - Respiration rate: `SB_RESP = 2.74e-7`
 - Slow turnover, long-term storage
 
-### N Balance (P10, same-tick)
+### N Balance (P9, same-tick)
 - surplus = avail_N - total_N_consumed (scaled by UNIT_CONV / gap_count)
 - Surplus > 0: return to A layer minus leach fraction (min(runoff/1000, 0.1))
 - Surplus ≤ 0: debit A layer
@@ -699,7 +689,7 @@ Note: GAPpy's `soil.py` does not include these guards because its renewal proces
 ### Unit Scaling
 - Tree/Gap data in raw kg; Site/soil data in tn/ha
 - UNIT_CONV = 0.02 (= HEC_TO_M2 / PLOTSIZE / 1000 = 10000/500/1000)
-- Applied at P1 (litter input) and P10 (N consumed input)
+- Applied at P1 (litter input) and P9 (N consumed input)
 
 ### Moisture Effects
 - Decomposition scaled by moisture function
@@ -724,14 +714,14 @@ Note: GAPpy's `soil.py` does not include these guards because its renewal proces
    - Fire: 0.3 - 1.0 (based on dry conditions)
    - Wind: 0.5 - 1.0 (based on hash)
 
-3. **Propagation**: Site states → Gap relay (P2) → Trees read at P6/P8
+3. **Propagation**: Site states → Gap relay (P2) → Trees read at P5/P7
 
-4. **Living tree mortality** (Tree P8):
+4. **Living tree mortality** (Tree P7):
    - If fire_intensity > 0.01 OR wind_intensity > 0.01: immediate death
    - Growth runs BEFORE fire check (post-growth biomass goes to litter)
    - All biomass → A0 litter, fire-killed trees contribute to n_consumed
 
-5. **Template seedling reset** (Tree P6):
+5. **Template seedling reset** (Tree P5):
    - Fire: seedling = (invader×10 + sprout×avail_spec) × fc_fire
      - fc_fire uses gama table indexed by fire_tol (1-6)
    - Wind: seedling += invader + sprout × avail_spec
@@ -748,13 +738,12 @@ Note: GAPpy's `soil.py` does not include these guards because its renewal proces
 | `step_functions/site/soil_step.py` | P1 | Site | Soil biogeochemistry (365-day loop, Bernoulli rain) |
 | `step_functions/gap/gap_climate_relay_step.py` | P2 | Gap | Relay climate Site→Gap (eliminates 1-tick lag) |
 | `step_functions/tree/tree_potential_growth_step.py` | P3 | Tree | Env stress, light competition, n_demand |
-| `step_functions/gap/gap_demand_aggregate_step.py` | P4 | Gap | Aggregate N demand from trees |
-| `step_functions/gap/gap_sync_step.py` | P5 | Gap | Per-gap N ratio + clear accumulators |
-| `step_functions/tree/tree_template_renewal_step.py` | P6 | Tree | Seedbank/seedling dynamics + regrowth (templates) |
-| `step_functions/gap/gap_recruit_aggregate_step.py` | P7 | Gap | Density-based nrenew from template regrowth |
-| `step_functions/tree/tree_actual_growth_step.py` | P8 | Tree | Final growth + mortality + recruitment |
-| `step_functions/gap/gap_nconsumed_aggregate_step.py` | P9 | Gap | Aggregate N consumed from trees |
-| `step_functions/site/site_nbalance_step.py` | P10 | Site | N surplus/deficit + leaching |
+| `step_functions/gap/gap_demand_aggregate_step.py` | P4 | Gap | Aggregate N demand + per-gap N ratio + clear accumulators |
+| `step_functions/tree/tree_template_renewal_step.py` | P5 | Tree | Seedbank/seedling dynamics + regrowth (templates) |
+| `step_functions/gap/gap_recruit_aggregate_step.py` | P6 | Gap | Density-based nrenew from template regrowth |
+| `step_functions/tree/tree_actual_growth_step.py` | P7 | Tree | Final growth + mortality + recruitment |
+| `step_functions/gap/gap_nconsumed_aggregate_step.py` | P8 | Gap | Aggregate N consumed from trees |
+| `step_functions/site/site_nbalance_step.py` | P9 | Site | N surplus/deficit + leaching |
 
 ---
 

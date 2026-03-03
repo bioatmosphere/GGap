@@ -8,7 +8,7 @@ This implementation translates UVAFME's forest gap model into a scalable, GPU-en
 
 - **3-level agent hierarchy** (Site → Gap → Tree) with SAGESim breeds
 - **32 tree species** loaded from UVAFME CSV input files (20 genera)
-- **7-priority step function pipeline** running on GPU via CuPy JIT
+- **10-priority step function pipeline** running on GPU via CuPy JIT
 - **Full soil biogeochemistry** with daily timestep (365 days/year)
 - **GAPpy-compatible CSV output** (5 files matching GAPpy format)
 - **MPI parallelization** for multi-rank execution
@@ -35,19 +35,22 @@ Site Agent (1 per simulation)
 └── ...
 ```
 
-### Step Function Pipeline (7 Priorities)
+### Step Function Pipeline (10 Priorities)
 
 Each simulation tick (= 1 year) executes these GPU kernels in order:
 
 | Priority | Step Function | Agent | Description |
 |----------|--------------|-------|-------------|
-| P0 | `gap_litter_aggregate_step` | Gap | Aggregate litter from trees, density-based recruitment count |
+| P0 | `gap_litter_aggregate_step` | Gap | Aggregate litter from trees, bin LAI by height, set avail_spec |
 | P1 | `soil_step` | Site | Daily soil biogeochemistry (365 days), climate variability, water balance |
-| P2 | `tree_potential_growth_step` | Tree | Environmental responses, potential diameter growth |
-| P3 | `gap_demand_aggregate_step` | Gap | Sum nitrogen demand across trees per gap |
-| P4 | `site_nutrient_step` | Site | Compute N supply ratio from available N vs demand |
-| P5 | `gap_sync_step` | Gap | Relay climate and N ratio to trees, clear accumulators |
-| P6 | `tree_actual_growth_step` | Tree | N-limited actual growth, mortality check, biomass update, renewal |
+| P2 | `gap_climate_relay_step` | Gap | Relay climate from Site to Gap for same-tick tree reads |
+| P3 | `tree_potential_growth_step` | Tree | Environmental responses, potential diameter growth, N demand |
+| P4 | `gap_demand_aggregate_step` | Gap | Sum N demand, compute per-gap N supply ratio, clear accumulators |
+| P5 | `tree_template_renewal_step` | Tree | Seedbank/seedling dynamics for template trees |
+| P6 | `gap_recruit_aggregate_step` | Gap | Compute growmax and num_to_recruit from template regrowth |
+| P7 | `tree_actual_growth_step` | Tree | N-limited actual growth, mortality, litter, free slot activation |
+| P8 | `gap_nconsumed_aggregate_step` | Gap | Aggregate N consumed from trees for same-tick N balance |
+| P9 | `site_nbalance_step` | Site | Close N loop: surplus/deficit to A layer, leaching to base |
 
 ### Core Files
 
@@ -65,15 +68,18 @@ Each simulation tick (= 1 year) executes these GPU kernels in order:
 ```
 step_functions/
 ├── gap/
-│   ├── gap_litter_aggregate_step.py    # P0: litter aggregation, recruitment count
-│   ├── gap_demand_aggregate_step.py    # P3: N demand aggregation
-│   └── gap_sync_step.py               # P5: relay climate/N, clear accumulators
+│   ├── gap_litter_aggregate_step.py       # P0: litter aggregation, LAI binning, avail_spec
+│   ├── gap_climate_relay_step.py          # P2: relay climate from Site to Gap
+│   ├── gap_demand_aggregate_step.py       # P4: N demand aggregation + N supply ratio
+│   ├── gap_recruit_aggregate_step.py      # P6: recruitment count from template regrowth
+│   └── gap_nconsumed_aggregate_step.py    # P8: N consumed aggregation
 ├── site/
-│   ├── soil_step.py                    # P1: daily soil biogeochemistry
-│   └── site_nutrient_step.py           # P4: compute N supply ratio
+│   ├── soil_step.py                       # P1: daily soil biogeochemistry
+│   └── site_nbalance_step.py              # P9: N balance (surplus/deficit + leaching)
 └── tree/
-    ├── tree_potential_growth_step.py    # P2: env responses, potential growth
-    └── tree_actual_growth_step.py       # P6: actual growth, mortality, renewal
+    ├── tree_potential_growth_step.py       # P3: env responses, potential growth, N demand
+    ├── tree_template_renewal_step.py      # P5: seedbank/seedling dynamics
+    └── tree_actual_growth_step.py         # P7: actual growth, mortality, free slot activation
 ```
 
 ## Species
@@ -86,23 +92,29 @@ Each species has parameters for: max age/diameter/height, growth rate (g), shade
 
 ## Model Processes
 
-### Growth (P2 + P6)
+### Growth (P3 + P5-P7)
 
-Trees grow each year through a two-phase process:
+Trees grow each year through a multi-phase process:
 
-**Phase 1 - Potential Growth (P2):**
+**Phase A - Potential Growth (P3):**
 1. Temperature response — parabolic function of degree days
 2. Light response — exponential saturation based on shade tolerance
 3. Drought response — exponential decay with dry days
 4. Flood response — tolerance-based factor
 5. Potential diameter increment from species growth parameters
+6. Nitrogen demand from potential growth
 
-**Phase 2 - Actual Growth (P6):**
-1. Nitrogen demand calculated from potential growth
-2. Gap-level N limitation applied (demand vs available)
-3. Final diameter/height/biomass update
+**Phase B - Template Renewal (P5):**
+1. Seedbank/seedling pipeline for template trees
+2. Environmental response for regrowth calculation
+3. Seedling weight for species selection probability
+
+**Phase C - Actual Growth (P7):**
+1. Gap-level N limitation applied (demand vs available from P4)
+2. Final diameter/height/biomass update
+3. Canopy self-pruning
 4. Mortality check (age-dependent + stress-induced)
-5. Renewal: seedbank → seedling → new tree recruitment
+5. Free slot activation: species selection, seedling initialization
 
 ### Soil Biogeochemistry (P1)
 
@@ -115,7 +127,7 @@ Daily timestep (365 iterations per tick):
 6. Nitrogen mineralization and availability
 7. Annual dry_days recomputation from perturbed precipitation
 
-### Light Competition (P0 + P5)
+### Light Competition (P0 + P2)
 
 - Gap-level light profile calculated from tree heights and leaf areas
 - Beer-Lambert law attenuation through canopy layers

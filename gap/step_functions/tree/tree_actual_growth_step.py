@@ -1,9 +1,9 @@
 """
-Tree actual growth step function for GGap model (Priority 8).
+Tree actual growth step function for GGap model (Priority 7).
 Handles living tree growth + mortality + litter and free slot activation.
 
-Template renewal is now in tree_template_renewal_step (P6) and recruitment
-counting is in gap_recruit_aggregate_step (P7).
+Template renewal is now in tree_template_renewal_step (P5) and recruitment
+counting is in gap_recruit_aggregate_step (P6).
 
 Execution Flow:
     1. FINAL GROWTH (living trees, is_alive > 0.5):
@@ -16,13 +16,13 @@ Execution Flow:
        - Canopy self-pruning, mortality, litter output
 
     2. DORMANT ACTIVATION (free slots, is_alive == 0):
-       - Read recruit_prob from Gap (written at P7, same tick)
+       - Read recruit_prob from Gap (written at P6, same tick)
        - Select species from templates weighted by seedling_weight
        - Copy traits, initialize as seedling, set is_alive = 1.0
        - Visible as alive next tick (double-buffered states_db)
        - Matches GAPpy: renewal is last, seedlings don't grow until next year
 
-    3. TEMPLATES (is_alive < -0.5): skipped (handled at P6)
+    3. TEMPLATES (is_alive < -0.5): skipped (handled at P5)
 
 Property scheme:
 - params[42]: reads env_stress, diam_max (from P3), writes age, biomC, etc.
@@ -74,7 +74,7 @@ TREE_P_LIGHT_AVAIL = 28
 TREE_P_FC_DEGDAY = 29
 TREE_P_FC_DROUGHT = 30
 TREE_P_FC_FLOOD = 31
-# Intermediates [32-33, 40] (written at P3, read here at P8):
+# Intermediates [32-33, 40] (written at P3, read here at P7):
 TREE_P_ENV_STRESS = 32
 TREE_P_DIAM_MAX_CALC = 33
 TREE_P_FORSKA_SHADE = 40  # Light response at canopy base (for self-pruning)
@@ -86,14 +86,14 @@ TREE_P_SEEDLING = 37
 # Leaf area params [38-39]:
 TREE_P_LEAFDIAM_A = 38
 TREE_P_LEAFAREA_C = 39
-# Seedling weight [41] (P6 template writes, P8 free slots read same tick):
+# Seedling weight [41] (P5 template writes, P7 free slots read same tick):
 TREE_P_SEEDLING_WEIGHT = 41
 
 # === Tree states[5] (public, no buffer) ===
 TREE_S_LITTER_C = 0       # Above-ground litter carbon
 TREE_S_LITTER_N = 1       # Above-ground litter nitrogen
 TREE_S_N_DEMAND = 2
-TREE_S_N_CONSUMED = 3     # Actual N consumed this tick (P9 aggregates, P10 applies balance)
+TREE_S_N_CONSUMED = 3     # Actual N consumed this tick (P8 aggregates, P9 applies balance)
 TREE_S_LITTER_N_BG = 4    # Below-ground litter nitrogen (roots) - unused, always 0
 
 # === Tree states_db[5] (public, double buffered) ===
@@ -144,11 +144,11 @@ def tree_actual_growth_step(
     states_db_tensor,
 ):
     """
-    Phase C (P8): Nutrient response + final growth + mortality + litter + free slot activation.
+    Phase C (P7): Nutrient response + final growth + mortality + litter + free slot activation.
 
     Living trees: reads env_stress/diam_max from P3, n_supply_ratio from P4.
-    Free slots: reads num_to_recruit from P7, seedling_weight from P6 templates.
-    Templates: skipped (handled at P6).
+    Free slots: reads num_to_recruit from P6, seedling_weight from P5 templates.
+    Templates: skipped (handled at P5).
     """
     # ===== GET CURRENT STATE =====
     is_alive = states_db_tensor[agent_index][TREE_DB_IS_ALIVE]
@@ -491,8 +491,8 @@ def tree_actual_growth_step(
     # ===== DORMANT SLOT ACTIVATION =====
     # Free slots (is_alive == 0) check if Gap signals recruitment, select species
     # from templates weighted by SEEDLING_WEIGHT, and activate as seedlings.
-    # By activating at P8, seedlings don't grow until next tick (matching GAPpy).
-    # Templates (is_alive == -1) are handled at P6 and skip this step.
+    # By activating at P7, seedlings don't grow until next tick (matching GAPpy).
+    # Templates (is_alive == -1) are handled at P5 and skip this step.
     elif is_alive > -0.5:
         # Read recruitment info from Gap neighbor
         recruit_prob = 0.0
@@ -509,7 +509,7 @@ def tree_actual_growth_step(
             i = i + 1
 
         # Determine if this free slot should be recruited
-        # recruit_prob = nrenew / free_slots (from P7), so
+        # recruit_prob = nrenew / free_slots (from P6), so
         # expected activations = free_slots × recruit_prob = nrenew
         if recruit_prob > 0.0:
             slot_priority = ((agent_index * 997 + int(recruit_rand_seed)) % 1000000) / 1000000.0
@@ -654,4 +654,4 @@ def tree_actual_growth_step(
     # ===== WRITE LITTER + N CONSUMED TO states (Gap aggregates at P0 next tick) =====
     states_tensor[agent_index][TREE_S_LITTER_C] = litter_c          # Above-ground -> A0 layer
     states_tensor[agent_index][TREE_S_LITTER_N] = litter_n
-    states_tensor[agent_index][TREE_S_N_CONSUMED] = n_consumed      # P9 aggregates → P10 N balance
+    states_tensor[agent_index][TREE_S_N_CONSUMED] = n_consumed      # P8 aggregates → P9 N balance

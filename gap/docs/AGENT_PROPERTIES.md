@@ -44,31 +44,27 @@ Tick N:
   └─────────────────────────────────────────────────────────────┘
                               ↓ BARRIER
   ┌─────────────────────────────────────────────────────────────┐
-  │ Priority 4: All Gaps run (N demand aggregate)                │
+  │ Priority 4: All Gaps run (N demand aggregate + per-gap ratio)│
   └─────────────────────────────────────────────────────────────┘
                               ↓ BARRIER
   ┌─────────────────────────────────────────────────────────────┐
-  │ Priority 5: All Gaps run (per-gap N ratio + clear accum.)    │
+  │ Priority 5: All Trees run (template renewal)                 │
   └─────────────────────────────────────────────────────────────┘
                               ↓ BARRIER
   ┌─────────────────────────────────────────────────────────────┐
-  │ Priority 6: All Trees run (template renewal)                 │
+  │ Priority 6: All Gaps run (recruit aggregate)                 │
   └─────────────────────────────────────────────────────────────┘
                               ↓ BARRIER
   ┌─────────────────────────────────────────────────────────────┐
-  │ Priority 7: All Gaps run (recruit aggregate)                 │
+  │ Priority 7: All Trees run (actual growth + mortality + recruit)│
   └─────────────────────────────────────────────────────────────┘
                               ↓ BARRIER
   ┌─────────────────────────────────────────────────────────────┐
-  │ Priority 8: All Trees run (actual growth + mortality + recruit)│
+  │ Priority 8: All Gaps run (N consumed aggregate)              │
   └─────────────────────────────────────────────────────────────┘
                               ↓ BARRIER
   ┌─────────────────────────────────────────────────────────────┐
-  │ Priority 9: All Gaps run (N consumed aggregate)              │
-  └─────────────────────────────────────────────────────────────┘
-                              ↓ BARRIER
-  ┌─────────────────────────────────────────────────────────────┐
-  │ Priority 10: All Sites run (N balance)                       │
+  │ Priority 9: All Sites run (N balance)                        │
   └─────────────────────────────────────────────────────────────┘
                               ↓ BARRIER
   ┌─────────────────────────────────────────────────────────────┐
@@ -81,7 +77,7 @@ Tick N+1: ...
 - Within a priority: agents run in parallel, may have race conditions → use `states_db` for same-priority reads
 - Across priorities: execution is sequential, earlier priorities complete before later ones start → use `states` for cross-priority reads
 - Multiple breeds can share the same priority number (they run together in parallel)
-- One breed can have multiple step functions at different priorities (Gap has steps at P0, P2, P4, P5, P7, P9)
+- One breed can have multiple step functions at different priorities (Gap has steps at P0, P2, P4, P6, P8)
 
 ### Neighbor Visibility
 
@@ -126,8 +122,8 @@ Double buffering prevents **race conditions** when multiple agents read and writ
 **Critical Implication for Cross-Priority Reads**:
 
 Because buffers swap only after ALL priorities finish, if a property is double-buffered:
-- Changes written at priority 2 are **NOT visible** to readers at priority 6 within the same tick
-- Priority 6 will read the value from the **start of the tick**, not the updated value
+- Changes written at priority 2 are **NOT visible** to readers at priority 5 within the same tick
+- Priority 5 will read the value from the **start of the tick**, not the updated value
 
 **When double buffering must be DISABLED (`no_double_buffer`)**:
 - When a later priority needs to read changes made by an earlier priority **within the same tick**
@@ -139,7 +135,7 @@ Because buffers swap only after ALL priorities finish, if a property is double-b
 |----------|----------------|-----------------|---------------------|-----|
 | Same-priority parallel reads | P2 | P2 | **YES** | Prevent race conditions |
 | Later priority reads earlier write (same tick) | P4 | P1 | **NO** | Must see updated value |
-| Earlier priority reads later write | P0 | P6 | No (doesn't matter) | Reader runs first anyway |
+| Earlier priority reads later write | P0 | P5 | No (doesn't matter) | Reader runs first anyway |
 
 **Special Case: Property Needs BOTH Behaviors**
 
@@ -147,7 +143,7 @@ What if a property is read by same-type agents at the same priority (needs buffe
 
 Since `no_double_buffer` applies at the property level (not per-priority), you cannot have both behaviors for one property. **Solution: Duplicate the data into two properties.**
 
-**In GGap currently:** Tree `states_db` is double-buffered (Trees read each other's heights at P3 for light competition). Tree structure written at P8 is visible to other Trees at P3 of the **next tick** via the buffer swap.
+**In GGap currently:** Tree `states_db` is double-buffered (Trees read each other's heights at P3 for light competition). Tree structure written at P7 is visible to other Trees at P3 of the **next tick** via the buffer swap.
 
 ## Property Assignments by Agent Type
 
@@ -162,21 +158,21 @@ Since `no_double_buffer` applies at the property level (not per-priority), you c
 **params breakdown:**
 - `[0-21]` Species traits: species_id, max_age, max_diam, max_ht, arfa_0, g, shade_tol, deg_day_min/opt/max, invader, seed, sprout, wood_bulk_dens, lownutr_tol, flood_tol, drought_tol, evergreen, fire_tol, rootdepth, stress_tol, age_tol
 - `[22-31]` Internal physiology: age, biomC, biomN, leaf_bm, x, y, light_avail, fc_degday, fc_drought, fc_flood
-- `[32-33]` Intermediates: env_stress (P3→P8), diam_max_calc (P3→P8)
+- `[32-33]` Intermediates: env_stress (P3→P7), diam_max_calc (P3→P7)
 - `[34-37]` Renewal (template-only): seed_surv, seedling_lg, seedbank, seedling
 - `[38-39]` Leaf area: leafdiam_a (adjusted by shade_tol), leafarea_c (normalized by HEC_TO_M2)
-- `[40]` Forska shade: forska_shade (P3→P8, self-pruning threshold)
-- `[41]` Seedling weight: seedling_weight (P6 templates→P8 dormant slots, same tick via params)
+- `[40]` Forska shade: forska_shade (P3→P7, self-pruning threshold)
+- `[41]` Seedling weight: seedling_weight (P5 templates→P7 dormant slots, same tick via params)
 
 **states breakdown:**
 - `[0-1]` Above-ground litter: litter_c, litter_n
 - `[2]` Nitrogen demand: n_demand (P3→P4 same tick)
-- `[3]` Nitrogen consumed: n_consumed (P8→P9 same tick)
+- `[3]` Nitrogen consumed: n_consumed (P7→P8 same tick)
 - `[4]` (unused)
 
 **states_db breakdown:**
 - `[0-3]` Structure: is_alive, diam, height, canopy_ht
-- `[4]` Renewal: seedling_weight (templates write at P6, dormant reads at P8 via states_db)
+- `[4]` Renewal: seedling_weight (templates write at P5, dormant reads at P7 via states_db)
 
 **Three tree states (encoded in is_alive):**
 - `is_alive = 1.0`: Living tree (grows, produces litter, can die)
@@ -191,10 +187,10 @@ Since `no_double_buffer` applies at the property level (not per-priority), you c
 
 **Why this assignment?**
 - Species traits and physiology are never read by neighbors → `params`
-- Seedling weight is in both `params[41]` (P6 templates→P8 dormant, same tick) and `states_db[4]` (for P0 aggregation next tick)
-- Litter output is read by Gap at P0 (after Trees finish at P8 of prev tick) → `states`
+- Seedling weight is in both `params[41]` (P5 templates→P7 dormant, same tick) and `states_db[4]` (for P0 aggregation next tick)
+- Litter output is read by Gap at P0 (after Trees finish at P7 of prev tick) → `states`
 - N demand is read by Gap at P4 (after Trees write at P3) → `states`
-- N consumed is read by Gap at P9 (after Trees write at P8) → `states`
+- N consumed is read by Gap at P8 (after Trees write at P7) → `states`
 - Structure is read by other Trees at P3 (same priority) for light competition → `states_db`
 
 ### Gap Agent
@@ -212,18 +208,18 @@ Since `no_double_buffer` applies at the property level (not per-priority), you c
 - `[8]` Flood days
 - `[9]` Total seedling weight (sum across templates, for proportional decrement)
 - `[10]` Fire intensity
-- `[11]` Total N demand (public, read at P5 for per-gap ratio)
+- `[11]` Total N demand (public, read at P4 for per-gap ratio)
 - `[12]` Total LAI (normalized by PLOTSIZE, for canopy water balance)
-- `[13]` N consumed (aggregated at P9 for same-tick N balance)
+- `[13]` N consumed (aggregated at P8 for same-tick N balance)
 - `[14]` Dry days base (base-layer dry days)
 - `[15]` Wind intensity
 
 **Why this assignment?**
 - total_n_demand internal copy → `params`
-- Trees read climate/n_supply_ratio from Gap at P3, P6, P8 → `states`
+- Trees read climate/n_supply_ratio from Gap at P3, P5, P7 → `states`
 - Site reads litter_accum + LAI from Gap at P1 → `states`
-- Gap reads own total_n_demand at P5 for per-gap N ratio → `states`
-- Site reads n_consumed from Gap at P10 → `states`
+- Gap reads own total_n_demand at P4 for per-gap N ratio → `states`
+- Site reads n_consumed from Gap at P9 → `states`
 - No same-priority reads → `states_db` unused
 
 ### Site Agent
@@ -243,7 +239,7 @@ Since `no_double_buffer` applies at the property level (not per-priority), you c
 - `[56-67]` Monthly tmin std dev (12 months)
 - `[68-79]` Monthly tmax std dev (12 months)
 - `[80-91]` Monthly precipitation std dev (12 months)
-- `[92]` Annual runoff (accumulated in P1, used at P10 for leaching)
+- `[92]` Annual runoff (accumulated in P1, used at P9 for leaching)
 - `[93-104]` Monthly temperature lapse rate (12 months)
 - `[105-115]` Monthly precipitation lapse rate (12 months)
 
@@ -258,7 +254,7 @@ Since `no_double_buffer` applies at the property level (not per-priority), you c
 
 **Why this assignment?**
 - Soil pool dynamics and monthly climate are internal to Site → `params`
-- Annual runoff used only by P10 (same breed, internal) → `params`
+- Annual runoff used only by P9 (same breed, internal) → `params`
 - Gap reads climate, avail_n, flood_days, fire/wind_intensity from Site at P2 → `states`
 - No same-priority reads → `states_db` unused
 
@@ -266,7 +262,7 @@ Since `no_double_buffer` applies at the property level (not per-priority), you c
 
 ```
 Priority 0: Gap Litter Aggregate
-    Reads:  Tree.states (litter_c/n, n_consumed) - from P8 prev tick
+    Reads:  Tree.states (litter_c/n, n_consumed) - from P7 prev tick
             Tree.states_db (is_alive, diam, height, canopy_ht) - structure for LAI
             Tree.params (leafdiam_a) - leaf area coefficient
     Writes: Gap.states (litter_accum_c/n, total_lai, total_seedling_weight)
@@ -287,49 +283,47 @@ Priority 3: Tree Potential Growth
     Writes: Tree.params (env_stress, diam_max, light_avail, fc_*, forska_shade)
             Tree.states (n_demand)
 
-Priority 4: Gap N Demand Aggregate
+Priority 4: Gap N Demand Aggregate + Per-Gap N Ratio
     Reads:  Tree.states (n_demand) - from P3 same tick
+            Gap.states (avail_n from P2)
     Writes: Gap.params + Gap.states (total_n_demand)
-
-Priority 5: Gap Sync (Per-Gap N Ratio + Clear)
-    Reads:  Gap.states (avail_n from P2, total_n_demand from P4)
-    Writes: Gap.states (n_supply_ratio)
+            Gap.states (n_supply_ratio)
     Clears: Gap.states (litter_accum_c/n, total_lai, n_consumed)
 
-Priority 6: Tree Template Renewal
+Priority 5: Tree Template Renewal
     Templates only:
-      Reads:  Gap.states (climate, n_supply_ratio from P2/P5)
-              Gap.states (num_to_recruit, total_seedling_weight from P7 prev tick)
+      Reads:  Gap.states (climate, n_supply_ratio from P2/P4)
+              Gap.states (num_to_recruit, total_seedling_weight from P6 prev tick)
               Tree.states_db (neighbor structure for light, species_id for avail_spec)
       Writes: Tree.params (seedbank, seedling, env_stress=regrowth, seedling_weight)
 
-Priority 7: Gap Recruit Aggregate
-    Reads:  Tree.params (env_stress=regrowth from templates) - from P6 same tick
+Priority 6: Gap Recruit Aggregate
+    Reads:  Tree.params (env_stress=regrowth from templates) - from P5 same tick
             Tree.states_db (is_alive: count living/free)
     Writes: Gap.states (num_to_recruit as recruit_prob, recruit_rand_seed)
 
-Priority 8: Tree Actual Growth + Recruitment
+Priority 7: Tree Actual Growth + Recruitment
     Living trees:
       Reads:  Tree.params (env_stress, diam_max from P3, forska_shade)
-              Gap.states (n_supply_ratio from P5, fire/wind from P2)
+              Gap.states (n_supply_ratio from P4, fire/wind from P2)
       Writes: Tree.params (age, biomC, biomN, leaf_bm)
               Tree.states (litter_c/n, n_consumed)
               Tree.states_db (is_alive, diam, height, canopy_ht)
     Dormant slots:
-      Reads:  Gap.states (recruit_prob, recruit_rand_seed from P7)
-              Tree.params (seedling_weight from templates at P6, same tick)
+      Reads:  Gap.states (recruit_prob, recruit_rand_seed from P6)
+              Tree.params (seedling_weight from templates at P5, same tick)
       Writes: Tree.params (species traits, physiology init)
               Tree.states (litter_c/n, n_consumed for seedlings)
               Tree.states_db (is_alive=1, diam, height, canopy_ht)
 
-Priority 9: Gap N Consumed Aggregate
-    Reads:  Tree.states (n_consumed) - from P8 same tick
+Priority 8: Gap N Consumed Aggregate
+    Reads:  Tree.states (n_consumed) - from P7 same tick
     Writes: Gap.states (n_consumed)
 
-Priority 10: Site N Balance
+Priority 9: Site N Balance
     Reads:  Site.states (avail_n) - from P1 same tick
             Site.params (annual_runoff) - from P1 same tick
-            Gap.states (n_consumed) - from P9 same tick
+            Gap.states (n_consumed) - from P8 same tick
     Writes: Site.params (A_n, A_c, BL_c, BL_n - surplus/deficit + leaching)
 ```
 
@@ -365,7 +359,7 @@ When adding a new variable, ask these questions:
 
 **Adding a new site variable: "soil_temperature"**
 - Q1: Do neighbors need it? Yes, Gap relays it to trees.
-- Q2: Same type at same priority? No, Gap reads at P5, Site writes at P1.
+- Q2: Same type at same priority? No, Gap reads at P4, Site writes at P1.
 - Answer: `states`
 
 ## Index Constants
@@ -406,6 +400,6 @@ When in doubt:
 **GGap Examples**:
 - Gap writes `litter_accum` at P0, Site reads at P1 → must be in `states`
 - Site writes `avail_n` at P1, Gap relays at P2 → must be in `states`
-- Tree writes `height` at P8, other Trees read at P3 → must be in `states_db`
-- Template writes `seedling_weight` to `params[41]` at P6, dormant slots read at P8 → can use `params` (cross-priority, no buffer needed)
-- Tree writes `n_consumed` at P8, Gap aggregates at P9 → must be in `states`
+- Tree writes `height` at P7, other Trees read at P3 → must be in `states_db`
+- Template writes `seedling_weight` to `params[41]` at P5, dormant slots read at P7 → can use `params` (cross-priority, no buffer needed)
+- Tree writes `n_consumed` at P7, Gap aggregates at P8 → must be in `states`

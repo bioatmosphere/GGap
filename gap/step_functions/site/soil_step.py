@@ -100,7 +100,7 @@ SITE_P_TMIN_STD_BASE = 56   # tmin_std[0..11] at 56-67
 SITE_P_TMAX_STD_BASE = 68   # tmax_std[0..11] at 68-79
 SITE_P_PRCP_STD_BASE = 80   # prcp_std[0..11] at 80-91
 # N balance state [92]:
-SITE_P_ANNUAL_RUNOFF = 92   # Annual accumulated runoff (for N balance at P10 same tick)
+SITE_P_ANNUAL_RUNOFF = 92   # Annual accumulated runoff (for N balance at P9 same tick)
 
 # === Site states[16] (public) ===
 SITE_S_DEG_DAYS = 0
@@ -124,7 +124,7 @@ GAP_S_LITTER_ACCUM_C = 4       # Above-ground litter -> A0 layer
 GAP_S_LITTER_ACCUM_N = 5
 GAP_S_TOTAL_N_DEMAND = 11      # N demand from trees (written at P4)
 GAP_S_TOTAL_LAI = 12           # Per-gap normalized LAI (from P0, GAPpy canopy())
-GAP_S_N_CONSUMED = 13          # N consumed by trees (now aggregated at P9, read at P10)
+GAP_S_N_CONSUMED = 13          # N consumed by trees (now aggregated at P8, read at P9)
 
 # === UVAFME Constants (from soil.py) ===
 AO_CN_0 = 30.0
@@ -259,7 +259,7 @@ def site_soil_step(
     lai_w0 = params_tensor[agent_index][SITE_P_LAI_W0]
     latitude = params_tensor[agent_index][SITE_P_LATITUDE]
 
-    # N balance moved to site_nbalance_step (P10) — runs AFTER P8 growth,
+    # N balance moved to site_nbalance_step (P9) — runs AFTER P7 growth,
     # so it uses same-tick avail_N and n_consumed (no 1-tick delay).
 
     # ========== DYNAMIC LAI FROM TREE CANOPY (GAPpy canopy():282-362) ==========
@@ -1456,7 +1456,7 @@ def site_soil_step(
     params_tensor[agent_index][SITE_P_A_W] = sa_w0
     params_tensor[agent_index][SITE_P_BL_W] = sb_w0
     params_tensor[agent_index][SITE_P_LAI_W0] = lai_w0
-    params_tensor[agent_index][SITE_P_ANNUAL_RUNOFF] = annual_runoff  # For N balance at P10
+    params_tensor[agent_index][SITE_P_ANNUAL_RUNOFF] = annual_runoff  # For N balance at P9
 
     # Growing degree days (accumulated daily, base 5°C)
     states_tensor[agent_index][SITE_S_DEG_DAYS] = deg_days

@@ -3,8 +3,8 @@ Gap N demand aggregate + sync step function for GGap model (Priority 4).
 Aggregates nitrogen demand from living trees after tree_potential_growth_step (P3),
 computes per-gap N supply ratio, and clears accumulators for next tick.
 
-Recruitment count is now handled by gap_recruit_aggregate_step (P7),
-which reads template regrowth after tree_template_renewal_step (P6).
+Recruitment count is now handled by gap_recruit_aggregate_step (P6),
+which reads template regrowth after tree_template_renewal_step (P5).
 
 Execution Flow:
     1. Loop through Tree neighbors
@@ -32,7 +32,7 @@ GAP_S_LITTER_ACCUM_C = 4
 GAP_S_LITTER_ACCUM_N = 5
 GAP_S_TOTAL_N_DEMAND = 11     # Public slot for Site to read
 GAP_S_TOTAL_LAI = 12          # Per-gap normalized LAI (from P0)
-GAP_S_N_CONSUMED = 13         # N consumed by trees (written at P9, read at P10)
+GAP_S_N_CONSUMED = 13         # N consumed by trees (written at P8, read at P9)
 
 # === Tree states[5] (for reading n_demand) ===
 TREE_S_N_DEMAND = 2
@@ -106,4 +106,4 @@ def gap_demand_aggregate_step(
     states_tensor[agent_index][GAP_S_TOTAL_LAI] = 0.0
     states_tensor[agent_index][GAP_S_N_CONSUMED] = 0.0
     # Note: NUM_TO_RECRUIT and RECRUIT_RAND_SEED are NOT cleared here.
-    # Trees read them at P8 (free slot activation). P7 overwrites them each tick.
+    # Trees read them at P7 (free slot activation). P6 overwrites them each tick.
