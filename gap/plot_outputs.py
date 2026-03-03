@@ -33,8 +33,9 @@ import numpy as np
 warnings.filterwarnings('ignore', category=UserWarning, module='matplotlib')
 
 # Configuration
-DEFAULT_OUTPUT_DIR = "output_data"
-DEFAULT_PLOTS_DIR = "output_data/plots"
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_OUTPUT_DIR = os.path.join(_PROJECT_ROOT, "output_data")
+DEFAULT_PLOTS_DIR = os.path.join(_PROJECT_ROOT, "output_data", "plots")
 DEFAULT_FORMAT = "png"
 DEFAULT_DPI = 150
 DEFAULT_STYLE = 'default'
@@ -173,7 +174,7 @@ class GGapPlotter:
 
         required_columns = {
             'species_data': ['year', 'genus', 'species', 'biomass_c', 'biomass_n', 'basal_area'],
-            'site_data': ['year', 'deg_days', 'grow_days', 'rain'],
+            'site_data': ['year', 'degd', 'grow', 'rain'],
             'soil_data': ['year', 'a0c0', 'a0n0', 'ac0', 'an0']
         }
 
@@ -414,13 +415,13 @@ class GGapPlotter:
 
         # Plot 1: Temperature-related variables
         ax1 = axes[0, 0]
-        ax1.plot(self.site_data['year'], self.site_data['deg_days'],
+        ax1.plot(self.site_data['year'], self.site_data['degd'],
                 linewidth=2, color=CLIMATE_COLORS['temperature'],
                 label='Degree Days')
 
-        if 'grow_days' in self.site_data.columns:
+        if 'grow' in self.site_data.columns:
             ax1_twin = ax1.twinx()
-            ax1_twin.plot(self.site_data['year'], self.site_data['grow_days'],
+            ax1_twin.plot(self.site_data['year'], self.site_data['grow'],
                          linewidth=2, color='#2CA02C', label='Growing Days')
             ax1_twin.set_ylabel('Growing Days', color='#2CA02C')
             ax1_twin.tick_params(axis='y', labelcolor='#2CA02C')
@@ -437,7 +438,7 @@ class GGapPlotter:
                 linewidth=2, label='Rainfall (mm)',
                 color=CLIMATE_COLORS['water'])
 
-        water_vars = ['pot_evap_day', 'act_evap_day']
+        water_vars = ['pet', 'aet']
         colors = ['#FFA500', '#E74C3C']
         for var, color in zip(water_vars, colors):
             if var in self.site_data.columns:
@@ -455,7 +456,7 @@ class GGapPlotter:
 
         # Plot 3: Drought stress indicators
         ax3 = axes[1, 0]
-        drought_vars = ['dry_days_upper', 'dry_days_base']
+        drought_vars = ['dryd_upper', 'dryd_base']
         drought_colors = ['#DC143C', '#FF8C00']
         drought_styles = ['-', '--']
         drought_markers = ['o', 's']
@@ -471,7 +472,7 @@ class GGapPlotter:
                 drought_found = True
 
         if not drought_found:
-            drought_estimate = np.maximum(0, self.site_data['deg_days'] / 50 - self.site_data['rain'] * 10)
+            drought_estimate = np.maximum(0, self.site_data['degd'] / 50 - self.site_data['rain'] * 10)
             ax3.plot(self.site_data['year'], drought_estimate,
                     linewidth=2, label='Estimated Drought Stress',
                     color=CLIMATE_COLORS['stress'], alpha=0.6)
@@ -484,7 +485,7 @@ class GGapPlotter:
 
         # Plot 4: Flood and other environmental variables
         ax4 = axes[1, 1]
-        env_vars = ['flood_days']
+        env_vars = ['flood_d']
         env_colors = ['#1E90FF']
         env_styles = ['-']
         env_markers = ['o']
@@ -587,19 +588,19 @@ class GGapPlotter:
         # Environmental stress indicators
         ax5 = fig.add_subplot(gs[1, 2:])
         markevery = max(1, len(self.site_data) // 20)
-        if 'dry_days_upper' in self.site_data.columns:
-            ax5.plot(self.site_data['year'], self.site_data['dry_days_upper'],
+        if 'dryd_upper' in self.site_data.columns:
+            ax5.plot(self.site_data['year'], self.site_data['dryd_upper'],
                     linewidth=3, label='Drought Days', color='#DC143C',
                     linestyle='-', marker='o', markevery=markevery,
                     markersize=5, alpha=0.9)
-        if 'flood_days' in self.site_data.columns:
-            ax5.plot(self.site_data['year'], self.site_data['flood_days'],
+        if 'flood_d' in self.site_data.columns:
+            ax5.plot(self.site_data['year'], self.site_data['flood_d'],
                     linewidth=3, label='Flood Days', color='#1E90FF',
                     linestyle='--', marker='s', markevery=markevery,
                     markersize=5, alpha=0.9)
 
-        if 'dry_days_upper' not in self.site_data.columns and 'flood_days' not in self.site_data.columns:
-            stress_estimate = self.site_data['deg_days'] / 100
+        if 'dryd_upper' not in self.site_data.columns and 'flood_d' not in self.site_data.columns:
+            stress_estimate = self.site_data['degd'] / 100
             ax5.plot(self.site_data['year'], stress_estimate,
                     linewidth=2, label='Temperature Stress',
                     color=CLIMATE_COLORS['stress'])
@@ -700,7 +701,7 @@ class GGapPlotter:
 
         final_site = self.site_data[self.site_data['year'] == self.site_data['year'].max()].iloc[0]
         print(f"\nCLIMATE METRICS (Final Year):")
-        print(f"  Degree days: {final_site['deg_days']:.0f}")
+        print(f"  Degree days: {final_site['degd']:.0f}")
         print(f"  Annual rainfall: {final_site['rain']:.1f} mm")
 
         initial_biomass = species_summary[

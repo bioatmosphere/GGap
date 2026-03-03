@@ -55,7 +55,7 @@ Soil Layers:
 
 Property scheme (3 properties):
 - params[116]: soil pools + monthly climate + site properties + fire/wind/soil + climate_std - private
-- states[8]: climate + avail_n + flood_days + fire_intensity + n_supply_ratio + dry_days_base + wind_intensity - public
+- states[16]: climate + avail_n + flood_days + fire/wind + stochastic climate + soil outputs - public
 - states_db[1]: placeholder (public, double buffered but unused)
 """
 
@@ -102,7 +102,7 @@ SITE_P_PRCP_STD_BASE = 80   # prcp_std[0..11] at 80-91
 # N balance state [92]:
 SITE_P_ANNUAL_RUNOFF = 92   # Annual accumulated runoff (for N balance at P10 same tick)
 
-# === Site states[8] (public) ===
+# === Site states[16] (public) ===
 SITE_S_DEG_DAYS = 0
 SITE_S_DRY_DAYS = 1
 SITE_S_AVAIL_N = 2
@@ -110,6 +110,14 @@ SITE_S_FLOOD_DAYS = 3  # Days when A layer is saturated
 SITE_S_FIRE_INTENSITY = 4  # Fire intensity this year (0-1)
 SITE_S_DRY_DAYS_BASE = 6   # Base layer drought fraction (for intolerant species)
 SITE_S_WIND_INTENSITY = 7  # Wind intensity this year (0-1, 0=no wind)
+SITE_S_ANNUAL_RAIN = 8     # Perturbed annual rainfall (cm)
+SITE_S_GROW_DAYS = 9       # Growing season days (tavg >= 5°C)
+SITE_S_POT_EVAP = 10       # Annual potential evapotranspiration (cm)
+SITE_S_ACT_EVAP = 11       # Annual actual evapotranspiration (cm)
+SITE_S_SOIL_RESP = 12      # Annual soil respiration (tn C/ha)
+SITE_S_C_INTO_A0 = 13      # Annual C litter input to A0 layer (tn C/ha)
+SITE_S_N_INTO_A0 = 14      # Annual N litter input to A0 layer (tn N/ha)
+SITE_S_NET_N_INTO_A0 = 15  # Net N leached to base layer (tn N/ha)
 
 # === Gap states[16] (for reading from Gap neighbors) ===
 GAP_S_LITTER_ACCUM_C = 4       # Above-ground litter -> A0 layer
@@ -1433,6 +1441,9 @@ def site_soil_step(
 
     dry_days = dry_days_frac
 
+    # Normalize flood days by growing season (GAPpy model.py:263)
+    flood_days = flood_days / growdays
+
     # ========== WRITE FINAL RESULTS ==========
     # Soil pools (params - private)
     params_tensor[agent_index][SITE_P_A0_C] = ao_c0
@@ -1507,3 +1518,14 @@ def site_soil_step(
             wind_intensity = 1.0
 
     states_tensor[agent_index][SITE_S_WIND_INTENSITY] = wind_intensity
+
+    # Stochastic climate outputs (for CSV export)
+    states_tensor[agent_index][SITE_S_ANNUAL_RAIN] = annual_prcp_cm
+    states_tensor[agent_index][SITE_S_GROW_DAYS] = grow_days_5
+    states_tensor[agent_index][SITE_S_POT_EVAP] = total_pet
+    states_tensor[agent_index][SITE_S_ACT_EVAP] = total_aet
+
+    # Soil outputs (for CSV export)
+    states_tensor[agent_index][SITE_S_SOIL_RESP] = total_resp
+    states_tensor[agent_index][SITE_S_C_INTO_A0] = total_litter_c
+    states_tensor[agent_index][SITE_S_N_INTO_A0] = total_litter_n

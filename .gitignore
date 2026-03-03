@@ -8,6 +8,8 @@ wheels/
 
 gap/__pycache__
 gap/step_func_code.py
+*.out
+output_data/
 
 # Virtual environments
 .venv

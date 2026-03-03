@@ -61,50 +61,6 @@ def stddev(values):
     return mean, math.sqrt(max(0.0, variance))
 
 
-def compute_site_extras(site_params, prcp_base_idx, tmin_base_idx, tmax_base_idx):
-    """Compute grow_days and annual_rain from site params.
-
-    Args:
-        site_params: list of site parameter values
-        prcp_base_idx: index of first monthly precip param (mm)
-        tmin_base_idx: index of first monthly tmin param
-        tmax_base_idx: index of first monthly tmax param
-
-    Returns:
-        (annual_rain_mm, grow_days)
-    """
-    annual_rain = sum(site_params[prcp_base_idx + i] for i in range(12))
-    BASE_TEMP = 5.0
-    grow_days = 0
-    for i in range(12):
-        tavg = (site_params[tmin_base_idx + i] + site_params[tmax_base_idx + i]) / 2.0
-        if tavg > BASE_TEMP:
-            grow_days += 30
-    return annual_rain, grow_days
-
-
-def compute_soil_biomass(tree_data, plotadj):
-    """Compute scaled soil biomass totals from tree data.
-
-    GAPpy includes leaf biomass for conifers but not deciduous.
-
-    Args:
-        tree_data: dict of numpy arrays from collect_tree_data()
-        plotadj: scaling factor (HEC_TO_M2 / plotsize / num_gaps)
-
-    Returns:
-        (total_biomC, total_biomN) scaled to per-hectare units
-    """
-    if tree_data['count'] == 0:
-        return 0.0, 0.0
-    ev = tree_data['evergreen']
-    biomC = np.where(ev, tree_data['biomC'] + tree_data['leaf_bm'], tree_data['biomC']).sum()
-    biomN = np.where(ev,
-        tree_data['biomN'] + tree_data['leaf_bm'] / CON_LEAF_C_N,
-        tree_data['biomN']).sum()
-    return float(biomC) * plotadj, float(biomN) * plotadj
-
-
 class OutputWriter:
     """Write GAPpy-compatible CSV output files."""
 
@@ -191,54 +147,52 @@ class OutputWriter:
             ['siteID', 'year', 'genus', 'species'] + bio_cols
         )
         self.writers['site'].writerow([
-            'site_id', 'year',
-            'latitude', 'longitude', 'elevation', 'slope',
-            'leaf_area_ind', 'grow_days', 'deg_days',
-            'flood_days', 'dry_days_upper', 'dry_days_base',
-            'pot_evap_day', 'act_evap_day', 'rain',
+            'siteID', 'year',
+            'rain', 'pet', 'aet', 'grow',
+            'degd', 'dryd_upper', 'dryd_base', 'flood_d',
         ])
         self.writers['soil'].writerow([
-            'site_id', 'year',
+            'siteID', 'year',
             'a0c0', 'ac0', 'a0n0', 'an0', 'bc0', 'bn0',
             'soilresp', 'biomassC', 'C_into_A0', 'net_C_into_A0', 'net_prim_prodC',
             'biomassN', 'N_into_A0', 'net_N_into_A0', 'net_prim_prodN', 'avail_n',
         ])
         self.writers['tree'].writerow([
-            'site_id', 'year', 'plot', 'tree',
-            'species_id', 'dbh', 'height', 'biomass_c',
-            'biomass_n', 'leaf_biomass', 'age', 'crown_area',
+            'siteID', 'year', 'plot', 'tree',
+            'genus', 'species', 'diam bh', 'forska_height',
+            'leaf biomass', 'stem biomC', 'stem biomN',
         ])
 
-    def write_site_data(self, year, latitude, longitude, elevation, slope,
-                        deg_days, flood_days, dry_days, annual_rain_mm,
-                        grow_days=0, dry_days_base=0.0):
-        """Write one row of site data."""
+    def write_site_data(self, year, rain, pot_evap_day, act_evap_day,
+                        grow_days, deg_days, dry_days_upper, dry_days_base,
+                        flood_days):
+        """Write one row of site data (matches GAPpy output_module.py)."""
         self.writers['site'].writerow([
             self.site_id, year,
-            latitude, longitude, elevation, slope,
-            0.0,  # leaf_area_ind (not yet computed)
-            grow_days, deg_days,
-            flood_days, dry_days, dry_days_base,
-            0.0, 0.0,  # pot_evap_day, act_evap_day
-            annual_rain_mm,
+            rain, pot_evap_day, act_evap_day, grow_days,
+            deg_days, dry_days_upper, dry_days_base, flood_days,
         ])
 
     def write_soil_data(self, year, a0_c, a_c, a0_n, a_n, bl_c, bl_n,
-                        avail_n, total_biomC=0.0, total_biomN=0.0):
+                        avail_n, soilresp=0.0, c_into_a0=0.0,
+                        n_into_a0=0.0, net_n_into_a0=0.0):
         """Write one row of soil data."""
         self.writers['soil'].writerow([
             self.site_id, year,
             a0_c, a_c, a0_n, a_n, bl_c, bl_n,
-            0.0,  # soilresp
-            total_biomC,
-            0.0, 0.0, 0.0,  # C_into_A0, net_C_into_A0, net_prim_prodC
-            total_biomN,
-            0.0, 0.0, 0.0,  # N_into_A0, net_N_into_A0, net_prim_prodN
+            soilresp,
+            0.0,  # biomassC (always 0.0, matches GAPpy)
+            c_into_a0, 0.0, 0.0,  # C_into_A0, net_C_into_A0, net_prim_prodC
+            0.0,  # biomassN (always 0.0, matches GAPpy)
+            n_into_a0, net_n_into_a0, 0.0,  # N_into_A0, net_N_into_A0, net_prim_prodN
             avail_n,
         ])
 
     def write_tree_data(self, year, tree_data, gap_agents):
-        """Write per-tree data rows. tree_data is dict of numpy arrays."""
+        """Write per-tree data rows (matches GAPpy output_module.py).
+
+        tree_data is dict of numpy arrays.
+        """
         if tree_data['count'] == 0:
             return
         gap_idx = {gid: i + 1 for i, gid in enumerate(gap_agents)}
@@ -250,16 +204,17 @@ class OutputWriter:
         biomCs = tree_data['biomC'].tolist()
         biomNs = tree_data['biomN'].tolist()
         leaf_bms = tree_data['leaf_bm'].tolist()
-        ages = tree_data['age'].tolist()
         tree_num = {}
         for i in range(tree_data['count']):
             plot = gap_idx.get(gap_ids[i], 0)
             tree_num[plot] = tree_num.get(plot, 0) + 1
+            sp_id = sp_ids[i]
+            genus = self._species_id_to_genus.get(sp_id, '')
+            species_code = self._species_id_to_code.get(sp_id, '')
             self.writers['tree'].writerow([
                 self.site_id, year, plot, tree_num[plot],
-                sp_ids[i], diams[i], heights[i],
-                biomCs[i], biomNs[i], leaf_bms[i],
-                ages[i], 0.0,  # crown_area
+                genus, species_code, diams[i], heights[i],
+                leaf_bms[i], biomCs[i], biomNs[i],
             ])
 
     def _write_bio_data(self, writer_key, year, tree_data, gap_agents, group_by):

@@ -32,8 +32,9 @@ SITE_P_BL_C = 4
 SITE_P_BL_N = 5
 SITE_P_ANNUAL_RUNOFF = 92
 
-# === Site states[8] (public) ===
+# === Site states[16] (public) ===
 SITE_S_AVAIL_N = 2
+SITE_S_NET_N_INTO_A0 = 15   # Net N leached to base layer (tn N/ha)
 
 # === Gap states[16] (for reading N consumed from Gap neighbors) ===
 GAP_S_N_CONSUMED = 13
@@ -125,3 +126,6 @@ def site_nbalance_step(
     params_tensor[agent_index][SITE_P_A_C] = sa_c0
     params_tensor[agent_index][SITE_P_BL_C] = sb_c0
     params_tensor[agent_index][SITE_P_BL_N] = sb_n0
+
+    # Export net N leached for CSV output
+    states_tensor[agent_index][SITE_S_NET_N_INTO_A0] = net_n_leach

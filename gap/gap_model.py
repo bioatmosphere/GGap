@@ -150,7 +150,7 @@ Property Arrays by Breed:
         (params includes species traits[22] + physiology[10] + intermediates[2] + renewal[4] + leaf_area[2] + seedling_weight[1])
   Gap:  params[2],  states[166], states_db[1]
         (states includes climate[5] + litter[4] + recruitment[3] + flood[1] + fire[1] + wind[1] + n_demand[1] + dry_days_base[1] + cum_lai_bins[100] + avail_spec[50])
-  Site: params[116], states[8], states_db[1]
+  Site: params[116], states[12], states_db[1]
         (params includes soil pools[9] + monthly climate[36] + site properties[8] + fire/wind/soil[3] + climate_std[36] + lapse_rates[24])
 """
 
@@ -333,7 +333,7 @@ SITE_P_PRCP_LAPSE_BASE = 104 # prcp_lapse[0..11] at 104-115
 
 SITE_PARAMS_SIZE = 116
 
-# states[8]: climate + available + flood_days + fire + n_supply_ratio + dry_days_base + wind (public)
+# states[16]: climate + available + flood_days + fire + n_supply_ratio + dry_days_base + wind + stochastic climate + soil outputs (public)
 SITE_S_DEG_DAYS = 0
 SITE_S_DRY_DAYS = 1
 SITE_S_AVAIL_N = 2
@@ -342,6 +342,14 @@ SITE_S_FIRE_INTENSITY = 4   # Fire intensity this year (0-1, 0=no fire)
 SITE_S_N_SUPPLY_RATIO = 5   # N supply ratio (no longer used; per-gap ratio at P5)
 SITE_S_DRY_DAYS_BASE = 6    # Base layer drought fraction (for intolerant species)
 SITE_S_WIND_INTENSITY = 7   # Wind intensity this year (0-1, 0=no wind)
+SITE_S_ANNUAL_RAIN = 8      # Perturbed annual rainfall (cm)
+SITE_S_GROW_DAYS = 9        # Growing season days (tavg >= 5°C)
+SITE_S_POT_EVAP = 10        # Annual potential evapotranspiration (cm)
+SITE_S_ACT_EVAP = 11        # Annual actual evapotranspiration (cm)
+SITE_S_SOIL_RESP = 12       # Annual soil respiration (tn C/ha)
+SITE_S_C_INTO_A0 = 13       # Annual C litter input to A0 layer (tn C/ha)
+SITE_S_N_INTO_A0 = 14       # Annual N litter input to A0 layer (tn N/ha)
+SITE_S_NET_N_INTO_A0 = 15   # Net N leached to base layer (tn N/ha)
 
 # states_db[1]: placeholder (not used)
 SITE_DB_PLACEHOLDER = 0
@@ -474,8 +482,8 @@ class GAPModel(Model):
         self._site_breed = Breed("Site")
         # params[116]: soil pools + monthly climate + site properties + fire/wind/soil + climate_std + lapse_rates (private)
         self._site_breed.register_property("params", [0.0] * SITE_PARAMS_SIZE, neighbor_visible=False)
-        # states[8]: climate + available + flood_days + fire + n_supply_ratio + dry_days_base + wind (public)
-        self._site_breed.register_property("states", [0.0] * 8, neighbor_visible=True)
+        # states[12]: climate + available + flood_days + fire + n_supply_ratio + dry_days_base + wind + stochastic climate (public)
+        self._site_breed.register_property("states", [0.0] * 16, neighbor_visible=True)
         # states_db[1]: placeholder (public but unused)
         self._site_breed.register_property("states_db", [0.0] * 1, neighbor_visible=True)
         # P1: soil decomposition (reads litter from Gap P0)
@@ -780,8 +788,8 @@ class GAPModel(Model):
             params[SITE_P_TMP_LAPSE_BASE + i] = tmp_lapse[i]
             params[SITE_P_PRCP_LAPSE_BASE + i] = prcp_lapse[i]
 
-        # === Build states[8] for Site (climate + flood_days + fire + n_supply_ratio + dry_days_base + wind - public) ===
-        states = [0.0] * 8
+        # === Build states[12] for Site (climate + flood_days + fire + n_supply_ratio + dry_days_base + wind + stochastic climate - public) ===
+        states = [0.0] * 16
         states[SITE_S_DEG_DAYS] = deg_days
         states[SITE_S_DRY_DAYS] = dry_days
         states[SITE_S_AVAIL_N] = 0.1  # Initial available nitrogen

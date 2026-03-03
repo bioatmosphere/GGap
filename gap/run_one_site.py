@@ -32,11 +32,12 @@ from gap.gap_model import (
     SITE_P_A0_C, SITE_P_A0_N,
     SITE_P_A_C, SITE_P_A_N,
     SITE_P_BL_C, SITE_P_BL_N,
-    SITE_P_PRCP_BASE, SITE_P_TMIN_BASE, SITE_P_TMAX_BASE,
-    # Site states indices (public: climate + avail_n)
+    # Site states indices (public: climate + avail_n + stochastic climate + soil outputs)
     SITE_S_AVAIL_N, SITE_S_DEG_DAYS, SITE_S_DRY_DAYS, SITE_S_DRY_DAYS_BASE, SITE_S_FLOOD_DAYS,
+    SITE_S_ANNUAL_RAIN, SITE_S_GROW_DAYS, SITE_S_POT_EVAP, SITE_S_ACT_EVAP,
+    SITE_S_SOIL_RESP, SITE_S_C_INTO_A0, SITE_S_N_INTO_A0, SITE_S_NET_N_INTO_A0,
 )
-from gap.output_utils import OutputWriter, compute_site_extras, compute_soil_biomass
+from gap.output_utils import OutputWriter
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
@@ -98,8 +99,8 @@ def main():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="output_data",
-        help="Directory for CSV output files (default: output_data)"
+        default=os.path.join(_parent_dir, "output_data"),
+        help="Directory for CSV output files (default: <project_root>/output_data)"
     )
     parser.add_argument(
         "--no_tree_data",
@@ -232,23 +233,22 @@ def main():
         tree_data = model.collect_tree_data()
         t_collect_end = time.time()
 
-        # Compute derived values
-        annual_rain, grow_days = compute_site_extras(
-            site_params, SITE_P_PRCP_BASE, SITE_P_TMIN_BASE, SITE_P_TMAX_BASE
-        )
-        soil_biomC, soil_biomN = compute_soil_biomass(tree_data, writer.plotadj)
+        # Read stochastic climate values computed by GPU kernel
+        annual_rain = site_states[SITE_S_ANNUAL_RAIN]
+        grow_days = site_states[SITE_S_GROW_DAYS]
 
         if rank == 0:
             # Write CSV outputs
             writer.write_site_data(
                 current_year,
-                site['latitude'], site['longitude'],
-                site['elevation'], site.get('slope', 0.0),
+                annual_rain,
+                site_states[SITE_S_POT_EVAP],
+                site_states[SITE_S_ACT_EVAP],
+                grow_days,
                 site_states[SITE_S_DEG_DAYS],
-                site_states[SITE_S_FLOOD_DAYS],
                 site_states[SITE_S_DRY_DAYS],
-                annual_rain, grow_days,
-                dry_days_base=site_states[SITE_S_DRY_DAYS_BASE],
+                site_states[SITE_S_DRY_DAYS_BASE],
+                site_states[SITE_S_FLOOD_DAYS],
             )
             writer.write_soil_data(
                 current_year,
@@ -256,7 +256,10 @@ def main():
                 site_params[SITE_P_A0_N], site_params[SITE_P_A_N],
                 site_params[SITE_P_BL_C], site_params[SITE_P_BL_N],
                 site_states[SITE_S_AVAIL_N],
-                soil_biomC, soil_biomN,
+                soilresp=site_states[SITE_S_SOIL_RESP],
+                c_into_a0=site_states[SITE_S_C_INTO_A0],
+                n_into_a0=site_states[SITE_S_N_INTO_A0],
+                net_n_into_a0=site_states[SITE_S_NET_N_INTO_A0],
             )
             writer.write_species_data(current_year, tree_data, model.gap_agents)
             writer.write_genus_data(current_year, tree_data, model.gap_agents)
