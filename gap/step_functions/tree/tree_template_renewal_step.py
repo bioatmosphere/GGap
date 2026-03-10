@@ -12,13 +12,13 @@ P7 (tree_actual_growth_step) free slots read seedling_weight from params
 (same tick, no double buffer) for species selection.
 
 Execution Flow:
-    1. Read current-tick climate + disturbance from Gap (written by P2/P4)
+    1. Read current-tick climate + disturbance + recovery_years from Gap (P2/P4)
     2. Compute fc_degday, fc_drought, fc_flood, fc_nutrient, fc_light
     3. Compute regrowth = product of factors (if avail_n > 0)
     4. Detect avail_spec (mature trees of same species)
-    5. Seedbank/seedling pipeline (fire reset / wind accumulate / normal)
-    6. Seedling decrement (proportional allocation, skipped during fire/wind)
-    7. Annual survival (seedling *= seedling_lg, inside avail_N gate)
+    5. Seedbank/seedling pipeline (fire / wind / recovery / post-disturbance / normal)
+    6. PLOTSIZE scaling + seedling decrement (D1/D2: matches GAPpy plotsize pattern)
+    7. Annual survival: seedling = seedling * seedling_lg / PLOTSIZE (D5: always runs)
     8. Write regrowth to params (P6 reads same tick for growmax)
     9. Write seedling_weight to params (P7 free slots read same tick)
 
@@ -76,6 +76,7 @@ GAP_S_WIND_INTENSITY = 15
 GAP_S_CUM_DEC_LAI_BASE = 16   # cum_dec_lai[0..49] at slots 16-65
 GAP_S_CUM_CON_LAI_BASE = 66   # cum_con_lai[0..49] at slots 66-115
 GAP_S_AVAIL_SPEC_BASE = 116   # avail_spec[0..49] at slots 116-165
+GAP_S_RECOVERY_YEARS = 166     # Fire/wind recovery countdown (P2 sets, P6 decrements)
 
 # === Constants ===
 XT = -0.40
@@ -118,6 +119,7 @@ def tree_template_renewal_step(
         total_seedling_weight = 0.0
         cum_dec_lai = 0.0
         cum_con_lai = 0.0
+        recovery_years = 0.0
         gap_idx = -1
 
         neighbor_indices = locations[agent_index]
@@ -135,12 +137,15 @@ def tree_template_renewal_step(
                 avail_n = states_tensor[neighbor_idx][GAP_S_AVAIL_N]
                 fire_intensity = states_tensor[neighbor_idx][GAP_S_FIRE_INTENSITY]
                 wind_intensity = states_tensor[neighbor_idx][GAP_S_WIND_INTENSITY]
+                recovery_years = states_tensor[neighbor_idx][GAP_S_RECOVERY_YEARS]
                 # For seedling decrement (GAPpy model.py:941)
                 num_to_recruit = states_tensor[neighbor_idx][GAP_S_NUM_TO_RECRUIT]
                 total_seedling_weight = states_tensor[neighbor_idx][GAP_S_TOTAL_SEEDLING_WEIGHT]
-                # O(1) ground-level cumulative LAI (layer 0 = total, pre-aggregated at P0)
-                cum_dec_lai = states_tensor[neighbor_idx][GAP_S_CUM_DEC_LAI_BASE]
-                cum_con_lai = states_tensor[neighbor_idx][GAP_S_CUM_CON_LAI_BASE]
+                # D4 fix: ground-level light reads layer 1 (matches GAPpy dec_light[0]
+                # = exp(xt * lvd_c3[1] / plotsize) which uses cumulative LAI from
+                # layer 1+, excluding the ground layer itself)
+                cum_dec_lai = states_tensor[neighbor_idx][GAP_S_CUM_DEC_LAI_BASE + 1]
+                cum_con_lai = states_tensor[neighbor_idx][GAP_S_CUM_CON_LAI_BASE + 1]
             i = i + 1
 
         # Read species params
@@ -307,10 +312,13 @@ def tree_template_renewal_step(
             avail_spec = states_tensor[gap_idx][GAP_S_AVAIL_SPEC_BASE + species_idx]
 
         # --- 5. Seedbank/seedling pipeline ---
-        # Fire/wind: seedling reset/accumulate happens in GAPpy's mortality(),
-        # BEFORE renewal(), OUTSIDE avail_N gate. No recruitment in disturbance year.
-        # Normal: pipeline runs in GAPpy's renewal(), inside avail_N > 0 gate.
+        # Branches: fire / wind / recovery(>1) / post-disturbance(==1) / normal / frozen
+        # in_pipeline tracks whether PLOTSIZE scaling should happen (matches GAPpy
+        # pattern: scale up by plotsize during active renewal, scale down at end).
+        # Recovery years (counter>1) intentionally skip scaling → seedling_lg/PLOTSIZE
+        # causes rapid depletion (matching GAPpy's behavior when fire/wind > 1).
         weight = 0.0
+        in_pipeline = 0
 
         if fire_intensity > 0.01:
             # FIRE: Reset seedlings (GAPpy mortality() model.py:635-640).
@@ -334,23 +342,35 @@ def tree_template_renewal_step(
             elif ft == 6:
                 fc_fire = 0.001
             seedling = (invader_val * 10.0 + sprout_val * avail_spec) * fc_fire
-            # Seedbank untouched. Weight=0 (no recruitment during fire year).
-            # GAPpy: can_recruit=False during fire, line 985 resets fire=0,
-            # so recruitment resumes next tick via normal pipeline.
+            # Seedbank untouched. Weight=0, in_pipeline=0 (no scaling, no recruitment).
+            # GAPpy: can_recruit=False during fire year (counter=5>1), no plotsize scaling.
 
         elif wind_intensity > 0.01:
             # WIND: Accumulate seedlings (GAPpy mortality() model.py:648-653).
-            # Wind keeps existing seedling pool + adds invader + sprouting.
             seedling = invader_val + seedling + sprout_val * avail_spec
-            # Seedbank untouched. Weight=0 (no recruitment during wind year).
+            # Weight=0, in_pipeline=0 (no scaling, no recruitment).
 
-        elif avail_n > 0.0:
-            # Normal renewal pipeline (GAPpy renewal(), inside avail_N > 0 gate).
-            # GAPpy first cycle (seedling_number==0, model.py:828-858):
-            #   pipeline first, then prob from UPDATED seedling
-            # GAPpy subsequent (seedling_number!=0, model.py:860-891):
-            #   prob from CURRENT seedling first, then pipeline update
-            # (tick>0 is GGap proxy for seedling_number!=0)
+        elif recovery_years > 1.5:
+            # Recovery countdown (GAPpy: fire>1 or wind>1, just decrement counter).
+            # No pipeline, no scaling. seedling_lg/PLOTSIZE below causes rapid depletion
+            # (matching GAPpy: seedling never scaled up, but divided by plotsize each year).
+            regrowth = 0.0
+            # weight stays 0, in_pipeline stays 0
+
+        elif recovery_years > 0.5:
+            # Post-disturbance year (GAPpy: fire==1 or wind==1, model.py:893-911).
+            # GAPpy: prob = seedling * grow_cap (no nutrient/light), nrenew=0.
+            # Scale seedlings by PLOTSIZE so seedling_lg/PLOTSIZE gives net seedling_lg.
+            # P6 sets num_to_recruit=0 during recovery, so no actual recruitment.
+            regrowth = 0.0
+            in_pipeline = 1
+
+        else:
+            # Normal renewal pipeline (GAPpy renewal(), can_recruit=True).
+            # Runs regardless of avail_n (GAPpy: can_recruit depends on numtrees
+            # and fire/wind, not avail_n). When avail_n<=0, regrowth=0 so
+            # weight=0 (no recruitment) and seedbank doesn't convert, but
+            # seedbank still accumulates and PLOTSIZE scaling still applies.
             if tick > 0:
                 weight = seedling * regrowth
 
@@ -368,23 +388,31 @@ def tree_template_renewal_step(
             if tick < 1:
                 weight = seedling * regrowth
 
-        # avail_n <= 0 and no disturbance: seedling/seedbank frozen (unchanged)
+            in_pipeline = 1
 
-        # --- 7. Seedling decrement ---
-        # Corrects 1-tick lag from previous tick's recruitment.
-        # Skipped during fire/wind: seedling reset/accumulate replaces prior state.
-        if fire_intensity < 0.01 and wind_intensity < 0.01:
-            old_weight = states_db_tensor[agent_index][TREE_DB_SEEDLING_WEIGHT]
-            if total_seedling_weight > 0.01 and num_to_recruit > 0.5:
-                my_share = num_to_recruit * old_weight / total_seedling_weight
-                seedling = seedling - my_share / PLOTSIZE
-                if seedling < 0.0:
-                    seedling = 0.0
+        # --- 6. PLOTSIZE scaling + seedling decrement (D1, D2) ---
+        # GAPpy scales seedlings up by plotsize during active renewal, making the
+        # per-recruit decrement of 1.0 meaningful against a pool of ~500.
+        if in_pipeline > 0:
+            seedling = seedling * PLOTSIZE
 
-        # --- 7b. Annual survival ---
-        # Only when avail_n > 0 (GAPpy model.py:981 is inside the renewal gate)
-        if avail_n > 0.0:
-            seedling = seedling * seedling_lg
+            # Seedling decrement: corrects 1-tick lag from previous tick's recruitment.
+            # my_share ≈ num_recruits × (species_weight / total_weight) = recruits for this species.
+            # With PLOTSIZE-scaled seedling, each recruit decrements ~1.0 (matches GAPpy model.py:941).
+            if fire_intensity < 0.01 and wind_intensity < 0.01:
+                old_weight = states_db_tensor[agent_index][TREE_DB_SEEDLING_WEIGHT]
+                if total_seedling_weight > 0.01 and num_to_recruit > 0.5:
+                    my_share = num_to_recruit * old_weight / total_seedling_weight
+                    seedling = seedling - my_share
+                    if seedling < 0.0:
+                        seedling = 0.0
+
+        # --- 7. Annual survival (D5: always runs, matches GAPpy model.py:980-982) ---
+        # GAPpy: seedling[i] = seedling[i] * seedling_lg / plotsize (unconditional).
+        # When in_pipeline=1: net effect = seedling * seedling_lg (plotsize cancels).
+        # When in_pipeline=0: net effect = seedling * seedling_lg / plotsize (rapid depletion
+        # during recovery years, matching GAPpy's no-scaling + divide pattern).
+        seedling = seedling * seedling_lg / PLOTSIZE
 
         # --- 8. Write outputs ---
         params_tensor[agent_index][TREE_P_SEEDBANK] = seedbank

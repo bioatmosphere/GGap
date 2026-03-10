@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-GGap Model Output Visualization Script
+GAPpy Model Output Visualization Script
 
-This script creates comprehensive plots of the GGap forest model outputs
+This script creates comprehensive plots of the GAPpy forest model outputs
 including forest dynamics, soil biogeochemistry, and environmental conditions.
 
 Features:
@@ -55,9 +55,9 @@ SOIL_COLORS = {"surface": "#8B4513", "mineral": "#D2691E", "available": "#228B22
 CLIMATE_COLORS = {"temperature": "#DC143C", "water": "#1E90FF", "stress": "#FF8C00"}
 
 
-class GGapPlotter:
+class GAPpyPlotter:
     """
-    Comprehensive plotting class for GGap model outputs.
+    Comprehensive plotting class for GAPpy model outputs.
 
     Handles data loading, processing, and visualization of forest ecosystem
     model outputs including biomass, species composition, soil biogeochemistry,
@@ -132,7 +132,7 @@ class GGapPlotter:
                     df = df.rename(columns=column_mapping)
 
                 setattr(self, attr_name, df)
-                print(f"  Loaded {filename}: {len(df)} records")
+                print(f"  {filename}: {len(df)} records")
 
             for attr_name, filename in optional_files.items():
                 filepath = self.output_dir / filename
@@ -156,9 +156,9 @@ class GGapPlotter:
                         df = df.rename(columns=column_mapping)
 
                     setattr(self, attr_name, df)
-                    print(f"  Loaded {filename}: {len(df)} records")
+                    print(f"  {filename}: {len(df)} records")
                 else:
-                    print(f"  {filename}: not found (optional)")
+                    print(f"  - {filename}: not found (optional)")
 
             return True
 
@@ -207,15 +207,11 @@ class GGapPlotter:
 
         genus_col = 'genus' if 'genus' in self.species_data.columns else 'species'
 
-        # Estimate tree counts from diameter category columns if available
+        # Calculate tree counts if not present
         if 'n_trees' not in self.species_data.columns:
-            diam_cols = ['<0', '0-8', '8-28', '-48', '-68', '-88', '>88']
-            available_cols = [c for c in diam_cols if c in self.species_data.columns]
-            if available_cols:
-                self.species_data['n_trees'] = self.species_data[available_cols].sum(axis=1)
-            else:
-                self.species_data['n_trees'] = np.maximum(1,
-                    self.species_data['basal_area'] / 100)
+            # Estimate from basal area or use constant
+            self.species_data['n_trees'] = np.maximum(1,
+                self.species_data['basal_area'] / 100)  # Rough estimate
 
         summary = self.species_data.groupby(['year', genus_col]).agg({
             'biomass_c': 'sum',
@@ -224,7 +220,9 @@ class GGapPlotter:
             'n_trees': 'sum'
         }).reset_index()
 
-        summary['cn_ratio'] = summary['biomass_c'] / summary['biomass_n'].replace(0, np.nan)
+        # Note: In model output, biomC is in tC/ha (scaled by plotadj) but biomN is in
+        # a unit 1000x smaller (scaled by plotrenorm*10). Correct by dividing ratio by 1000.
+        summary['cn_ratio'] = summary['biomass_c'] / summary['biomass_n'].replace(0, np.nan) / 1000.0
         summary['biomass_per_tree'] = summary['biomass_c'] / summary['n_trees'].replace(0, np.nan)
 
         return summary
@@ -254,8 +252,8 @@ class GGapPlotter:
                      colors=[color_map[taxon] for taxon in biomass_pivot.columns],
                      alpha=0.7)
         ax1.set_xlabel('Year')
-        ax1.set_ylabel('Biomass Carbon (kg/ha)')
-        ax1.set_title('Biomass Carbon by Genus')
+        ax1.set_ylabel('Biomass Carbon (kg/m²)')
+        ax1.set_title('Biomass Carbon by Species')
         ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8, frameon=False)
         ax1.grid(True, alpha=0.2)
 
@@ -270,8 +268,8 @@ class GGapPlotter:
                     linestyle=linestyle, marker=marker, markersize=4,
                     markevery=max(1, len(subset) // 10), alpha=0.9)
         ax2.set_xlabel('Year')
-        ax2.set_ylabel('Number of Trees (/ha)')
-        ax2.set_title('Tree Population by Genus')
+        ax2.set_ylabel('Number of Trees')
+        ax2.set_title('Tree Population by Species')
         ax2.legend(bbox_to_anchor=(1.05, 1), loc='upper left', frameon=False, fontsize=8)
         ax2.grid(True, alpha=0.2)
 
@@ -286,8 +284,8 @@ class GGapPlotter:
                     linestyle=linestyle, marker=marker, markersize=4,
                     markevery=max(1, len(subset) // 10), alpha=0.9)
         ax3.set_xlabel('Year')
-        ax3.set_ylabel('Basal Area (cm2/m2)')
-        ax3.set_title('Basal Area by Genus')
+        ax3.set_ylabel('Basal Area (cm²)')
+        ax3.set_title('Basal Area by Species')
         ax3.legend(bbox_to_anchor=(1.05, 1), loc='upper left', frameon=False, fontsize=8)
         ax3.grid(True, alpha=0.2)
 
@@ -337,7 +335,7 @@ class GGapPlotter:
                 color='#000000', linestyle='-.', marker='D',
                 markevery=markevery, markersize=5, alpha=0.9)
         ax1.set_xlabel('Year')
-        ax1.set_ylabel('Carbon Pool (tn C/ha)')
+        ax1.set_ylabel('Carbon Pool (kg C/m²)')
         ax1.set_title('Soil Carbon Pools')
         ax1.legend(frameon=False)
         ax1.grid(True, alpha=0.2)
@@ -358,7 +356,7 @@ class GGapPlotter:
                 color='#00008B', linestyle='-.', marker='D',
                 markevery=markevery, markersize=5, alpha=0.9)
         ax2.set_xlabel('Year')
-        ax2.set_ylabel('Nitrogen Pool (tn N/ha)')
+        ax2.set_ylabel('Nitrogen Pool (kg N/m²)')
         ax2.set_title('Soil Nitrogen Pools')
         ax2.legend(frameon=False)
         ax2.grid(True, alpha=0.2)
@@ -368,13 +366,13 @@ class GGapPlotter:
         if 'avail_n' in self.soil_data.columns:
             ax3.plot(self.soil_data['year'], self.soil_data['avail_n'] * 1000,
                     linewidth=2, color=SOIL_COLORS['available'])
-            ax3.set_ylabel('Available N (kg N/ha)')
+            ax3.set_ylabel('Available N (g N/m²)')
         else:
             estimated_avail = total_n * 0.05
             ax3.plot(self.soil_data['year'], estimated_avail * 1000,
                     linewidth=2, color=SOIL_COLORS['available'],
                     linestyle=':', alpha=0.6)
-            ax3.set_ylabel('Estimated Avail. N (kg N/ha)')
+            ax3.set_ylabel('Estimated Avail. N (g N/m²)')
         ax3.set_xlabel('Year')
         ax3.set_title('Available Nitrogen')
         ax3.grid(True, alpha=0.2)
@@ -435,31 +433,29 @@ class GGapPlotter:
         # Plot 2: Water balance
         ax2 = axes[0, 1]
         ax2.plot(self.site_data['year'], self.site_data['rain'],
-                linewidth=2, label='Rainfall (mm)',
+                linewidth=2, label='Rainfall',
                 color=CLIMATE_COLORS['water'])
 
-        water_vars = ['pet', 'aet']
-        colors = ['#FFA500', '#E74C3C']
+        water_vars = ['pet', 'aet', 'runoff']
+        colors = ['#FFA500', '#E74C3C', '#9B59B6']
         for var, color in zip(water_vars, colors):
             if var in self.site_data.columns:
-                vals = self.site_data[var]
-                if vals.abs().sum() > 0:
-                    ax2.plot(self.site_data['year'], vals,
-                            linewidth=2, label=var.replace('_', ' ').title(),
-                            color=color)
+                ax2.plot(self.site_data['year'], self.site_data[var],
+                        linewidth=2, label=var.replace('_', ' ').title(),
+                        color=color)
 
         ax2.set_xlabel('Year')
-        ax2.set_ylabel('Water (mm/year)')
+        ax2.set_ylabel('Water Flux (m/year)')
         ax2.set_title('Water Balance')
         ax2.legend(frameon=False)
         ax2.grid(True, alpha=0.2)
 
         # Plot 3: Drought stress indicators
         ax3 = axes[1, 0]
-        drought_vars = ['dryd_upper', 'dryd_base']
-        drought_colors = ['#DC143C', '#FF8C00']
-        drought_styles = ['-', '--']
-        drought_markers = ['o', 's']
+        drought_vars = ['dryd_upper', 'dryd_base', 'drought_days']
+        drought_colors = ['#DC143C', '#FF8C00', '#FFD700']
+        drought_styles = ['-', '--', '-.']
+        drought_markers = ['o', 's', '^']
         drought_found = False
 
         for idx, var in enumerate(drought_vars):
@@ -478,17 +474,17 @@ class GGapPlotter:
                     color=CLIMATE_COLORS['stress'], alpha=0.6)
 
         ax3.set_xlabel('Year')
-        ax3.set_ylabel('Dry Days')
+        ax3.set_ylabel('Stress Indicator')
         ax3.set_title('Drought Stress')
         ax3.legend(frameon=False)
         ax3.grid(True, alpha=0.2)
 
         # Plot 4: Flood and other environmental variables
         ax4 = axes[1, 1]
-        env_vars = ['flood_d']
-        env_colors = ['#1E90FF']
-        env_styles = ['-']
-        env_markers = ['o']
+        env_vars = ['flood_d', 'wind_days', 'freeze_days']
+        env_colors = ['#1E90FF', '#9370DB', '#708090']
+        env_styles = ['-', '--', '-.']
+        env_markers = ['o', 's', 'D']
         env_found = False
 
         for idx, var in enumerate(env_vars):
@@ -503,13 +499,13 @@ class GGapPlotter:
                     env_found = True
 
         if not env_found:
-            ax4.text(0.5, 0.5, 'No flood/disturbance\nevents recorded',
+            ax4.text(0.5, 0.5, 'No additional\nenvironmental\nvariables found',
                     ha='center', va='center', transform=ax4.transAxes,
                     fontsize=10, color='#666666')
 
         ax4.set_xlabel('Year')
         ax4.set_ylabel('Days')
-        ax4.set_title('Flood / Disturbance Stress')
+        ax4.set_title('Other Environmental Stress')
         if env_found:
             ax4.legend(frameon=False)
         ax4.grid(True, alpha=0.2)
@@ -520,7 +516,7 @@ class GGapPlotter:
     def create_summary_dashboard(self, figsize: Tuple[int, int] = (16, 12)) -> plt.Figure:
         """Create a comprehensive dashboard view."""
         fig = plt.figure(figsize=figsize)
-        fig.suptitle('GGap Model Output Dashboard', fontsize=14, fontweight='bold')
+        fig.suptitle('GAPpy Model Output Dashboard', fontsize=14, fontweight='bold')
 
         gs = gridspec.GridSpec(3, 4, hspace=0.3, wspace=0.3, figure=fig)
 
@@ -534,7 +530,7 @@ class GGapPlotter:
                 linewidth=2, color='#2E7D32')
         ax1.fill_between(total_biomass.index, total_biomass.values, alpha=0.2, color='#4CAF50')
         ax1.set_xlabel('Year')
-        ax1.set_ylabel('Total Biomass Carbon (kg/ha)')
+        ax1.set_ylabel('Total Biomass Carbon (kg/m²)')
         ax1.set_title('Total Ecosystem Biomass', fontweight='bold')
         ax1.grid(True, alpha=0.2)
 
@@ -570,7 +566,7 @@ class GGapPlotter:
                 linewidth=2, color='#7B1FA2')
         ax3.fill_between(total_trees.index, total_trees.values, alpha=0.2, color='#9C27B0')
         ax3.set_xlabel('Year')
-        ax3.set_ylabel('Total Trees (/ha)')
+        ax3.set_ylabel('Total Trees')
         ax3.set_title('Tree Population', fontweight='bold')
         ax3.grid(True, alpha=0.2)
 
@@ -581,7 +577,7 @@ class GGapPlotter:
                 linewidth=2, color='#6D4C41')
         ax4.fill_between(self.soil_data['year'], total_soil_c, alpha=0.2, color='#8D6E63')
         ax4.set_xlabel('Year')
-        ax4.set_ylabel('Total Soil Carbon (tn C/ha)')
+        ax4.set_ylabel('Total Soil Carbon (kg C/m²)')
         ax4.set_title('Soil Carbon Accumulation', fontweight='bold')
         ax4.grid(True, alpha=0.2)
 
@@ -626,8 +622,9 @@ class GGapPlotter:
 
         # Ecosystem C:N ratio
         ax7 = fig.add_subplot(gs[2, 2:])
+        # biomC is in tC/ha, biomN is 1000x smaller units; correct for unit mismatch
         total_biomass_n = species_summary.groupby('year')['biomass_n'].sum()
-        ecosystem_cn = total_biomass / total_biomass_n.replace(0, np.nan)
+        ecosystem_cn = total_biomass / total_biomass_n.replace(0, np.nan) / 1000.0
         ecosystem_cn = ecosystem_cn.dropna()
         if len(ecosystem_cn) > 0:
             ax7.plot(ecosystem_cn.index, ecosystem_cn.values,
@@ -661,12 +658,11 @@ class GGapPlotter:
     def print_summary_statistics(self) -> None:
         """Display comprehensive summary statistics."""
         print("\n" + "=" * 60)
-        print("GGap SIMULATION SUMMARY")
+        print("GAPpy SIMULATION SUMMARY")
         print("=" * 60)
 
         years = self.site_data['year'].max() - self.site_data['year'].min() + 1
-        print(f"Simulation period: {years} years "
-              f"({self.site_data['year'].min()}-{self.site_data['year'].max()})")
+        print(f"Simulation period: {years} years ({self.site_data['year'].min()}-{self.site_data['year'].max()})")
 
         species_summary = self.prepare_species_summary()
         final_year_data = species_summary[species_summary['year'] == species_summary['year'].max()]
@@ -677,44 +673,43 @@ class GGapPlotter:
         n_species = len(final_year_data)
 
         print(f"\nFOREST METRICS (Final Year):")
-        print(f"  Total biomass C: {final_biomass:.2f} kg/ha")
-        print(f"  Total biomass N: {final_biomass_n:.3f} kg/ha")
-        print(f"  Total trees: {final_trees:.0f} /ha")
-        print(f"  Number of genera: {n_species}")
+        print(f"  Total biomass C: {final_biomass:.2f} kg C/m²")
+        print(f"  Total biomass N: {final_biomass_n:.3f} kg N/m²")
+        print(f"  Total trees: {final_trees:.0f}")
+        print(f"  Number of species: {n_species}")
         if final_trees > 0:
             print(f"  Average biomass per tree: {final_biomass/final_trees:.3f} kg C/tree")
         if final_biomass_n > 0:
-            print(f"  Forest C:N ratio: {final_biomass/final_biomass_n:.1f}")
+            print(f"  Forest C:N ratio: {final_biomass/final_biomass_n/1000.0:.1f}")
 
         final_soil = self.soil_data[self.soil_data['year'] == self.soil_data['year'].max()].iloc[0]
         total_soil_c = final_soil['a0c0'] + final_soil['ac0']
         total_soil_n = final_soil['a0n0'] + final_soil['an0']
 
         print(f"\nSOIL METRICS (Final Year):")
-        print(f"  Total soil C: {total_soil_c:.2f} tn/ha")
-        print(f"  Total soil N: {total_soil_n:.3f} tn/ha")
+        print(f"  Total soil C: {total_soil_c:.2f} kg C/m²")
+        print(f"  Total soil N: {total_soil_n:.3f} kg N/m²")
         if total_soil_n > 0:
             print(f"  Soil C:N ratio: {total_soil_c/total_soil_n:.1f}")
-
-        if 'avail_n' in self.soil_data.columns:
-            print(f"  Available N: {final_soil['avail_n']:.4f} tn/ha/yr")
 
         final_site = self.site_data[self.site_data['year'] == self.site_data['year'].max()].iloc[0]
         print(f"\nCLIMATE METRICS (Final Year):")
         print(f"  Degree days: {final_site['degd']:.0f}")
-        print(f"  Annual rainfall: {final_site['rain']:.1f} mm")
+        print(f"  Annual rainfall: {final_site['rain']:.2f} m")
 
         initial_biomass = species_summary[
             species_summary['year'] == species_summary['year'].min()
         ]['biomass_c'].sum()
-        initial_soil = self.soil_data[
+        initial_soil_c = self.soil_data[
             self.soil_data['year'] == self.soil_data['year'].min()
-        ].iloc[0]
-        initial_soil_c = initial_soil['a0c0'] + initial_soil['ac0']
+        ].iloc[0]['a0c0'] + self.soil_data[
+            self.soil_data['year'] == self.soil_data['year'].min()
+        ].iloc[0]['ac0']
 
         print(f"\nCHANGE OVER TIME:")
-        print(f"  Forest biomass change: {final_biomass - initial_biomass:+.2f} kg/ha")
-        print(f"  Soil carbon change: {total_soil_c - initial_soil_c:+.2f} tn/ha")
+        print(f"  Forest biomass change: {final_biomass - initial_biomass:+.2f} kg C/m²")
+        print(f"  Soil carbon change: {total_soil_c - initial_soil_c:+.2f} kg C/m²")
+        print(f"  Total ecosystem C change: {(final_biomass + total_soil_c) - (initial_biomass + initial_soil_c):+.2f} kg C/m²")
 
         print("=" * 60)
 
@@ -768,7 +763,7 @@ class GGapPlotter:
 def main():
     """Main function with command line interface."""
     parser = argparse.ArgumentParser(
-        description="Visualize GGap forest model outputs",
+        description="Visualize GAPpy forest model outputs",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -781,7 +776,7 @@ Examples:
 
     parser.add_argument('--output-dir', '-o',
                        default=DEFAULT_OUTPUT_DIR,
-                       help=f'Directory containing GGap output files (default: {DEFAULT_OUTPUT_DIR})')
+                       help=f'Directory containing GAPpy output files (default: {DEFAULT_OUTPUT_DIR})')
 
     parser.add_argument('--plots-dir', '-p',
                        default=DEFAULT_PLOTS_DIR,
@@ -808,14 +803,14 @@ Examples:
 
     args = parser.parse_args()
 
-    print("GGap Output Visualization")
+    print("GAPpy Output Visualization")
     print("=" * 50)
     print(f"Output directory: {args.output_dir}")
     print(f"Plots directory: {args.plots_dir}")
     print(f"Format: {args.format}")
 
     try:
-        plotter = GGapPlotter(
+        plotter = GAPpyPlotter(
             output_dir=args.output_dir,
             plots_dir=args.plots_dir,
             style=args.style

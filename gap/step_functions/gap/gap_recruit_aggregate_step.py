@@ -27,6 +27,7 @@ BREED_SITE = 2
 # === Gap states[16] (public, no buffer) ===
 GAP_S_NUM_TO_RECRUIT = 6
 GAP_S_RECRUIT_RAND_SEED = 7
+GAP_S_RECOVERY_YEARS = 166     # Fire/wind recovery countdown (P2 sets, P6 decrements)
 
 # === Tree params (for reading template regrowth) ===
 TREE_P_ENV_STRESS = 32  # Templates store regrowth here (written at P5, same tick)
@@ -115,8 +116,19 @@ def gap_recruit_aggregate_step(
     if num_to_recruit > 0.5 and free_slot_tree_count > 0.5:
         recruit_prob = num_to_recruit / free_slot_tree_count
 
-    # Generate pseudo-random seed for species selection
-    recruit_rand_seed = float((tick * 997 + agent_index * 991) % 10000)
+    # Generate pseudo-random seed for species selection (multi-round hash)
+    _h = (int(tick) * 374761393 + int(agent_index) * 668265263 + 9) % 2147483647
+    _h = (_h * 1103515245 + 12345) % 2147483648
+    _h = (_h * 214013 + 2531011) % 2147483648
+    recruit_rand_seed = float((_h // 65536) % 10000)
+
+    # Suppress recruitment during fire/wind recovery (GAPpy: can_recruit=False
+    # when numtrees==0 and fire/wind counter > 0; nrenew=0 even at counter==1).
+    recovery_years = states_tensor[agent_index][GAP_S_RECOVERY_YEARS]
+    if recovery_years > 0.5:
+        recruit_prob = 0.0
+        # Decrement counter (P5 already read current value this tick)
+        states_tensor[agent_index][GAP_S_RECOVERY_YEARS] = recovery_years - 1.0
 
     # Write recruitment probability + seed (P7 free slots read from Gap)
     states_tensor[agent_index][GAP_S_NUM_TO_RECRUIT] = recruit_prob

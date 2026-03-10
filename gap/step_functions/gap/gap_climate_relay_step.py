@@ -30,6 +30,7 @@ GAP_S_FLOOD_DAYS = 8
 GAP_S_FIRE_INTENSITY = 10
 GAP_S_DRY_DAYS_BASE = 14
 GAP_S_WIND_INTENSITY = 15
+GAP_S_RECOVERY_YEARS = 166     # Fire/wind recovery countdown (GAPpy fire=5, wind=3)
 
 # === Site states[8] (for reading from Site neighbor) ===
 SITE_S_DEG_DAYS = 0
@@ -91,3 +92,10 @@ def gap_climate_relay_step(
     states_tensor[agent_index][GAP_S_FIRE_INTENSITY] = site_fire_intensity
     states_tensor[agent_index][GAP_S_WIND_INTENSITY] = site_wind_intensity
     states_tensor[agent_index][GAP_S_DRY_DAYS_BASE] = site_dry_days_base
+
+    # Set recovery countdown when fire/wind occurs (GAPpy: fire=5, wind=3).
+    # Counter persists across ticks; P6 decrements it each tick.
+    if site_fire_intensity > 0.01:
+        states_tensor[agent_index][GAP_S_RECOVERY_YEARS] = 5.0
+    elif site_wind_intensity > 0.01:
+        states_tensor[agent_index][GAP_S_RECOVERY_YEARS] = 3.0

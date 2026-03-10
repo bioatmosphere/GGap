@@ -1494,8 +1494,11 @@ def site_soil_step(
     if fire_prob > 0.15:
         fire_prob = 0.15  # Cap at 15% annual probability
 
-    # Stochastic fire check (deterministic based on tick)
-    fire_rand = ((tick * 1021 + agent_index * 1019) % 1000000) / 1000000.0
+    # Stochastic fire check (multi-round hash PRNG, salt=10)
+    _h = (int(tick) * 374761393 + int(agent_index) * 668265263 + 10) % 2147483647
+    _h = (_h * 1103515245 + 12345) % 2147483648
+    _h = (_h * 214013 + 2531011) % 2147483648
+    fire_rand = float((_h // 65536) % 32768) / 32768.0
     fire_intensity = 0.0
     if fire_rand < fire_prob:
         # Fire occurs - intensity based on dry conditions
@@ -1508,8 +1511,11 @@ def site_soil_step(
     # ========== WIND PROBABILITY (GAPpy model.py:623-655) ==========
     wind_prob = params_tensor[agent_index][SITE_P_WIND_PROB]
 
-    # Stochastic wind check (separate hash from fire)
-    wind_rand = ((tick * 2039 + agent_index * 2027) % 1000000) / 1000000.0
+    # Stochastic wind check (multi-round hash PRNG, salt=11)
+    _h = (int(tick) * 374761393 + int(agent_index) * 668265263 + 11) % 2147483647
+    _h = (_h * 1103515245 + 12345) % 2147483648
+    _h = (_h * 214013 + 2531011) % 2147483648
+    wind_rand = float((_h // 65536) % 32768) / 32768.0
     wind_intensity = 0.0
     if wind_rand < wind_prob and fire_intensity < 0.01:
         # Wind occurs (only if no fire this year - fire takes precedence, GAPpy model.py:630)

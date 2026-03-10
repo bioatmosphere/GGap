@@ -143,7 +143,7 @@ See docs/implementation_logic.md for step function details.
 Property Arrays by Breed:
   Tree: params[42], states[5], states_db[5]
         (params includes species traits[22] + physiology[10] + intermediates[2] + renewal[4] + leaf_area[2] + seedling_weight[1])
-  Gap:  params[2],  states[166], states_db[1]
+  Gap:  params[2],  states[167], states_db[1]
         (states includes climate[5] + litter[4] + recruitment[3] + flood[1] + fire[1] + wind[1] + n_demand[1] + dry_days_base[1] + cum_lai_bins[100] + avail_spec[50])
   Site: params[116], states[12], states_db[1]
         (params includes soil pools[9] + monthly climate[36] + site properties[8] + fire/wind/soil[3] + climate_std[36] + lapse_rates[24])
@@ -283,7 +283,8 @@ MAX_SPECIES = 50       # Max species tracked for avail_spec flags
 GAP_S_CUM_DEC_LAI_BASE = 16   # cum_dec_lai[0..49] at slots 16-65
 GAP_S_CUM_CON_LAI_BASE = 66   # cum_con_lai[0..49] at slots 66-115
 GAP_S_AVAIL_SPEC_BASE = 116   # avail_spec[0..49] at slots 116-165
-GAP_STATES_SIZE = 166          # Total Gap states slots
+GAP_S_RECOVERY_YEARS = 166     # Fire/wind recovery countdown (GAPpy fire=5, wind=3)
+GAP_STATES_SIZE = 167          # Total Gap states slots (166 + recovery_years)
 
 # states_db[1]: placeholder (not used, but keeps uniform signature)
 GAP_DB_PLACEHOLDER = 0
@@ -423,7 +424,7 @@ class GAPModel(Model):
         self._gap_breed = Breed("Gap")
         # params[2]: internal only (private)
         self._gap_breed.register_property("params", [0.0] * 2, neighbor_visible=False)
-        # states[166]: climate + nutrients + litter + recruitment + flood + seedling_weight + fire + wind + n_demand + bg_litter + dry_days_base + cum_lai_bins + avail_spec (public)
+        # states[167]: climate + nutrients + litter + recruitment + flood + seedling_weight + fire + wind + n_demand + bg_litter + dry_days_base + cum_lai_bins + avail_spec + recovery_years (public)
         self._gap_breed.register_property("states", [0.0] * GAP_STATES_SIZE, neighbor_visible=True)
         # states_db[1]: placeholder (public but unused)
         self._gap_breed.register_property("states_db", [0.0] * 1, neighbor_visible=True)
