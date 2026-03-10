@@ -18,6 +18,7 @@ Execution Flow:
 
 import cupy as cp  # noqa: F401
 from cupyx import jit
+from sagesim.math_utils import rand_uniform_philox
 
 # === Breed IDs ===
 BREED_TREE = 0
@@ -116,11 +117,8 @@ def gap_recruit_aggregate_step(
     if num_to_recruit > 0.5 and free_slot_tree_count > 0.5:
         recruit_prob = num_to_recruit / free_slot_tree_count
 
-    # Generate pseudo-random seed for species selection (multi-round hash)
-    _h = (int(tick) * 374761393 + int(agent_index) * 668265263 + 9) % 2147483647
-    _h = (_h * 1103515245 + 12345) % 2147483648
-    _h = (_h * 214013 + 2531011) % 2147483648
-    recruit_rand_seed = float((_h // 65536) % 10000)
+    # Generate pseudo-random seed for species selection
+    recruit_rand_seed = rand_uniform_philox(0, tick, agent_index, 9) * 10000.0
 
     # Suppress recruitment during fire/wind recovery (GAPpy: can_recruit=False
     # when numtrees==0 and fire/wind counter > 0; nrenew=0 even at counter==1).

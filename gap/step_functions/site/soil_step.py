@@ -61,6 +61,7 @@ Property scheme (3 properties):
 
 import cupy as cp
 from cupyx import jit
+from sagesim.math_utils import rand_uniform_philox, rand_uniform_xorshift, rand_normal_bounded
 
 # === Breed IDs ===
 BREED_TREE = 0
@@ -359,44 +360,14 @@ def site_soil_step(
     prcp_11 = params_tensor[agent_index][SITE_P_PRCP_BASE + 11]
 
     # ========== MONTHLY CLIMATE PERTURBATION ==========
-    # Beasley-Springer-Moro (BSM) inverse normal CDF approximation applied to
-    # hash-based uniform RNG. Matches GAPpy's Box-Muller normal + clamp approach.
-    # Hash uniform mapped to [0.08, 0.92] (BSM central region), then rational
-    # approximation gives ~N(0,1). Clamped to [-1,1] for temp, [-0.5,0.5] for precip.
-    u_t = 0.0
-    u_p = 0.0
-    q_t = 0.0
-    q_p = 0.0
-    r_t = 0.0
-    r_p = 0.0
-    numer = 0.0
-    denom = 0.0
+    # Box-Muller normal samples clamped to [-1,1] for temp, [-0.5,0.5] for precip.
+    # Matches GAPpy's normal + clamp approach for monthly climate variability.
     tp = 0.0
     pp = 0.0
 
     # Month 0 (January)
-    u_t = ((tick * 7919 + 0 * 6271 + agent_index * 1013) % 1000000) / 1000000.0
-    u_t = 0.08 + u_t * 0.84
-    q_t = u_t - 0.5
-    r_t = q_t * q_t
-    numer = q_t * (2.50662824 + r_t * (-18.6150006 + r_t * (41.3911977 + r_t * (-25.4410605))))
-    denom = 1.0 + r_t * (-8.47351093 + r_t * (23.0833674 + r_t * (-21.0622410 + r_t * 3.13082910)))
-    tp = numer / denom
-    if tp < -1.0:
-        tp = -1.0
-    if tp > 1.0:
-        tp = 1.0
-    u_p = ((tick * 4219 + 0 * 8461 + agent_index * 3037) % 1000000) / 1000000.0
-    u_p = 0.08 + u_p * 0.84
-    q_p = u_p - 0.5
-    r_p = q_p * q_p
-    numer = q_p * (2.50662824 + r_p * (-18.6150006 + r_p * (41.3911977 + r_p * (-25.4410605))))
-    denom = 1.0 + r_p * (-8.47351093 + r_p * (23.0833674 + r_p * (-21.0622410 + r_p * 3.13082910)))
-    pp = numer / denom
-    if pp < -0.5:
-        pp = -0.5
-    if pp > 0.5:
-        pp = 0.5
+    tp = rand_normal_bounded(0, tick, agent_index, 100, -1.0, 1.0)
+    pp = rand_normal_bounded(0, tick, agent_index, 101, -0.5, 0.5)
     tmin_0 = tmin_0 + tp * tmin_std_0
     tmax_0 = tmax_0 + tp * tmax_std_0
     if tmax_0 < tmin_0:
@@ -406,28 +377,8 @@ def site_soil_step(
         prcp_0 = 0.0
 
     # Month 1 (February)
-    u_t = ((tick * 7919 + 1 * 6271 + agent_index * 1013) % 1000000) / 1000000.0
-    u_t = 0.08 + u_t * 0.84
-    q_t = u_t - 0.5
-    r_t = q_t * q_t
-    numer = q_t * (2.50662824 + r_t * (-18.6150006 + r_t * (41.3911977 + r_t * (-25.4410605))))
-    denom = 1.0 + r_t * (-8.47351093 + r_t * (23.0833674 + r_t * (-21.0622410 + r_t * 3.13082910)))
-    tp = numer / denom
-    if tp < -1.0:
-        tp = -1.0
-    if tp > 1.0:
-        tp = 1.0
-    u_p = ((tick * 4219 + 1 * 8461 + agent_index * 3037) % 1000000) / 1000000.0
-    u_p = 0.08 + u_p * 0.84
-    q_p = u_p - 0.5
-    r_p = q_p * q_p
-    numer = q_p * (2.50662824 + r_p * (-18.6150006 + r_p * (41.3911977 + r_p * (-25.4410605))))
-    denom = 1.0 + r_p * (-8.47351093 + r_p * (23.0833674 + r_p * (-21.0622410 + r_p * 3.13082910)))
-    pp = numer / denom
-    if pp < -0.5:
-        pp = -0.5
-    if pp > 0.5:
-        pp = 0.5
+    tp = rand_normal_bounded(0, tick, agent_index, 102, -1.0, 1.0)
+    pp = rand_normal_bounded(0, tick, agent_index, 103, -0.5, 0.5)
     tmin_1 = tmin_1 + tp * tmin_std_1
     tmax_1 = tmax_1 + tp * tmax_std_1
     if tmax_1 < tmin_1:
@@ -437,28 +388,8 @@ def site_soil_step(
         prcp_1 = 0.0
 
     # Month 2 (March)
-    u_t = ((tick * 7919 + 2 * 6271 + agent_index * 1013) % 1000000) / 1000000.0
-    u_t = 0.08 + u_t * 0.84
-    q_t = u_t - 0.5
-    r_t = q_t * q_t
-    numer = q_t * (2.50662824 + r_t * (-18.6150006 + r_t * (41.3911977 + r_t * (-25.4410605))))
-    denom = 1.0 + r_t * (-8.47351093 + r_t * (23.0833674 + r_t * (-21.0622410 + r_t * 3.13082910)))
-    tp = numer / denom
-    if tp < -1.0:
-        tp = -1.0
-    if tp > 1.0:
-        tp = 1.0
-    u_p = ((tick * 4219 + 2 * 8461 + agent_index * 3037) % 1000000) / 1000000.0
-    u_p = 0.08 + u_p * 0.84
-    q_p = u_p - 0.5
-    r_p = q_p * q_p
-    numer = q_p * (2.50662824 + r_p * (-18.6150006 + r_p * (41.3911977 + r_p * (-25.4410605))))
-    denom = 1.0 + r_p * (-8.47351093 + r_p * (23.0833674 + r_p * (-21.0622410 + r_p * 3.13082910)))
-    pp = numer / denom
-    if pp < -0.5:
-        pp = -0.5
-    if pp > 0.5:
-        pp = 0.5
+    tp = rand_normal_bounded(0, tick, agent_index, 104, -1.0, 1.0)
+    pp = rand_normal_bounded(0, tick, agent_index, 105, -0.5, 0.5)
     tmin_2 = tmin_2 + tp * tmin_std_2
     tmax_2 = tmax_2 + tp * tmax_std_2
     if tmax_2 < tmin_2:
@@ -468,28 +399,8 @@ def site_soil_step(
         prcp_2 = 0.0
 
     # Month 3 (April)
-    u_t = ((tick * 7919 + 3 * 6271 + agent_index * 1013) % 1000000) / 1000000.0
-    u_t = 0.08 + u_t * 0.84
-    q_t = u_t - 0.5
-    r_t = q_t * q_t
-    numer = q_t * (2.50662824 + r_t * (-18.6150006 + r_t * (41.3911977 + r_t * (-25.4410605))))
-    denom = 1.0 + r_t * (-8.47351093 + r_t * (23.0833674 + r_t * (-21.0622410 + r_t * 3.13082910)))
-    tp = numer / denom
-    if tp < -1.0:
-        tp = -1.0
-    if tp > 1.0:
-        tp = 1.0
-    u_p = ((tick * 4219 + 3 * 8461 + agent_index * 3037) % 1000000) / 1000000.0
-    u_p = 0.08 + u_p * 0.84
-    q_p = u_p - 0.5
-    r_p = q_p * q_p
-    numer = q_p * (2.50662824 + r_p * (-18.6150006 + r_p * (41.3911977 + r_p * (-25.4410605))))
-    denom = 1.0 + r_p * (-8.47351093 + r_p * (23.0833674 + r_p * (-21.0622410 + r_p * 3.13082910)))
-    pp = numer / denom
-    if pp < -0.5:
-        pp = -0.5
-    if pp > 0.5:
-        pp = 0.5
+    tp = rand_normal_bounded(0, tick, agent_index, 106, -1.0, 1.0)
+    pp = rand_normal_bounded(0, tick, agent_index, 107, -0.5, 0.5)
     tmin_3 = tmin_3 + tp * tmin_std_3
     tmax_3 = tmax_3 + tp * tmax_std_3
     if tmax_3 < tmin_3:
@@ -499,28 +410,8 @@ def site_soil_step(
         prcp_3 = 0.0
 
     # Month 4 (May)
-    u_t = ((tick * 7919 + 4 * 6271 + agent_index * 1013) % 1000000) / 1000000.0
-    u_t = 0.08 + u_t * 0.84
-    q_t = u_t - 0.5
-    r_t = q_t * q_t
-    numer = q_t * (2.50662824 + r_t * (-18.6150006 + r_t * (41.3911977 + r_t * (-25.4410605))))
-    denom = 1.0 + r_t * (-8.47351093 + r_t * (23.0833674 + r_t * (-21.0622410 + r_t * 3.13082910)))
-    tp = numer / denom
-    if tp < -1.0:
-        tp = -1.0
-    if tp > 1.0:
-        tp = 1.0
-    u_p = ((tick * 4219 + 4 * 8461 + agent_index * 3037) % 1000000) / 1000000.0
-    u_p = 0.08 + u_p * 0.84
-    q_p = u_p - 0.5
-    r_p = q_p * q_p
-    numer = q_p * (2.50662824 + r_p * (-18.6150006 + r_p * (41.3911977 + r_p * (-25.4410605))))
-    denom = 1.0 + r_p * (-8.47351093 + r_p * (23.0833674 + r_p * (-21.0622410 + r_p * 3.13082910)))
-    pp = numer / denom
-    if pp < -0.5:
-        pp = -0.5
-    if pp > 0.5:
-        pp = 0.5
+    tp = rand_normal_bounded(0, tick, agent_index, 108, -1.0, 1.0)
+    pp = rand_normal_bounded(0, tick, agent_index, 109, -0.5, 0.5)
     tmin_4 = tmin_4 + tp * tmin_std_4
     tmax_4 = tmax_4 + tp * tmax_std_4
     if tmax_4 < tmin_4:
@@ -530,28 +421,8 @@ def site_soil_step(
         prcp_4 = 0.0
 
     # Month 5 (June)
-    u_t = ((tick * 7919 + 5 * 6271 + agent_index * 1013) % 1000000) / 1000000.0
-    u_t = 0.08 + u_t * 0.84
-    q_t = u_t - 0.5
-    r_t = q_t * q_t
-    numer = q_t * (2.50662824 + r_t * (-18.6150006 + r_t * (41.3911977 + r_t * (-25.4410605))))
-    denom = 1.0 + r_t * (-8.47351093 + r_t * (23.0833674 + r_t * (-21.0622410 + r_t * 3.13082910)))
-    tp = numer / denom
-    if tp < -1.0:
-        tp = -1.0
-    if tp > 1.0:
-        tp = 1.0
-    u_p = ((tick * 4219 + 5 * 8461 + agent_index * 3037) % 1000000) / 1000000.0
-    u_p = 0.08 + u_p * 0.84
-    q_p = u_p - 0.5
-    r_p = q_p * q_p
-    numer = q_p * (2.50662824 + r_p * (-18.6150006 + r_p * (41.3911977 + r_p * (-25.4410605))))
-    denom = 1.0 + r_p * (-8.47351093 + r_p * (23.0833674 + r_p * (-21.0622410 + r_p * 3.13082910)))
-    pp = numer / denom
-    if pp < -0.5:
-        pp = -0.5
-    if pp > 0.5:
-        pp = 0.5
+    tp = rand_normal_bounded(0, tick, agent_index, 110, -1.0, 1.0)
+    pp = rand_normal_bounded(0, tick, agent_index, 111, -0.5, 0.5)
     tmin_5 = tmin_5 + tp * tmin_std_5
     tmax_5 = tmax_5 + tp * tmax_std_5
     if tmax_5 < tmin_5:
@@ -561,28 +432,8 @@ def site_soil_step(
         prcp_5 = 0.0
 
     # Month 6 (July)
-    u_t = ((tick * 7919 + 6 * 6271 + agent_index * 1013) % 1000000) / 1000000.0
-    u_t = 0.08 + u_t * 0.84
-    q_t = u_t - 0.5
-    r_t = q_t * q_t
-    numer = q_t * (2.50662824 + r_t * (-18.6150006 + r_t * (41.3911977 + r_t * (-25.4410605))))
-    denom = 1.0 + r_t * (-8.47351093 + r_t * (23.0833674 + r_t * (-21.0622410 + r_t * 3.13082910)))
-    tp = numer / denom
-    if tp < -1.0:
-        tp = -1.0
-    if tp > 1.0:
-        tp = 1.0
-    u_p = ((tick * 4219 + 6 * 8461 + agent_index * 3037) % 1000000) / 1000000.0
-    u_p = 0.08 + u_p * 0.84
-    q_p = u_p - 0.5
-    r_p = q_p * q_p
-    numer = q_p * (2.50662824 + r_p * (-18.6150006 + r_p * (41.3911977 + r_p * (-25.4410605))))
-    denom = 1.0 + r_p * (-8.47351093 + r_p * (23.0833674 + r_p * (-21.0622410 + r_p * 3.13082910)))
-    pp = numer / denom
-    if pp < -0.5:
-        pp = -0.5
-    if pp > 0.5:
-        pp = 0.5
+    tp = rand_normal_bounded(0, tick, agent_index, 112, -1.0, 1.0)
+    pp = rand_normal_bounded(0, tick, agent_index, 113, -0.5, 0.5)
     tmin_6 = tmin_6 + tp * tmin_std_6
     tmax_6 = tmax_6 + tp * tmax_std_6
     if tmax_6 < tmin_6:
@@ -592,28 +443,8 @@ def site_soil_step(
         prcp_6 = 0.0
 
     # Month 7 (August)
-    u_t = ((tick * 7919 + 7 * 6271 + agent_index * 1013) % 1000000) / 1000000.0
-    u_t = 0.08 + u_t * 0.84
-    q_t = u_t - 0.5
-    r_t = q_t * q_t
-    numer = q_t * (2.50662824 + r_t * (-18.6150006 + r_t * (41.3911977 + r_t * (-25.4410605))))
-    denom = 1.0 + r_t * (-8.47351093 + r_t * (23.0833674 + r_t * (-21.0622410 + r_t * 3.13082910)))
-    tp = numer / denom
-    if tp < -1.0:
-        tp = -1.0
-    if tp > 1.0:
-        tp = 1.0
-    u_p = ((tick * 4219 + 7 * 8461 + agent_index * 3037) % 1000000) / 1000000.0
-    u_p = 0.08 + u_p * 0.84
-    q_p = u_p - 0.5
-    r_p = q_p * q_p
-    numer = q_p * (2.50662824 + r_p * (-18.6150006 + r_p * (41.3911977 + r_p * (-25.4410605))))
-    denom = 1.0 + r_p * (-8.47351093 + r_p * (23.0833674 + r_p * (-21.0622410 + r_p * 3.13082910)))
-    pp = numer / denom
-    if pp < -0.5:
-        pp = -0.5
-    if pp > 0.5:
-        pp = 0.5
+    tp = rand_normal_bounded(0, tick, agent_index, 114, -1.0, 1.0)
+    pp = rand_normal_bounded(0, tick, agent_index, 115, -0.5, 0.5)
     tmin_7 = tmin_7 + tp * tmin_std_7
     tmax_7 = tmax_7 + tp * tmax_std_7
     if tmax_7 < tmin_7:
@@ -623,28 +454,8 @@ def site_soil_step(
         prcp_7 = 0.0
 
     # Month 8 (September)
-    u_t = ((tick * 7919 + 8 * 6271 + agent_index * 1013) % 1000000) / 1000000.0
-    u_t = 0.08 + u_t * 0.84
-    q_t = u_t - 0.5
-    r_t = q_t * q_t
-    numer = q_t * (2.50662824 + r_t * (-18.6150006 + r_t * (41.3911977 + r_t * (-25.4410605))))
-    denom = 1.0 + r_t * (-8.47351093 + r_t * (23.0833674 + r_t * (-21.0622410 + r_t * 3.13082910)))
-    tp = numer / denom
-    if tp < -1.0:
-        tp = -1.0
-    if tp > 1.0:
-        tp = 1.0
-    u_p = ((tick * 4219 + 8 * 8461 + agent_index * 3037) % 1000000) / 1000000.0
-    u_p = 0.08 + u_p * 0.84
-    q_p = u_p - 0.5
-    r_p = q_p * q_p
-    numer = q_p * (2.50662824 + r_p * (-18.6150006 + r_p * (41.3911977 + r_p * (-25.4410605))))
-    denom = 1.0 + r_p * (-8.47351093 + r_p * (23.0833674 + r_p * (-21.0622410 + r_p * 3.13082910)))
-    pp = numer / denom
-    if pp < -0.5:
-        pp = -0.5
-    if pp > 0.5:
-        pp = 0.5
+    tp = rand_normal_bounded(0, tick, agent_index, 116, -1.0, 1.0)
+    pp = rand_normal_bounded(0, tick, agent_index, 117, -0.5, 0.5)
     tmin_8 = tmin_8 + tp * tmin_std_8
     tmax_8 = tmax_8 + tp * tmax_std_8
     if tmax_8 < tmin_8:
@@ -654,28 +465,8 @@ def site_soil_step(
         prcp_8 = 0.0
 
     # Month 9 (October)
-    u_t = ((tick * 7919 + 9 * 6271 + agent_index * 1013) % 1000000) / 1000000.0
-    u_t = 0.08 + u_t * 0.84
-    q_t = u_t - 0.5
-    r_t = q_t * q_t
-    numer = q_t * (2.50662824 + r_t * (-18.6150006 + r_t * (41.3911977 + r_t * (-25.4410605))))
-    denom = 1.0 + r_t * (-8.47351093 + r_t * (23.0833674 + r_t * (-21.0622410 + r_t * 3.13082910)))
-    tp = numer / denom
-    if tp < -1.0:
-        tp = -1.0
-    if tp > 1.0:
-        tp = 1.0
-    u_p = ((tick * 4219 + 9 * 8461 + agent_index * 3037) % 1000000) / 1000000.0
-    u_p = 0.08 + u_p * 0.84
-    q_p = u_p - 0.5
-    r_p = q_p * q_p
-    numer = q_p * (2.50662824 + r_p * (-18.6150006 + r_p * (41.3911977 + r_p * (-25.4410605))))
-    denom = 1.0 + r_p * (-8.47351093 + r_p * (23.0833674 + r_p * (-21.0622410 + r_p * 3.13082910)))
-    pp = numer / denom
-    if pp < -0.5:
-        pp = -0.5
-    if pp > 0.5:
-        pp = 0.5
+    tp = rand_normal_bounded(0, tick, agent_index, 118, -1.0, 1.0)
+    pp = rand_normal_bounded(0, tick, agent_index, 119, -0.5, 0.5)
     tmin_9 = tmin_9 + tp * tmin_std_9
     tmax_9 = tmax_9 + tp * tmax_std_9
     if tmax_9 < tmin_9:
@@ -685,28 +476,8 @@ def site_soil_step(
         prcp_9 = 0.0
 
     # Month 10 (November)
-    u_t = ((tick * 7919 + 10 * 6271 + agent_index * 1013) % 1000000) / 1000000.0
-    u_t = 0.08 + u_t * 0.84
-    q_t = u_t - 0.5
-    r_t = q_t * q_t
-    numer = q_t * (2.50662824 + r_t * (-18.6150006 + r_t * (41.3911977 + r_t * (-25.4410605))))
-    denom = 1.0 + r_t * (-8.47351093 + r_t * (23.0833674 + r_t * (-21.0622410 + r_t * 3.13082910)))
-    tp = numer / denom
-    if tp < -1.0:
-        tp = -1.0
-    if tp > 1.0:
-        tp = 1.0
-    u_p = ((tick * 4219 + 10 * 8461 + agent_index * 3037) % 1000000) / 1000000.0
-    u_p = 0.08 + u_p * 0.84
-    q_p = u_p - 0.5
-    r_p = q_p * q_p
-    numer = q_p * (2.50662824 + r_p * (-18.6150006 + r_p * (41.3911977 + r_p * (-25.4410605))))
-    denom = 1.0 + r_p * (-8.47351093 + r_p * (23.0833674 + r_p * (-21.0622410 + r_p * 3.13082910)))
-    pp = numer / denom
-    if pp < -0.5:
-        pp = -0.5
-    if pp > 0.5:
-        pp = 0.5
+    tp = rand_normal_bounded(0, tick, agent_index, 120, -1.0, 1.0)
+    pp = rand_normal_bounded(0, tick, agent_index, 121, -0.5, 0.5)
     tmin_10 = tmin_10 + tp * tmin_std_10
     tmax_10 = tmax_10 + tp * tmax_std_10
     if tmax_10 < tmin_10:
@@ -716,28 +487,8 @@ def site_soil_step(
         prcp_10 = 0.0
 
     # Month 11 (December)
-    u_t = ((tick * 7919 + 11 * 6271 + agent_index * 1013) % 1000000) / 1000000.0
-    u_t = 0.08 + u_t * 0.84
-    q_t = u_t - 0.5
-    r_t = q_t * q_t
-    numer = q_t * (2.50662824 + r_t * (-18.6150006 + r_t * (41.3911977 + r_t * (-25.4410605))))
-    denom = 1.0 + r_t * (-8.47351093 + r_t * (23.0833674 + r_t * (-21.0622410 + r_t * 3.13082910)))
-    tp = numer / denom
-    if tp < -1.0:
-        tp = -1.0
-    if tp > 1.0:
-        tp = 1.0
-    u_p = ((tick * 4219 + 11 * 8461 + agent_index * 3037) % 1000000) / 1000000.0
-    u_p = 0.08 + u_p * 0.84
-    q_p = u_p - 0.5
-    r_p = q_p * q_p
-    numer = q_p * (2.50662824 + r_p * (-18.6150006 + r_p * (41.3911977 + r_p * (-25.4410605))))
-    denom = 1.0 + r_p * (-8.47351093 + r_p * (23.0833674 + r_p * (-21.0622410 + r_p * 3.13082910)))
-    pp = numer / denom
-    if pp < -0.5:
-        pp = -0.5
-    if pp > 0.5:
-        pp = 0.5
+    tp = rand_normal_bounded(0, tick, agent_index, 122, -1.0, 1.0)
+    pp = rand_normal_bounded(0, tick, agent_index, 123, -0.5, 0.5)
     tmin_11 = tmin_11 + tp * tmin_std_11
     tmax_11 = tmax_11 + tp * tmax_std_11
     if tmax_11 < tmin_11:
@@ -982,7 +733,7 @@ def site_soil_step(
         day_prcp = 0.0
         if day < 31:
             if m0_inum > 0.5:
-                rain_hash = ((tick * 5003 + day * 7013 + agent_index * 3019) % 1000000) / 1000000.0
+                rain_hash = rand_uniform_xorshift(0, tick * 365 + day, agent_index, 200)
                 if rain_hash <= m0_ss:
                     day_prcp = m0_rr
                     m0_inum = m0_inum - 1.0
@@ -991,7 +742,7 @@ def site_soil_step(
                 m0_inum = 0.0
         elif day < 59:
             if m1_inum > 0.5:
-                rain_hash = ((tick * 5003 + day * 7013 + agent_index * 3019) % 1000000) / 1000000.0
+                rain_hash = rand_uniform_xorshift(0, tick * 365 + day, agent_index, 200)
                 if rain_hash <= m1_ss:
                     day_prcp = m1_rr
                     m1_inum = m1_inum - 1.0
@@ -1000,7 +751,7 @@ def site_soil_step(
                 m1_inum = 0.0
         elif day < 90:
             if m2_inum > 0.5:
-                rain_hash = ((tick * 5003 + day * 7013 + agent_index * 3019) % 1000000) / 1000000.0
+                rain_hash = rand_uniform_xorshift(0, tick * 365 + day, agent_index, 200)
                 if rain_hash <= m2_ss:
                     day_prcp = m2_rr
                     m2_inum = m2_inum - 1.0
@@ -1009,7 +760,7 @@ def site_soil_step(
                 m2_inum = 0.0
         elif day < 120:
             if m3_inum > 0.5:
-                rain_hash = ((tick * 5003 + day * 7013 + agent_index * 3019) % 1000000) / 1000000.0
+                rain_hash = rand_uniform_xorshift(0, tick * 365 + day, agent_index, 200)
                 if rain_hash <= m3_ss:
                     day_prcp = m3_rr
                     m3_inum = m3_inum - 1.0
@@ -1018,7 +769,7 @@ def site_soil_step(
                 m3_inum = 0.0
         elif day < 151:
             if m4_inum > 0.5:
-                rain_hash = ((tick * 5003 + day * 7013 + agent_index * 3019) % 1000000) / 1000000.0
+                rain_hash = rand_uniform_xorshift(0, tick * 365 + day, agent_index, 200)
                 if rain_hash <= m4_ss:
                     day_prcp = m4_rr
                     m4_inum = m4_inum - 1.0
@@ -1027,7 +778,7 @@ def site_soil_step(
                 m4_inum = 0.0
         elif day < 181:
             if m5_inum > 0.5:
-                rain_hash = ((tick * 5003 + day * 7013 + agent_index * 3019) % 1000000) / 1000000.0
+                rain_hash = rand_uniform_xorshift(0, tick * 365 + day, agent_index, 200)
                 if rain_hash <= m5_ss:
                     day_prcp = m5_rr
                     m5_inum = m5_inum - 1.0
@@ -1036,7 +787,7 @@ def site_soil_step(
                 m5_inum = 0.0
         elif day < 212:
             if m6_inum > 0.5:
-                rain_hash = ((tick * 5003 + day * 7013 + agent_index * 3019) % 1000000) / 1000000.0
+                rain_hash = rand_uniform_xorshift(0, tick * 365 + day, agent_index, 200)
                 if rain_hash <= m6_ss:
                     day_prcp = m6_rr
                     m6_inum = m6_inum - 1.0
@@ -1045,7 +796,7 @@ def site_soil_step(
                 m6_inum = 0.0
         elif day < 243:
             if m7_inum > 0.5:
-                rain_hash = ((tick * 5003 + day * 7013 + agent_index * 3019) % 1000000) / 1000000.0
+                rain_hash = rand_uniform_xorshift(0, tick * 365 + day, agent_index, 200)
                 if rain_hash <= m7_ss:
                     day_prcp = m7_rr
                     m7_inum = m7_inum - 1.0
@@ -1054,7 +805,7 @@ def site_soil_step(
                 m7_inum = 0.0
         elif day < 273:
             if m8_inum > 0.5:
-                rain_hash = ((tick * 5003 + day * 7013 + agent_index * 3019) % 1000000) / 1000000.0
+                rain_hash = rand_uniform_xorshift(0, tick * 365 + day, agent_index, 200)
                 if rain_hash <= m8_ss:
                     day_prcp = m8_rr
                     m8_inum = m8_inum - 1.0
@@ -1063,7 +814,7 @@ def site_soil_step(
                 m8_inum = 0.0
         elif day < 304:
             if m9_inum > 0.5:
-                rain_hash = ((tick * 5003 + day * 7013 + agent_index * 3019) % 1000000) / 1000000.0
+                rain_hash = rand_uniform_xorshift(0, tick * 365 + day, agent_index, 200)
                 if rain_hash <= m9_ss:
                     day_prcp = m9_rr
                     m9_inum = m9_inum - 1.0
@@ -1072,7 +823,7 @@ def site_soil_step(
                 m9_inum = 0.0
         elif day < 334:
             if m10_inum > 0.5:
-                rain_hash = ((tick * 5003 + day * 7013 + agent_index * 3019) % 1000000) / 1000000.0
+                rain_hash = rand_uniform_xorshift(0, tick * 365 + day, agent_index, 200)
                 if rain_hash <= m10_ss:
                     day_prcp = m10_rr
                     m10_inum = m10_inum - 1.0
@@ -1081,7 +832,7 @@ def site_soil_step(
                 m10_inum = 0.0
         else:
             if m11_inum > 0.5:
-                rain_hash = ((tick * 5003 + day * 7013 + agent_index * 3019) % 1000000) / 1000000.0
+                rain_hash = rand_uniform_xorshift(0, tick * 365 + day, agent_index, 200)
                 if rain_hash <= m11_ss:
                     day_prcp = m11_rr
                     m11_inum = m11_inum - 1.0
@@ -1494,11 +1245,8 @@ def site_soil_step(
     if fire_prob > 0.15:
         fire_prob = 0.15  # Cap at 15% annual probability
 
-    # Stochastic fire check (multi-round hash PRNG, salt=10)
-    _h = (int(tick) * 374761393 + int(agent_index) * 668265263 + 10) % 2147483647
-    _h = (_h * 1103515245 + 12345) % 2147483648
-    _h = (_h * 214013 + 2531011) % 2147483648
-    fire_rand = float((_h // 65536) % 32768) / 32768.0
+    # Stochastic fire check
+    fire_rand = rand_uniform_philox(0, tick, agent_index, 10)
     fire_intensity = 0.0
     if fire_rand < fire_prob:
         # Fire occurs - intensity based on dry conditions
@@ -1511,11 +1259,8 @@ def site_soil_step(
     # ========== WIND PROBABILITY (GAPpy model.py:623-655) ==========
     wind_prob = params_tensor[agent_index][SITE_P_WIND_PROB]
 
-    # Stochastic wind check (multi-round hash PRNG, salt=11)
-    _h = (int(tick) * 374761393 + int(agent_index) * 668265263 + 11) % 2147483647
-    _h = (_h * 1103515245 + 12345) % 2147483648
-    _h = (_h * 214013 + 2531011) % 2147483648
-    wind_rand = float((_h // 65536) % 32768) / 32768.0
+    # Stochastic wind check
+    wind_rand = rand_uniform_philox(0, tick, agent_index, 11)
     wind_intensity = 0.0
     if wind_rand < wind_prob and fire_intensity < 0.01:
         # Wind occurs (only if no fire this year - fire takes precedence, GAPpy model.py:630)

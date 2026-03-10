@@ -33,6 +33,7 @@ Property scheme:
 
 import cupy as cp
 from cupyx import jit
+from sagesim.math_utils import rand_uniform_philox, rand_normal_bounded
 
 # === Breed IDs ===
 BREED_TREE = 0
@@ -391,11 +392,7 @@ def tree_actual_growth_step(
             if age_k == 2:
                 age_check = 11.51
             age_mort_prob = age_check / max_age
-            # Multi-round hash PRNG (salt=1 for age mortality)
-            _h = (int(tick) * 374761393 + int(agent_index) * 668265263 + 1) % 2147483647
-            _h = (_h * 1103515245 + 12345) % 2147483648
-            _h = (_h * 214013 + 2531011) % 2147483648
-            age_rand = float((_h // 65536) % 32768) / 32768.0
+            age_rand = rand_uniform_philox(0, tick, agent_index, 1)
             age_dies = 0
             if age_rand < age_mort_prob:
                 age_dies = 1
@@ -418,11 +415,7 @@ def tree_actual_growth_step(
                 stress_check = 0.40
             if stress_k == 4:
                 stress_check = 0.43
-            # Multi-round hash PRNG (salt=2 for stress mortality)
-            _h = (int(tick) * 374761393 + int(agent_index) * 668265263 + 2) % 2147483647
-            _h = (_h * 1103515245 + 12345) % 2147483648
-            _h = (_h * 214013 + 2531011) % 2147483648
-            stress_rand = float((_h // 65536) % 32768) / 32768.0
+            stress_rand = rand_uniform_philox(0, tick, agent_index, 2)
             growth_dies = 0
             if mort_marker > 0.5 and stress_rand < stress_check:
                 growth_dies = 1
@@ -520,11 +513,7 @@ def tree_actual_growth_step(
         # recruit_prob = nrenew / free_slots (from P6), so
         # expected activations = free_slots × recruit_prob = nrenew
         if recruit_prob > 0.0:
-            # Multi-round hash PRNG (salt=3 for slot priority)
-            _h = (int(tick) * 374761393 + int(agent_index) * 668265263 + int(recruit_rand_seed) * 97 + 3) % 2147483647
-            _h = (_h * 1103515245 + 12345) % 2147483648
-            _h = (_h * 214013 + 2531011) % 2147483648
-            slot_priority = float((_h // 65536) % 32768) / 32768.0
+            slot_priority = rand_uniform_philox(0, tick, agent_index, int(recruit_rand_seed) * 97 + 3)
 
             if slot_priority < recruit_prob:
                 # D3 fix: CDF-based species selection (matches GAPpy model.py:917-938).
@@ -545,11 +534,7 @@ def tree_actual_growth_step(
                 # (matches GAPpy: normalize probs, build CDF, draw uniform)
                 selected_neighbor_idx = -1
                 if total_weight > 1e-10:
-                    # Multi-round hash PRNG (salt=4 for species selection)
-                    _h = (int(tick) * 374761393 + int(agent_index) * 668265263 + int(recruit_rand_seed) * 97 + 4) % 2147483647
-                    _h = (_h * 1103515245 + 12345) % 2147483648
-                    _h = (_h * 214013 + 2531011) % 2147483648
-                    rand_target = float((_h // 65536) % 32768) / 32768.0 * total_weight
+                    rand_target = rand_uniform_philox(0, tick, agent_index, int(recruit_rand_seed) * 97 + 4) * total_weight
                     cum_weight = 0.0
                     last_template_idx = -1
                     i = 0
@@ -600,31 +585,9 @@ def tree_actual_growth_step(
                     params_tensor[agent_index][TREE_P_LEAFDIAM_A] = params_tensor[selected_neighbor_idx][TREE_P_LEAFDIAM_A]
                     params_tensor[agent_index][TREE_P_LEAFAREA_C] = params_tensor[selected_neighbor_idx][TREE_P_LEAFAREA_C]
 
-                    # Seedling diameter: approximate Normal(1.5, 1) clamped [0.5, 2.5]
-                    # Sum of 4 uniforms: mean=2, var=1/3; scale by sqrt(3)≈1.732 for N(0,1)
-                    # Multi-round hash PRNG (salts 5-8 for seedling diameter uniforms)
-                    _h = (int(tick) * 374761393 + int(agent_index) * 668265263 + int(recruit_rand_seed) * 97 + 5) % 2147483647
-                    _h = (_h * 1103515245 + 12345) % 2147483648
-                    _h = (_h * 214013 + 2531011) % 2147483648
-                    su1 = float((_h // 65536) % 32768) / 32768.0
-                    _h = (int(tick) * 374761393 + int(agent_index) * 668265263 + int(recruit_rand_seed) * 97 + 6) % 2147483647
-                    _h = (_h * 1103515245 + 12345) % 2147483648
-                    _h = (_h * 214013 + 2531011) % 2147483648
-                    su2 = float((_h // 65536) % 32768) / 32768.0
-                    _h = (int(tick) * 374761393 + int(agent_index) * 668265263 + int(recruit_rand_seed) * 97 + 7) % 2147483647
-                    _h = (_h * 1103515245 + 12345) % 2147483648
-                    _h = (_h * 214013 + 2531011) % 2147483648
-                    su3 = float((_h // 65536) % 32768) / 32768.0
-                    _h = (int(tick) * 374761393 + int(agent_index) * 668265263 + int(recruit_rand_seed) * 97 + 8) % 2147483647
-                    _h = (_h * 1103515245 + 12345) % 2147483648
-                    _h = (_h * 214013 + 2531011) % 2147483648
-                    su4 = float((_h // 65536) % 32768) / 32768.0
-                    z_approx = (su1 + su2 + su3 + su4 - 2.0) * 1.732
-                    seedling_diam = 1.5 + z_approx
-                    if seedling_diam < 0.5:
-                        seedling_diam = 0.5
-                    if seedling_diam > 2.5:
-                        seedling_diam = 2.5
+                    # Seedling diameter: N(1.5, 1) clamped [0.5, 2.5]
+                    # Box-Muller normal, z in [-1, 1] → diam in [0.5, 2.5]
+                    seedling_diam = 1.5 + rand_normal_bounded(0, tick, agent_index, int(recruit_rand_seed) * 97 + 5, -1.0, 1.0)
 
                     # Calculate initial height from seedling diameter (Forska equation)
                     max_ht = params_tensor[agent_index][TREE_P_MAX_HT]
