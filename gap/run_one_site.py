@@ -131,6 +131,13 @@ def main():
     model = GAPModel()
 
     if rank == 0:
+        print("Loading globals (species traits + site configs)...")
+
+    # Load all species traits and site configs into globals
+    model.load_globals(data_dir=args.data_dir, prefix=args.prefix)
+
+    if rank == 0:
+        print(f"  {model.get_species_count()} species loaded into globals")
         print("Initializing site from UVAFME CSV files...")
 
     t_init_start = time.time()

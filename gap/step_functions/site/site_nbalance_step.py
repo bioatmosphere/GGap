@@ -25,22 +25,21 @@ BREED_TREE = 0
 BREED_GAP = 1
 BREED_SITE = 2
 
-# === Site params (private, soil pools adjusted in-place) ===
+# === Site params[12] (private, soil pools adjusted in-place) ===
 SITE_P_A_C = 2
 SITE_P_A_N = 3
 SITE_P_BL_C = 4
 SITE_P_BL_N = 5
-SITE_P_ANNUAL_RUNOFF = 92
+SITE_P_ANNUAL_RUNOFF = 10
 
 # === Site states[16] (public) ===
 SITE_S_AVAIL_N = 2
-SITE_S_NET_N_INTO_A0 = 15   # Net N leached to base layer (tn N/ha)
+SITE_S_NET_N_INTO_A0 = 15
 
-# === Gap states[16] (for reading N consumed from Gap neighbors) ===
+# === Gap states (for reading N consumed from Gap neighbors) ===
 GAP_S_N_CONSUMED = 13
 
 # Unit conversion: kg (tree-level) -> tn/ha (soil pools)
-# = HEC_TO_M2 / plotsize / 1000 = 10000 / 500 / 1000
 UNIT_CONV = 0.02
 
 

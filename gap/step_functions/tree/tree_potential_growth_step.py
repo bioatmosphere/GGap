@@ -2,15 +2,12 @@
 Tree potential growth step function for GGap model (Priority 2).
 Phase A: computes environmental stress and potential growth for LIVING TREES only.
 
-The nutrient factor is applied later in tree_actual_growth_step (Priority 8) after
+The nutrient factor is applied later in tree_actual_growth_step (Priority 6) after
 the soil N cycle computes the same-tick n_supply_ratio.
-
-Templates are handled by tree_template_renewal_step (P5) after P4 syncs current-tick
-climate. Free slots are handled by tree_actual_growth_step (P7) after P6 computes
-num_to_recruit.
 
 Execution Flow:
     1. LIVING TREES (is_alive > 0.5):
+       - Read species_id from params, look up species traits from globals_data
        - Read climate from Gap (deg_days, dry_days, etc.)
        - Calculate light availability from neighbor heights
        - Calculate env stress: fc_degday * fc_drought * fc_light * fc_flood (NO fc_nutrient)
@@ -24,12 +21,14 @@ Execution Flow:
        - params[ENV_STRESS]: env stress (living only)
        - params[DIAM_MAX_CALC]: max diameter increment (living only)
        - params[FC_DEGDAY/DROUGHT/FLOOD/LIGHT_AVAIL]: individual factors (living only)
+       - params[FORSKA_SHADE]: light response at canopy base (living only)
        - states[N_DEMAND]: nitrogen demand from potential growth (living only, 0 for others)
 
 Property scheme:
-- params[42]: species traits (static) + physiology (dynamic) + intermediates + renewal + leaf_area + seedling_weight - private, no buffer
-- states[5]: n_demand output (for Gap to aggregate at P4) - public, no buffer
+- params[17]: species_id + mutable state + intermediates + renewal - private, no buffer
+- states[5]: n_demand output (for Gap to aggregate at P3) - public, no buffer
 - states_db[5]: structure (is_alive, diam, height, canopy_ht) + seedling_weight - public, double buffered
+- globals_data: species traits stored at SPECIES_BASE + species_id * 26 + trait_offset
 """
 
 import cupy as cp
@@ -40,53 +39,55 @@ BREED_TREE = 0
 BREED_GAP = 1
 BREED_SITE = 2
 
-# === Tree params[40] (private) ===
-# Species traits [0-21]:
+# === Tree params[17] (private) ===
 TREE_P_SPECIES_ID = 0
-TREE_P_MAX_AGE = 1
-TREE_P_MAX_DIAM = 2
-TREE_P_MAX_HT = 3
-TREE_P_ARFA_0 = 4
-TREE_P_G = 5
-TREE_P_SHADE_TOL = 6
-TREE_P_DEG_DAY_MIN = 7
-TREE_P_DEG_DAY_OPT = 8
-TREE_P_DEG_DAY_MAX = 9
-TREE_P_INVADER = 10
-TREE_P_SEED = 11
-TREE_P_SPROUT = 12
-TREE_P_WOOD_BULK_DENS = 13
-TREE_P_LOWNUTR_TOL = 14
-TREE_P_FLOOD_TOL = 15
-TREE_P_DROUGHT_TOL = 16
-TREE_P_EVERGREEN = 17
-TREE_P_FIRE_TOL = 18
-TREE_P_ROOTDEPTH = 19
-TREE_P_STRESS_TOL = 20
-TREE_P_AGE_TOL = 21
-# Physiology [22-31]:
-TREE_P_AGE = 22
-TREE_P_BIOMC = 23
-TREE_P_BIOMN = 24
-TREE_P_LEAF_BM = 25
-TREE_P_X = 26
-TREE_P_Y = 27
-TREE_P_LIGHT_AVAIL = 28
-TREE_P_FC_DEGDAY = 29
-TREE_P_FC_DROUGHT = 30
-TREE_P_FC_FLOOD = 31
-# Intermediates [32-33] (P3 writes, P5 reads, same tick via no_double_buffer):
-TREE_P_ENV_STRESS = 32
-TREE_P_DIAM_MAX_CALC = 33
-# Renewal params [34-37] (template-only):
-TREE_P_SEED_SURV = 34
-TREE_P_SEEDLING_LG = 35
-TREE_P_SEEDBANK = 36
-TREE_P_SEEDLING = 37
-# Leaf area params [38-39]:
-TREE_P_LEAFDIAM_A = 38
-TREE_P_LEAFAREA_C = 39
-TREE_P_FORSKA_SHADE = 40  # Light response at canopy base (P3->P7 for self-pruning)
+TREE_P_AGE = 1
+TREE_P_BIOMC = 2
+TREE_P_BIOMN = 3
+TREE_P_LEAF_BM = 4
+TREE_P_X = 5
+TREE_P_Y = 6
+TREE_P_LIGHT_AVAIL = 7
+TREE_P_FC_DEGDAY = 8
+TREE_P_FC_DROUGHT = 9
+TREE_P_FC_FLOOD = 10
+TREE_P_ENV_STRESS = 11
+TREE_P_DIAM_MAX_CALC = 12
+TREE_P_FORSKA_SHADE = 13
+TREE_P_SEEDBANK = 14
+TREE_P_SEEDLING = 15
+TREE_P_SEEDLING_WEIGHT = 16
+
+# === Species traits in globals_data ===
+SPECIES_BASE = 2
+NUM_SPECIES_TRAITS = 26
+
+# Trait offsets within each species block
+TRAIT_MAX_AGE = 0
+TRAIT_MAX_DIAM = 1
+TRAIT_MAX_HT = 2
+TRAIT_ARFA_0 = 3
+TRAIT_G = 4
+TRAIT_SHADE_TOL = 5
+TRAIT_DEG_DAY_MIN = 6
+TRAIT_DEG_DAY_OPT = 7
+TRAIT_DEG_DAY_MAX = 8
+TRAIT_INVADER = 9
+TRAIT_SEED = 10
+TRAIT_SPROUT = 11
+TRAIT_WOOD_BULK_DENS = 12
+TRAIT_LOWNUTR_TOL = 13
+TRAIT_FLOOD_TOL = 14
+TRAIT_DROUGHT_TOL = 15
+TRAIT_EVERGREEN = 16
+TRAIT_FIRE_TOL = 17
+TRAIT_ROOTDEPTH = 18
+TRAIT_STRESS_TOL = 19
+TRAIT_AGE_TOL = 20
+TRAIT_SEED_SURV = 21
+TRAIT_SEEDLING_LG = 22
+TRAIT_LEAFDIAM_A = 23
+TRAIT_LEAFAREA_C = 24
 
 # === Tree states[5] (public, no buffer) ===
 TREE_S_LITTER_C = 0       # Above-ground litter carbon
@@ -140,10 +141,11 @@ def tree_potential_growth_step(
     states_db_tensor,
 ):
     """
-    Phase A (P2): Recruitment + environmental stress + potential growth + N demand.
+    Phase A (P2): Environmental stress + potential growth + N demand.
 
     Computes env_stress = fc_degday * fc_drought * fc_light * fc_flood (no nutrient).
     Stores env_stress and diam_max in params for P5 to consume same-tick.
+    Species traits are read from globals_data instead of params_tensor.
     """
     # ===== GET CURRENT STATE =====
     is_alive = states_db_tensor[agent_index][TREE_DB_IS_ALIVE]
@@ -153,30 +155,33 @@ def tree_potential_growth_step(
 
     # ===== POTENTIAL GROWTH: Process living trees only =====
     if is_alive > 0.5:
-        # Get species parameters
-        max_diam = params_tensor[agent_index][TREE_P_MAX_DIAM]
-        max_ht = params_tensor[agent_index][TREE_P_MAX_HT]
-        arfa_0 = params_tensor[agent_index][TREE_P_ARFA_0]
-        g = params_tensor[agent_index][TREE_P_G]
-        shade_tol = int(params_tensor[agent_index][TREE_P_SHADE_TOL])
-        deg_day_min = params_tensor[agent_index][TREE_P_DEG_DAY_MIN]
-        deg_day_opt = params_tensor[agent_index][TREE_P_DEG_DAY_OPT]
-        deg_day_max = params_tensor[agent_index][TREE_P_DEG_DAY_MAX]
-        wood_bulk_dens = params_tensor[agent_index][TREE_P_WOOD_BULK_DENS]
-        flood_tol = int(params_tensor[agent_index][TREE_P_FLOOD_TOL])
-        drought_tol = int(params_tensor[agent_index][TREE_P_DROUGHT_TOL])
-        evergreen = int(params_tensor[agent_index][TREE_P_EVERGREEN])
+        # Get species ID from params, then look up traits from globals_data
+        species_id = params_tensor[agent_index][TREE_P_SPECIES_ID]
+        sp_base = SPECIES_BASE + int(species_id) * NUM_SPECIES_TRAITS
 
-        rootdepth = params_tensor[agent_index][TREE_P_ROOTDEPTH]
-        leafdiam_a = params_tensor[agent_index][TREE_P_LEAFDIAM_A]
-        leafarea_c = params_tensor[agent_index][TREE_P_LEAFAREA_C]
+        # Read species traits from globals_data
+        max_diam = globals_data[sp_base + TRAIT_MAX_DIAM]
+        max_ht = globals_data[sp_base + TRAIT_MAX_HT]
+        arfa_0 = globals_data[sp_base + TRAIT_ARFA_0]
+        g = globals_data[sp_base + TRAIT_G]
+        shade_tol = int(globals_data[sp_base + TRAIT_SHADE_TOL])
+        deg_day_min = globals_data[sp_base + TRAIT_DEG_DAY_MIN]
+        deg_day_opt = globals_data[sp_base + TRAIT_DEG_DAY_OPT]
+        deg_day_max = globals_data[sp_base + TRAIT_DEG_DAY_MAX]
+        wood_bulk_dens = globals_data[sp_base + TRAIT_WOOD_BULK_DENS]
+        flood_tol = int(globals_data[sp_base + TRAIT_FLOOD_TOL])
+        drought_tol = int(globals_data[sp_base + TRAIT_DROUGHT_TOL])
+        evergreen = int(globals_data[sp_base + TRAIT_EVERGREEN])
+        rootdepth = globals_data[sp_base + TRAIT_ROOTDEPTH]
+        leafdiam_a = globals_data[sp_base + TRAIT_LEAFDIAM_A]
+        leafarea_c = globals_data[sp_base + TRAIT_LEAFAREA_C]
 
         # Get current tree structure from states_db
         diam = states_db_tensor[agent_index][TREE_DB_DIAM]
         height = states_db_tensor[agent_index][TREE_DB_HEIGHT]
         canopy_ht = states_db_tensor[agent_index][TREE_DB_CANOPY_HT]
 
-        # Get internal physiology from params
+        # Get internal physiology from params (mutable state)
         biomC = params_tensor[agent_index][TREE_P_BIOMC]
         leaf_bm = params_tensor[agent_index][TREE_P_LEAF_BM]
 
@@ -327,7 +332,7 @@ def tree_potential_growth_step(
             fc_light = 1.0
 
         # Forska shade: light response at canopy BASE (GAPpy model.py:428-431)
-        # Used for self-pruning check in P7 (GAPpy third tree loop, model.py:564-565)
+        # Used for self-pruning check in P6 (GAPpy third tree loop, model.py:564-565)
         light_at_base = 1.0
         if evergreen > 0:
             light_at_base = cp.exp(XT * cum_con_lai_base / PLOTSIZE)
@@ -430,7 +435,7 @@ def tree_potential_growth_step(
 
         n_demand = stem_n_demand + leaf_n_demand
 
-        # ===== WRITE INTERMEDIATES TO params (for P4 to read same-tick) =====
+        # ===== WRITE INTERMEDIATES TO params (for P5 to read same-tick) =====
         params_tensor[agent_index][TREE_P_LIGHT_AVAIL] = light_avail
         params_tensor[agent_index][TREE_P_FC_DEGDAY] = fc_degday
         params_tensor[agent_index][TREE_P_FC_DROUGHT] = fc_drought
@@ -439,6 +444,6 @@ def tree_potential_growth_step(
         params_tensor[agent_index][TREE_P_DIAM_MAX_CALC] = diam_max
         params_tensor[agent_index][TREE_P_FORSKA_SHADE] = forska_shade
 
-    # ===== WRITE N DEMAND TO states (for Gap to aggregate at P4) =====
+    # ===== WRITE N DEMAND TO states (for Gap to aggregate at P3) =====
     # Templates and free slots: n_demand stays 0.0 (initialized above)
     states_tensor[agent_index][TREE_S_N_DEMAND] = n_demand

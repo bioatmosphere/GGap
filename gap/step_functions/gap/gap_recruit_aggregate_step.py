@@ -30,8 +30,8 @@ GAP_S_NUM_TO_RECRUIT = 6
 GAP_S_RECRUIT_RAND_SEED = 7
 GAP_S_RECOVERY_YEARS = 166     # Fire/wind recovery countdown (P2 sets, P6 decrements)
 
-# === Tree params (for reading template regrowth) ===
-TREE_P_ENV_STRESS = 32  # Templates store regrowth here (written at P5, same tick)
+# === Tree params[17] (for reading template regrowth) ===
+TREE_P_ENV_STRESS = 11  # Templates store regrowth here (written at P5, same tick)
 
 # === Constants ===
 PLOTSIZE = 500.0  # GAPpy parameters.py:59 — plot area m² (also max trees per plot)

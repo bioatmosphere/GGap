@@ -23,7 +23,8 @@ Execution Flow:
     9. Write seedling_weight to params (P7 free slots read same tick)
 
 Property scheme:
-- params[42]: reads species traits, writes seedbank/seedling/regrowth/weight
+- params[17]: reads species_id, mutable seedbank/seedling; writes seedbank/seedling/regrowth/weight
+- species traits read from globals_data[SPECIES_BASE + species_id * 26 + trait]
 - states[5]: not used by templates
 - states_db[5]: reads is_alive, reads old seedling_weight for decrement
 """
@@ -36,26 +37,31 @@ BREED_TREE = 0
 BREED_GAP = 1
 BREED_SITE = 2
 
-# === Tree params[42] (private, no buffer) ===
+# === Tree params[17] (private, no buffer) ===
 TREE_P_SPECIES_ID = 0
-TREE_P_SHADE_TOL = 6
-TREE_P_DEG_DAY_MIN = 7
-TREE_P_DEG_DAY_OPT = 8
-TREE_P_DEG_DAY_MAX = 9
-TREE_P_INVADER = 10
-TREE_P_SEED = 11
-TREE_P_SPROUT = 12
-TREE_P_LOWNUTR_TOL = 14
-TREE_P_FLOOD_TOL = 15
-TREE_P_DROUGHT_TOL = 16
-TREE_P_EVERGREEN = 17
-TREE_P_FIRE_TOL = 18
-TREE_P_ENV_STRESS = 32       # Regrowth output (P6 reads same tick for growmax)
-TREE_P_SEED_SURV = 34
-TREE_P_SEEDLING_LG = 35
-TREE_P_SEEDBANK = 36
-TREE_P_SEEDLING = 37
-TREE_P_SEEDLING_WEIGHT = 41  # Non-buffered seedling weight (P7 free slots read same tick)
+TREE_P_ENV_STRESS = 11          # Regrowth output (P6 reads same tick for growmax)
+TREE_P_SEEDBANK = 14
+TREE_P_SEEDLING = 15
+TREE_P_SEEDLING_WEIGHT = 16     # Non-buffered seedling weight (P7 free slots read same tick)
+
+# === Species traits in globals_data ===
+SPECIES_BASE = 2
+NUM_SPECIES_TRAITS = 26
+# Trait offsets (globals_data[SPECIES_BASE + species_id * 26 + offset])
+TRAIT_SHADE_TOL = 5
+TRAIT_DEG_DAY_MIN = 6
+TRAIT_DEG_DAY_OPT = 7
+TRAIT_DEG_DAY_MAX = 8
+TRAIT_INVADER = 9
+TRAIT_SEED = 10
+TRAIT_SPROUT = 11
+TRAIT_LOWNUTR_TOL = 13
+TRAIT_FLOOD_TOL = 14
+TRAIT_DROUGHT_TOL = 15
+TRAIT_EVERGREEN = 16
+TRAIT_FIRE_TOL = 17
+TRAIT_SEED_SURV = 21
+TRAIT_SEEDLING_LG = 22
 
 # === Tree states_db[5] (public, double buffered) ===
 TREE_DB_IS_ALIVE = 0
@@ -148,24 +154,28 @@ def tree_template_renewal_step(
                 cum_con_lai = states_tensor[neighbor_idx][GAP_S_CUM_CON_LAI_BASE + 1]
             i = i + 1
 
-        # Read species params
-        deg_day_min = params_tensor[agent_index][TREE_P_DEG_DAY_MIN]
-        deg_day_opt = params_tensor[agent_index][TREE_P_DEG_DAY_OPT]
-        deg_day_max = params_tensor[agent_index][TREE_P_DEG_DAY_MAX]
-        shade_tol = int(params_tensor[agent_index][TREE_P_SHADE_TOL])
-        drought_tol = int(params_tensor[agent_index][TREE_P_DROUGHT_TOL])
-        flood_tol = int(params_tensor[agent_index][TREE_P_FLOOD_TOL])
-        lownutr_tol = int(params_tensor[agent_index][TREE_P_LOWNUTR_TOL])
-        evergreen = int(params_tensor[agent_index][TREE_P_EVERGREEN])
+        # Read species_id from params, then look up traits from globals_data
         species_id = params_tensor[agent_index][TREE_P_SPECIES_ID]
-        invader_val = params_tensor[agent_index][TREE_P_INVADER]
-        seed_val = params_tensor[agent_index][TREE_P_SEED]
-        sprout_val = params_tensor[agent_index][TREE_P_SPROUT]
-        seed_surv = params_tensor[agent_index][TREE_P_SEED_SURV]
-        seedling_lg = params_tensor[agent_index][TREE_P_SEEDLING_LG]
+        sp_base = SPECIES_BASE + int(species_id) * NUM_SPECIES_TRAITS
+
+        shade_tol = int(globals_data[sp_base + TRAIT_SHADE_TOL])
+        deg_day_min = globals_data[sp_base + TRAIT_DEG_DAY_MIN]
+        deg_day_opt = globals_data[sp_base + TRAIT_DEG_DAY_OPT]
+        deg_day_max = globals_data[sp_base + TRAIT_DEG_DAY_MAX]
+        invader_val = globals_data[sp_base + TRAIT_INVADER]
+        seed_val = globals_data[sp_base + TRAIT_SEED]
+        sprout_val = globals_data[sp_base + TRAIT_SPROUT]
+        lownutr_tol = int(globals_data[sp_base + TRAIT_LOWNUTR_TOL])
+        flood_tol = int(globals_data[sp_base + TRAIT_FLOOD_TOL])
+        drought_tol = int(globals_data[sp_base + TRAIT_DROUGHT_TOL])
+        evergreen = int(globals_data[sp_base + TRAIT_EVERGREEN])
+        fire_tol = int(globals_data[sp_base + TRAIT_FIRE_TOL])
+        seed_surv = globals_data[sp_base + TRAIT_SEED_SURV]
+        seedling_lg = globals_data[sp_base + TRAIT_SEEDLING_LG]
+
+        # Read mutable renewal state from params
         seedbank = params_tensor[agent_index][TREE_P_SEEDBANK]
         seedling = params_tensor[agent_index][TREE_P_SEEDLING]
-        fire_tol = int(params_tensor[agent_index][TREE_P_FIRE_TOL])
 
         # --- 2. Compute species-specific environmental response ---
 

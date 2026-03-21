@@ -54,9 +54,12 @@ Soil Layers:
     Base:         Stable organic matter, slow turnover
 
 Property scheme (3 properties):
-- params[116]: soil pools + monthly climate + site properties + fire/wind/soil + climate_std - private
+- params[12]: soil pools (A0/A/BL C/N/W) + LAI_W0 + ANNUAL_RUNOFF + SITE_ID - private
 - states[16]: climate + avail_n + flood_days + fire/wind + stochastic climate + soil outputs - public
 - states_db[1]: placeholder (public, double buffered but unused)
+
+Site config (climate, std devs, soil properties) read from globals_data at:
+  globals_data[SITE_CONFIG_BASE + site_id * NUM_SITE_CONFIGS + offset]
 """
 
 import cupy as cp
@@ -68,7 +71,7 @@ BREED_TREE = 0
 BREED_GAP = 1
 BREED_SITE = 2
 
-# === Site params[116] (private) ===
+# === Site params[12] (private) ===
 # Soil pools [0-8]:
 SITE_P_A0_C = 0
 SITE_P_A0_N = 1
@@ -79,29 +82,35 @@ SITE_P_BL_N = 5
 SITE_P_A0_W = 6
 SITE_P_A_W = 7
 SITE_P_BL_W = 8
-# Monthly climate [9-44]:
-SITE_P_TMIN_BASE = 9   # tmin[0..11] at indices 9-20
-SITE_P_TMAX_BASE = 21  # tmax[0..11] at indices 21-32
-SITE_P_PRCP_BASE = 33  # prcp[0..11] at indices 33-44
-# Additional soil/site params [45-52]:
-SITE_P_FIELD_CAP = 45
-SITE_P_PERM_WP = 46
-SITE_P_SLOPE = 47
-SITE_P_SIGMA = 48
-SITE_P_LAI = 49
-SITE_P_LAI_W0 = 50
-SITE_P_LATITUDE = 51
-SITE_P_RAIN_N = 52
-# Fire/wind/soil [53-55]:
-SITE_P_FIRE_PROB = 53
-SITE_P_WIND_PROB = 54
-SITE_P_BASE_H = 55
-# Climate standard deviations [56-91]:
-SITE_P_TMIN_STD_BASE = 56   # tmin_std[0..11] at 56-67
-SITE_P_TMAX_STD_BASE = 68   # tmax_std[0..11] at 68-79
-SITE_P_PRCP_STD_BASE = 80   # prcp_std[0..11] at 80-91
-# N balance state [92]:
-SITE_P_ANNUAL_RUNOFF = 92   # Annual accumulated runoff (for N balance at P9 same tick)
+# Additional soil state [9-11]:
+SITE_P_LAI_W0 = 9
+SITE_P_ANNUAL_RUNOFF = 10
+SITE_P_SITE_ID = 11
+
+# === Globals layout for site config ===
+SITE_CONFIG_BASE = 1302
+NUM_SITE_CONFIGS = 107
+
+# Config offsets within each site's config block
+CFG_TMIN_BASE = 0        # 12 months: offsets 0-11
+CFG_TMAX_BASE = 12       # 12 months: offsets 12-23
+CFG_PRCP_BASE = 24       # 12 months: offsets 24-35
+CFG_FIELD_CAP = 36
+CFG_PERM_WP = 37
+CFG_SLOPE = 38
+CFG_SIGMA = 39
+CFG_LAI = 40
+CFG_LATITUDE = 41
+CFG_LONGITUDE = 42
+CFG_RAIN_N = 43
+CFG_FIRE_PROB = 44
+CFG_WIND_PROB = 45
+CFG_BASE_H = 46
+CFG_TMIN_STD_BASE = 47   # 12 months: offsets 47-58
+CFG_TMAX_STD_BASE = 59   # 12 months: offsets 59-70
+CFG_PRCP_STD_BASE = 71   # 12 months: offsets 71-82
+CFG_TMP_LAPSE_BASE = 83  # 12 months: offsets 83-94
+CFG_PRCP_LAPSE_BASE = 95 # 12 months: offsets 95-106
 
 # === Site states[16] (public) ===
 SITE_S_DEG_DAYS = 0
@@ -145,7 +154,7 @@ LAI_MAX = 0.15
 # Atmospheric N in precipitation (tn N per cm precip)
 PRCP_N = 0.00002
 
-# Unit conversion: kg (tree-level) → tn/ha (soil pools)
+# Unit conversion: kg (tree-level) -> tn/ha (soil pools)
 # = HEC_TO_M2 / plotsize / 1000 = 10000 / 500 / 1000
 # Divide by gap_count at runtime (= /numplots equivalent)
 UNIT_CONV = 0.02
@@ -168,7 +177,7 @@ PI = 3.14159265359
 DEG2RAD = 0.017453
 
 # Hargreaves PET constants (GAPpy constants.py)
-H_B = 0.017214        # ≈ 2*PI/365
+H_B = 0.017214        # ~ 2*PI/365
 H_AS = 0.409           # Max solar declination (radians)
 H_AC = 0.033           # Eccentricity correction amplitude
 H_PHASE = -1.39        # Phase offset for declination
@@ -205,6 +214,11 @@ def site_soil_step(
     Reads from Gap neighbors:
     - states: litter_accum_c, litter_accum_n
 
+    Reads site config from globals_data:
+    - Monthly climate (tmin, tmax, prcp), std devs
+    - Soil properties (field_cap, perm_wp, slope, sigma, lai, latitude)
+    - Fire/wind probabilities, base_h
+
     Writes to own:
     - params: soil pools (A0/A/BL carbon, nitrogen, water)
     - states: avail_n (for Gap to read)
@@ -235,13 +249,13 @@ def site_soil_step(
 
         i = i + 1
 
-    # ========== CONVERT TREE KG → SOIL TN/HA (GAPpy uconvert) ==========
+    # ========== CONVERT TREE KG -> SOIL TN/HA (GAPpy uconvert) ==========
     if gap_count > 0.5:
         uconv = UNIT_CONV / gap_count
         total_litter_c = total_litter_c * uconv
         total_litter_n = total_litter_n * uconv
 
-    # ========== READ CURRENT SOIL STATE ==========
+    # ========== READ CURRENT SOIL STATE (from params_tensor) ==========
     ao_c0 = params_tensor[agent_index][SITE_P_A0_C]
     ao_n0 = params_tensor[agent_index][SITE_P_A0_N]
     sa_c0 = params_tensor[agent_index][SITE_P_A_C]
@@ -251,21 +265,26 @@ def site_soil_step(
     ao_w0 = params_tensor[agent_index][SITE_P_A0_W]
     sa_w0 = params_tensor[agent_index][SITE_P_A_W]
     sb_w0 = params_tensor[agent_index][SITE_P_BL_W]
-
-    # Read site properties
-    sa_fc = params_tensor[agent_index][SITE_P_FIELD_CAP]
-    sa_pwp = params_tensor[agent_index][SITE_P_PERM_WP]
-    slope = params_tensor[agent_index][SITE_P_SLOPE]
-    sigma = params_tensor[agent_index][SITE_P_SIGMA]
     lai_w0 = params_tensor[agent_index][SITE_P_LAI_W0]
-    latitude = params_tensor[agent_index][SITE_P_LATITUDE]
 
-    # N balance moved to site_nbalance_step (P9) — runs AFTER P7 growth,
+    # ========== READ SITE CONFIG FROM GLOBALS ==========
+    globals_data = globals
+    site_id = int(params_tensor[agent_index][SITE_P_SITE_ID])
+    cfg_base = SITE_CONFIG_BASE + site_id * NUM_SITE_CONFIGS
+
+    # Read site properties from globals
+    sa_fc = globals_data[cfg_base + CFG_FIELD_CAP]
+    sa_pwp = globals_data[cfg_base + CFG_PERM_WP]
+    slope = globals_data[cfg_base + CFG_SLOPE]
+    sigma = globals_data[cfg_base + CFG_SIGMA]
+    latitude = globals_data[cfg_base + CFG_LATITUDE]
+
+    # N balance moved to site_nbalance_step (P9) -- runs AFTER P7 growth,
     # so it uses same-tick avail_N and n_consumed (no 1-tick delay).
 
     # ========== DYNAMIC LAI FROM TREE CANOPY (GAPpy canopy():282-362) ==========
     # Average per-gap normalized LAI across gaps (= /numplots equivalent)
-    lai = params_tensor[agent_index][SITE_P_LAI]  # Fallback: initial CSV value
+    lai = globals_data[cfg_base + CFG_LAI]  # Fallback: initial CSV value from globals
     if gap_count > 0.5:
         dynamic_lai = total_gap_lai / gap_count
         if dynamic_lai > 0.01:
@@ -279,85 +298,85 @@ def site_soil_step(
     if lai < 1.0:
         lai = 1.0
 
-    # ========== READ MONTHLY CLIMATE STD DEVS ==========
-    tmin_std_0 = params_tensor[agent_index][SITE_P_TMIN_STD_BASE + 0]
-    tmin_std_1 = params_tensor[agent_index][SITE_P_TMIN_STD_BASE + 1]
-    tmin_std_2 = params_tensor[agent_index][SITE_P_TMIN_STD_BASE + 2]
-    tmin_std_3 = params_tensor[agent_index][SITE_P_TMIN_STD_BASE + 3]
-    tmin_std_4 = params_tensor[agent_index][SITE_P_TMIN_STD_BASE + 4]
-    tmin_std_5 = params_tensor[agent_index][SITE_P_TMIN_STD_BASE + 5]
-    tmin_std_6 = params_tensor[agent_index][SITE_P_TMIN_STD_BASE + 6]
-    tmin_std_7 = params_tensor[agent_index][SITE_P_TMIN_STD_BASE + 7]
-    tmin_std_8 = params_tensor[agent_index][SITE_P_TMIN_STD_BASE + 8]
-    tmin_std_9 = params_tensor[agent_index][SITE_P_TMIN_STD_BASE + 9]
-    tmin_std_10 = params_tensor[agent_index][SITE_P_TMIN_STD_BASE + 10]
-    tmin_std_11 = params_tensor[agent_index][SITE_P_TMIN_STD_BASE + 11]
+    # ========== READ MONTHLY CLIMATE STD DEVS (from globals) ==========
+    tmin_std_0 = globals_data[cfg_base + CFG_TMIN_STD_BASE + 0]
+    tmin_std_1 = globals_data[cfg_base + CFG_TMIN_STD_BASE + 1]
+    tmin_std_2 = globals_data[cfg_base + CFG_TMIN_STD_BASE + 2]
+    tmin_std_3 = globals_data[cfg_base + CFG_TMIN_STD_BASE + 3]
+    tmin_std_4 = globals_data[cfg_base + CFG_TMIN_STD_BASE + 4]
+    tmin_std_5 = globals_data[cfg_base + CFG_TMIN_STD_BASE + 5]
+    tmin_std_6 = globals_data[cfg_base + CFG_TMIN_STD_BASE + 6]
+    tmin_std_7 = globals_data[cfg_base + CFG_TMIN_STD_BASE + 7]
+    tmin_std_8 = globals_data[cfg_base + CFG_TMIN_STD_BASE + 8]
+    tmin_std_9 = globals_data[cfg_base + CFG_TMIN_STD_BASE + 9]
+    tmin_std_10 = globals_data[cfg_base + CFG_TMIN_STD_BASE + 10]
+    tmin_std_11 = globals_data[cfg_base + CFG_TMIN_STD_BASE + 11]
 
-    tmax_std_0 = params_tensor[agent_index][SITE_P_TMAX_STD_BASE + 0]
-    tmax_std_1 = params_tensor[agent_index][SITE_P_TMAX_STD_BASE + 1]
-    tmax_std_2 = params_tensor[agent_index][SITE_P_TMAX_STD_BASE + 2]
-    tmax_std_3 = params_tensor[agent_index][SITE_P_TMAX_STD_BASE + 3]
-    tmax_std_4 = params_tensor[agent_index][SITE_P_TMAX_STD_BASE + 4]
-    tmax_std_5 = params_tensor[agent_index][SITE_P_TMAX_STD_BASE + 5]
-    tmax_std_6 = params_tensor[agent_index][SITE_P_TMAX_STD_BASE + 6]
-    tmax_std_7 = params_tensor[agent_index][SITE_P_TMAX_STD_BASE + 7]
-    tmax_std_8 = params_tensor[agent_index][SITE_P_TMAX_STD_BASE + 8]
-    tmax_std_9 = params_tensor[agent_index][SITE_P_TMAX_STD_BASE + 9]
-    tmax_std_10 = params_tensor[agent_index][SITE_P_TMAX_STD_BASE + 10]
-    tmax_std_11 = params_tensor[agent_index][SITE_P_TMAX_STD_BASE + 11]
+    tmax_std_0 = globals_data[cfg_base + CFG_TMAX_STD_BASE + 0]
+    tmax_std_1 = globals_data[cfg_base + CFG_TMAX_STD_BASE + 1]
+    tmax_std_2 = globals_data[cfg_base + CFG_TMAX_STD_BASE + 2]
+    tmax_std_3 = globals_data[cfg_base + CFG_TMAX_STD_BASE + 3]
+    tmax_std_4 = globals_data[cfg_base + CFG_TMAX_STD_BASE + 4]
+    tmax_std_5 = globals_data[cfg_base + CFG_TMAX_STD_BASE + 5]
+    tmax_std_6 = globals_data[cfg_base + CFG_TMAX_STD_BASE + 6]
+    tmax_std_7 = globals_data[cfg_base + CFG_TMAX_STD_BASE + 7]
+    tmax_std_8 = globals_data[cfg_base + CFG_TMAX_STD_BASE + 8]
+    tmax_std_9 = globals_data[cfg_base + CFG_TMAX_STD_BASE + 9]
+    tmax_std_10 = globals_data[cfg_base + CFG_TMAX_STD_BASE + 10]
+    tmax_std_11 = globals_data[cfg_base + CFG_TMAX_STD_BASE + 11]
 
-    prcp_std_0 = params_tensor[agent_index][SITE_P_PRCP_STD_BASE + 0]
-    prcp_std_1 = params_tensor[agent_index][SITE_P_PRCP_STD_BASE + 1]
-    prcp_std_2 = params_tensor[agent_index][SITE_P_PRCP_STD_BASE + 2]
-    prcp_std_3 = params_tensor[agent_index][SITE_P_PRCP_STD_BASE + 3]
-    prcp_std_4 = params_tensor[agent_index][SITE_P_PRCP_STD_BASE + 4]
-    prcp_std_5 = params_tensor[agent_index][SITE_P_PRCP_STD_BASE + 5]
-    prcp_std_6 = params_tensor[agent_index][SITE_P_PRCP_STD_BASE + 6]
-    prcp_std_7 = params_tensor[agent_index][SITE_P_PRCP_STD_BASE + 7]
-    prcp_std_8 = params_tensor[agent_index][SITE_P_PRCP_STD_BASE + 8]
-    prcp_std_9 = params_tensor[agent_index][SITE_P_PRCP_STD_BASE + 9]
-    prcp_std_10 = params_tensor[agent_index][SITE_P_PRCP_STD_BASE + 10]
-    prcp_std_11 = params_tensor[agent_index][SITE_P_PRCP_STD_BASE + 11]
+    prcp_std_0 = globals_data[cfg_base + CFG_PRCP_STD_BASE + 0]
+    prcp_std_1 = globals_data[cfg_base + CFG_PRCP_STD_BASE + 1]
+    prcp_std_2 = globals_data[cfg_base + CFG_PRCP_STD_BASE + 2]
+    prcp_std_3 = globals_data[cfg_base + CFG_PRCP_STD_BASE + 3]
+    prcp_std_4 = globals_data[cfg_base + CFG_PRCP_STD_BASE + 4]
+    prcp_std_5 = globals_data[cfg_base + CFG_PRCP_STD_BASE + 5]
+    prcp_std_6 = globals_data[cfg_base + CFG_PRCP_STD_BASE + 6]
+    prcp_std_7 = globals_data[cfg_base + CFG_PRCP_STD_BASE + 7]
+    prcp_std_8 = globals_data[cfg_base + CFG_PRCP_STD_BASE + 8]
+    prcp_std_9 = globals_data[cfg_base + CFG_PRCP_STD_BASE + 9]
+    prcp_std_10 = globals_data[cfg_base + CFG_PRCP_STD_BASE + 10]
+    prcp_std_11 = globals_data[cfg_base + CFG_PRCP_STD_BASE + 11]
 
-    # ========== READ MONTHLY CLIMATE ==========
-    tmin_0 = params_tensor[agent_index][SITE_P_TMIN_BASE + 0]
-    tmin_1 = params_tensor[agent_index][SITE_P_TMIN_BASE + 1]
-    tmin_2 = params_tensor[agent_index][SITE_P_TMIN_BASE + 2]
-    tmin_3 = params_tensor[agent_index][SITE_P_TMIN_BASE + 3]
-    tmin_4 = params_tensor[agent_index][SITE_P_TMIN_BASE + 4]
-    tmin_5 = params_tensor[agent_index][SITE_P_TMIN_BASE + 5]
-    tmin_6 = params_tensor[agent_index][SITE_P_TMIN_BASE + 6]
-    tmin_7 = params_tensor[agent_index][SITE_P_TMIN_BASE + 7]
-    tmin_8 = params_tensor[agent_index][SITE_P_TMIN_BASE + 8]
-    tmin_9 = params_tensor[agent_index][SITE_P_TMIN_BASE + 9]
-    tmin_10 = params_tensor[agent_index][SITE_P_TMIN_BASE + 10]
-    tmin_11 = params_tensor[agent_index][SITE_P_TMIN_BASE + 11]
+    # ========== READ MONTHLY CLIMATE (from globals) ==========
+    tmin_0 = globals_data[cfg_base + CFG_TMIN_BASE + 0]
+    tmin_1 = globals_data[cfg_base + CFG_TMIN_BASE + 1]
+    tmin_2 = globals_data[cfg_base + CFG_TMIN_BASE + 2]
+    tmin_3 = globals_data[cfg_base + CFG_TMIN_BASE + 3]
+    tmin_4 = globals_data[cfg_base + CFG_TMIN_BASE + 4]
+    tmin_5 = globals_data[cfg_base + CFG_TMIN_BASE + 5]
+    tmin_6 = globals_data[cfg_base + CFG_TMIN_BASE + 6]
+    tmin_7 = globals_data[cfg_base + CFG_TMIN_BASE + 7]
+    tmin_8 = globals_data[cfg_base + CFG_TMIN_BASE + 8]
+    tmin_9 = globals_data[cfg_base + CFG_TMIN_BASE + 9]
+    tmin_10 = globals_data[cfg_base + CFG_TMIN_BASE + 10]
+    tmin_11 = globals_data[cfg_base + CFG_TMIN_BASE + 11]
 
-    tmax_0 = params_tensor[agent_index][SITE_P_TMAX_BASE + 0]
-    tmax_1 = params_tensor[agent_index][SITE_P_TMAX_BASE + 1]
-    tmax_2 = params_tensor[agent_index][SITE_P_TMAX_BASE + 2]
-    tmax_3 = params_tensor[agent_index][SITE_P_TMAX_BASE + 3]
-    tmax_4 = params_tensor[agent_index][SITE_P_TMAX_BASE + 4]
-    tmax_5 = params_tensor[agent_index][SITE_P_TMAX_BASE + 5]
-    tmax_6 = params_tensor[agent_index][SITE_P_TMAX_BASE + 6]
-    tmax_7 = params_tensor[agent_index][SITE_P_TMAX_BASE + 7]
-    tmax_8 = params_tensor[agent_index][SITE_P_TMAX_BASE + 8]
-    tmax_9 = params_tensor[agent_index][SITE_P_TMAX_BASE + 9]
-    tmax_10 = params_tensor[agent_index][SITE_P_TMAX_BASE + 10]
-    tmax_11 = params_tensor[agent_index][SITE_P_TMAX_BASE + 11]
+    tmax_0 = globals_data[cfg_base + CFG_TMAX_BASE + 0]
+    tmax_1 = globals_data[cfg_base + CFG_TMAX_BASE + 1]
+    tmax_2 = globals_data[cfg_base + CFG_TMAX_BASE + 2]
+    tmax_3 = globals_data[cfg_base + CFG_TMAX_BASE + 3]
+    tmax_4 = globals_data[cfg_base + CFG_TMAX_BASE + 4]
+    tmax_5 = globals_data[cfg_base + CFG_TMAX_BASE + 5]
+    tmax_6 = globals_data[cfg_base + CFG_TMAX_BASE + 6]
+    tmax_7 = globals_data[cfg_base + CFG_TMAX_BASE + 7]
+    tmax_8 = globals_data[cfg_base + CFG_TMAX_BASE + 8]
+    tmax_9 = globals_data[cfg_base + CFG_TMAX_BASE + 9]
+    tmax_10 = globals_data[cfg_base + CFG_TMAX_BASE + 10]
+    tmax_11 = globals_data[cfg_base + CFG_TMAX_BASE + 11]
 
-    prcp_0 = params_tensor[agent_index][SITE_P_PRCP_BASE + 0]
-    prcp_1 = params_tensor[agent_index][SITE_P_PRCP_BASE + 1]
-    prcp_2 = params_tensor[agent_index][SITE_P_PRCP_BASE + 2]
-    prcp_3 = params_tensor[agent_index][SITE_P_PRCP_BASE + 3]
-    prcp_4 = params_tensor[agent_index][SITE_P_PRCP_BASE + 4]
-    prcp_5 = params_tensor[agent_index][SITE_P_PRCP_BASE + 5]
-    prcp_6 = params_tensor[agent_index][SITE_P_PRCP_BASE + 6]
-    prcp_7 = params_tensor[agent_index][SITE_P_PRCP_BASE + 7]
-    prcp_8 = params_tensor[agent_index][SITE_P_PRCP_BASE + 8]
-    prcp_9 = params_tensor[agent_index][SITE_P_PRCP_BASE + 9]
-    prcp_10 = params_tensor[agent_index][SITE_P_PRCP_BASE + 10]
-    prcp_11 = params_tensor[agent_index][SITE_P_PRCP_BASE + 11]
+    prcp_0 = globals_data[cfg_base + CFG_PRCP_BASE + 0]
+    prcp_1 = globals_data[cfg_base + CFG_PRCP_BASE + 1]
+    prcp_2 = globals_data[cfg_base + CFG_PRCP_BASE + 2]
+    prcp_3 = globals_data[cfg_base + CFG_PRCP_BASE + 3]
+    prcp_4 = globals_data[cfg_base + CFG_PRCP_BASE + 4]
+    prcp_5 = globals_data[cfg_base + CFG_PRCP_BASE + 5]
+    prcp_6 = globals_data[cfg_base + CFG_PRCP_BASE + 6]
+    prcp_7 = globals_data[cfg_base + CFG_PRCP_BASE + 7]
+    prcp_8 = globals_data[cfg_base + CFG_PRCP_BASE + 8]
+    prcp_9 = globals_data[cfg_base + CFG_PRCP_BASE + 9]
+    prcp_10 = globals_data[cfg_base + CFG_PRCP_BASE + 10]
+    prcp_11 = globals_data[cfg_base + CFG_PRCP_BASE + 11]
 
     # ========== MONTHLY CLIMATE PERTURBATION ==========
     # Box-Muller normal samples clamped to [-1,1] for temp, [-0.5,0.5] for precip.
@@ -501,7 +520,7 @@ def site_soil_step(
     annual_prcp_cm = prcp_0 + prcp_1 + prcp_2 + prcp_3 + prcp_4 + prcp_5 + prcp_6 + prcp_7 + prcp_8 + prcp_9 + prcp_10 + prcp_11
 
     # ========== WATER BALANCE LIMITS ==========
-    sbh = params_tensor[agent_index][SITE_P_BASE_H]
+    sbh = globals_data[cfg_base + CFG_BASE_H]
     if sbh < 1.0:
         sbh = 70.0  # Fallback if not set
     laiw_min = lai * LAI_MIN
@@ -524,8 +543,8 @@ def site_soil_step(
     drydays_base = 0.0    # Count of base-layer dry days
     total_pet = 0.0       # Accumulated potential ET
     total_aet = 0.0       # Accumulated actual ET
-    deg_days = 0.0        # Growing degree days (base 5°C, GAPpy model.py:233-236)
-    grow_days_5 = 0.0     # Days with tavg >= 5°C (GAPpy growing season definition)
+    deg_days = 0.0        # Growing degree days (base 5C, GAPpy model.py:233-236)
+    grow_days_5 = 0.0     # Days with tavg >= 5C (GAPpy growing season definition)
     annual_runoff = 0.0   # Accumulated runoff for N balance (GAPpy model.py:227)
 
     # ========== BERNOULLI RAIN-DAY PARAMETERS (GAPpy cov365a) ==========
@@ -667,62 +686,62 @@ def site_soil_step(
         frac = 0.0
 
         if d_s < 44:
-            # Jan mid (15) → Feb mid (44), width 29
+            # Jan mid (15) -> Feb mid (44), width 29
             frac = float(d_s - 15) / 29.0
             day_tmin = tmin_0 + frac * (tmin_1 - tmin_0)
             day_tmax = tmax_0 + frac * (tmax_1 - tmax_0)
         elif d_s < 74:
-            # Feb mid (44) → Mar mid (74), width 30
+            # Feb mid (44) -> Mar mid (74), width 30
             frac = float(d_s - 44) / 30.0
             day_tmin = tmin_1 + frac * (tmin_2 - tmin_1)
             day_tmax = tmax_1 + frac * (tmax_2 - tmax_1)
         elif d_s < 104:
-            # Mar mid (74) → Apr mid (104), width 30
+            # Mar mid (74) -> Apr mid (104), width 30
             frac = float(d_s - 74) / 30.0
             day_tmin = tmin_2 + frac * (tmin_3 - tmin_2)
             day_tmax = tmax_2 + frac * (tmax_3 - tmax_2)
         elif d_s < 135:
-            # Apr mid (104) → May mid (135), width 31
+            # Apr mid (104) -> May mid (135), width 31
             frac = float(d_s - 104) / 31.0
             day_tmin = tmin_3 + frac * (tmin_4 - tmin_3)
             day_tmax = tmax_3 + frac * (tmax_4 - tmax_3)
         elif d_s < 165:
-            # May mid (135) → Jun mid (165), width 30
+            # May mid (135) -> Jun mid (165), width 30
             frac = float(d_s - 135) / 30.0
             day_tmin = tmin_4 + frac * (tmin_5 - tmin_4)
             day_tmax = tmax_4 + frac * (tmax_5 - tmax_4)
         elif d_s < 195:
-            # Jun mid (165) → Jul mid (195), width 30
+            # Jun mid (165) -> Jul mid (195), width 30
             frac = float(d_s - 165) / 30.0
             day_tmin = tmin_5 + frac * (tmin_6 - tmin_5)
             day_tmax = tmax_5 + frac * (tmax_6 - tmax_5)
         elif d_s < 226:
-            # Jul mid (195) → Aug mid (226), width 31
+            # Jul mid (195) -> Aug mid (226), width 31
             frac = float(d_s - 195) / 31.0
             day_tmin = tmin_6 + frac * (tmin_7 - tmin_6)
             day_tmax = tmax_6 + frac * (tmax_7 - tmax_6)
         elif d_s < 257:
-            # Aug mid (226) → Sep mid (257), width 31
+            # Aug mid (226) -> Sep mid (257), width 31
             frac = float(d_s - 226) / 31.0
             day_tmin = tmin_7 + frac * (tmin_8 - tmin_7)
             day_tmax = tmax_7 + frac * (tmax_8 - tmax_7)
         elif d_s < 287:
-            # Sep mid (257) → Oct mid (287), width 30
+            # Sep mid (257) -> Oct mid (287), width 30
             frac = float(d_s - 257) / 30.0
             day_tmin = tmin_8 + frac * (tmin_9 - tmin_8)
             day_tmax = tmax_8 + frac * (tmax_9 - tmax_8)
         elif d_s < 318:
-            # Oct mid (287) → Nov mid (318), width 31
+            # Oct mid (287) -> Nov mid (318), width 31
             frac = float(d_s - 287) / 31.0
             day_tmin = tmin_9 + frac * (tmin_10 - tmin_9)
             day_tmax = tmax_9 + frac * (tmax_10 - tmax_9)
         elif d_s < 348:
-            # Nov mid (318) → Dec mid (348), width 30
+            # Nov mid (318) -> Dec mid (348), width 30
             frac = float(d_s - 318) / 30.0
             day_tmin = tmin_10 + frac * (tmin_11 - tmin_10)
             day_tmax = tmax_10 + frac * (tmax_11 - tmax_10)
         else:
-            # Dec mid (348) → Jan mid next year (380), width 32
+            # Dec mid (348) -> Jan mid next year (380), width 32
             frac = float(d_s - 348) / 32.0
             day_tmin = tmin_11 + frac * (tmin_0 - tmin_11)
             day_tmax = tmax_11 + frac * (tmax_0 - tmax_11)
@@ -846,7 +865,7 @@ def site_soil_step(
         if day_temp < 0.0:
             freeze_days = freeze_days + 1.0
 
-        # Accumulate growing degree days (base 5°C, GAPpy model.py:233-236)
+        # Accumulate growing degree days (base 5C, GAPpy model.py:233-236)
         if day_temp >= 5.0:
             deg_days = deg_days + (day_temp - 5.0)
             grow_days_5 = grow_days_5 + 1.0
@@ -869,7 +888,7 @@ def site_soil_step(
             yxd_pet = -1.0
 
         # Polynomial approximation for acos (accurate to ~0.01 radians)
-        # acos(x) = PI/2 - asin(x), asin(x) ≈ x + x^3/6 + 3x^5/40
+        # acos(x) = PI/2 - asin(x), asin(x) ~ x + x^3/6 + 3x^5/40
         omega = 0.0
         if yxd_pet >= 1.0:
             omega = 0.0
@@ -1158,7 +1177,7 @@ def site_soil_step(
         day = day + 1
 
     # ========== NORMALIZE DRY DAYS TO FRACTIONS (GAPpy model.py:261-262) ==========
-    # GAPpy: growdays = count of days with tavg >= 5°C (not 365 - freeze_days)
+    # GAPpy: growdays = count of days with tavg >= 5C (not 365 - freeze_days)
     growdays = grow_days_5
     if growdays < 1.0:
         growdays = 1.0
@@ -1209,7 +1228,7 @@ def site_soil_step(
     params_tensor[agent_index][SITE_P_LAI_W0] = lai_w0
     params_tensor[agent_index][SITE_P_ANNUAL_RUNOFF] = annual_runoff  # For N balance at P9
 
-    # Growing degree days (accumulated daily, base 5°C)
+    # Growing degree days (accumulated daily, base 5C)
     states_tensor[agent_index][SITE_S_DEG_DAYS] = deg_days
 
     # Available N = mineralization + atmospheric deposition
@@ -1225,8 +1244,8 @@ def site_soil_step(
     states_tensor[agent_index][SITE_S_DRY_DAYS_BASE] = dry_days_base_frac
 
     # ========== FIRE PROBABILITY ==========
-    # Fire probability from CSV (per 1000 years, already converted to annual at load)
-    fire_prob = params_tensor[agent_index][SITE_P_FIRE_PROB]
+    # Fire probability from globals (per 1000 years, already converted to annual at load)
+    fire_prob = globals_data[cfg_base + CFG_FIRE_PROB]
 
     # Dry conditions increase fire risk beyond base probability
     estimated_dry_days = 0.0
@@ -1257,7 +1276,7 @@ def site_soil_step(
     states_tensor[agent_index][SITE_S_FIRE_INTENSITY] = fire_intensity
 
     # ========== WIND PROBABILITY (GAPpy model.py:623-655) ==========
-    wind_prob = params_tensor[agent_index][SITE_P_WIND_PROB]
+    wind_prob = globals_data[cfg_base + CFG_WIND_PROB]
 
     # Stochastic wind check
     wind_rand = rand_uniform_philox(0, tick, agent_index, 11)

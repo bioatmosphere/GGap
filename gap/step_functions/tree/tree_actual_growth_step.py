@@ -1,13 +1,13 @@
 """
-Tree actual growth step function for GGap model (Priority 7).
+Tree actual growth step function for GGap model (Priority 6).
 Handles living tree growth + mortality + litter and free slot activation.
 
-Template renewal is now in tree_template_renewal_step (P5) and recruitment
-counting is in gap_recruit_aggregate_step (P6).
+Species traits are now read from globals_data instead of params_tensor.
 
 Execution Flow:
     1. FINAL GROWTH (living trees, is_alive > 0.5):
-       - Read env_stress and diam_max from own params (written at P3, same tick)
+       - Read species_id from params[0], look up traits in globals_data
+       - Read env_stress and diam_max from own params (written at P2, same tick)
        - Read n_supply_ratio from Gap neighbor states (written at P4, same tick)
        - Compute fc_nutrient from n_supply_ratio + lownutr_tol
        - Compute growth_factor = env_stress * fc_nutrient
@@ -18,17 +18,16 @@ Execution Flow:
     2. DORMANT ACTIVATION (free slots, is_alive == 0):
        - Read recruit_prob from Gap (written at P6, same tick)
        - Select species from templates weighted by seedling_weight
-       - Copy traits, initialize as seedling, set is_alive = 1.0
-       - Visible as alive next tick (double-buffered states_db)
-       - Matches GAPpy: renewal is last, seedlings don't grow until next year
+       - Copy SPECIES_ID only, read traits from globals for initialization
+       - Set is_alive = 1.0 (visible next tick via double buffer)
 
-    3. TEMPLATES (is_alive < -0.5): skipped (handled at P5)
+    3. TEMPLATES (is_alive < -0.5): skipped
 
 Property scheme:
-- params[42]: reads env_stress, diam_max (from P3), writes age, biomC, etc.
-- states[5]: writes litter_c/n (above-ground) (consumed at P0 next tick)
+- params[17]: species_id[0], mutable state [1-16]
+- globals_data[SPECIES_BASE + species_id * 26 + trait]: species traits
+- states[5]: writes litter_c/n, n_consumed
 - states_db[5]: writes is_alive, diam, height, canopy_ht
-                free slot activation writes is_alive=1 (visible next tick via double buffer)
 """
 
 import cupy as cp
@@ -40,61 +39,61 @@ BREED_TREE = 0
 BREED_GAP = 1
 BREED_SITE = 2
 
-# === Tree params[42] (private) ===
-# Species traits [0-21]:
+# === Tree params[17] (private) ===
 TREE_P_SPECIES_ID = 0
-TREE_P_MAX_AGE = 1
-TREE_P_MAX_DIAM = 2
-TREE_P_MAX_HT = 3
-TREE_P_ARFA_0 = 4
-TREE_P_G = 5
-TREE_P_SHADE_TOL = 6
-TREE_P_DEG_DAY_MIN = 7
-TREE_P_DEG_DAY_OPT = 8
-TREE_P_DEG_DAY_MAX = 9
-TREE_P_INVADER = 10
-TREE_P_SEED = 11
-TREE_P_SPROUT = 12
-TREE_P_WOOD_BULK_DENS = 13
-TREE_P_LOWNUTR_TOL = 14
-TREE_P_FLOOD_TOL = 15
-TREE_P_DROUGHT_TOL = 16
-TREE_P_EVERGREEN = 17
-TREE_P_FIRE_TOL = 18
-TREE_P_ROOTDEPTH = 19
-TREE_P_STRESS_TOL = 20
-TREE_P_AGE_TOL = 21
-# Physiology [22-31]:
-TREE_P_AGE = 22
-TREE_P_BIOMC = 23
-TREE_P_BIOMN = 24
-TREE_P_LEAF_BM = 25
-TREE_P_X = 26
-TREE_P_Y = 27
-TREE_P_LIGHT_AVAIL = 28
-TREE_P_FC_DEGDAY = 29
-TREE_P_FC_DROUGHT = 30
-TREE_P_FC_FLOOD = 31
-# Intermediates [32-33, 40] (written at P3, read here at P7):
-TREE_P_ENV_STRESS = 32
-TREE_P_DIAM_MAX_CALC = 33
-TREE_P_FORSKA_SHADE = 40  # Light response at canopy base (for self-pruning)
-# Renewal params [34-37] (template-only):
-TREE_P_SEED_SURV = 34
-TREE_P_SEEDLING_LG = 35
-TREE_P_SEEDBANK = 36
-TREE_P_SEEDLING = 37
-# Leaf area params [38-39]:
-TREE_P_LEAFDIAM_A = 38
-TREE_P_LEAFAREA_C = 39
-# Seedling weight [41] (P5 template writes, P7 free slots read same tick):
-TREE_P_SEEDLING_WEIGHT = 41
+TREE_P_AGE = 1
+TREE_P_BIOMC = 2
+TREE_P_BIOMN = 3
+TREE_P_LEAF_BM = 4
+TREE_P_X = 5
+TREE_P_Y = 6
+TREE_P_LIGHT_AVAIL = 7
+TREE_P_FC_DEGDAY = 8
+TREE_P_FC_DROUGHT = 9
+TREE_P_FC_FLOOD = 10
+TREE_P_ENV_STRESS = 11
+TREE_P_DIAM_MAX_CALC = 12
+TREE_P_FORSKA_SHADE = 13
+TREE_P_SEEDBANK = 14
+TREE_P_SEEDLING = 15
+TREE_P_SEEDLING_WEIGHT = 16
+
+# === Species traits in globals_data ===
+SPECIES_BASE = 2
+NUM_SPECIES_TRAITS = 26
+# Trait offsets
+TRAIT_MAX_AGE = 0
+TRAIT_MAX_DIAM = 1
+TRAIT_MAX_HT = 2
+TRAIT_ARFA_0 = 3
+TRAIT_G = 4
+TRAIT_SHADE_TOL = 5
+TRAIT_DEG_DAY_MIN = 6
+TRAIT_DEG_DAY_OPT = 7
+TRAIT_DEG_DAY_MAX = 8
+TRAIT_INVADER = 9
+TRAIT_SEED = 10
+TRAIT_SPROUT = 11
+TRAIT_WOOD_BULK_DENS = 12
+TRAIT_LOWNUTR_TOL = 13
+TRAIT_FLOOD_TOL = 14
+TRAIT_DROUGHT_TOL = 15
+TRAIT_EVERGREEN = 16
+TRAIT_FIRE_TOL = 17
+TRAIT_ROOTDEPTH = 18
+TRAIT_STRESS_TOL = 19
+TRAIT_AGE_TOL = 20
+TRAIT_SEED_SURV = 21
+TRAIT_SEEDLING_LG = 22
+TRAIT_LEAFDIAM_A = 23
+TRAIT_LEAFAREA_C = 24
+TRAIT_MAX_DISPERSAL_DIST = 25
 
 # === Tree states[5] (public, no buffer) ===
 TREE_S_LITTER_C = 0       # Above-ground litter carbon
 TREE_S_LITTER_N = 1       # Above-ground litter nitrogen
 TREE_S_N_DEMAND = 2
-TREE_S_N_CONSUMED = 3     # Actual N consumed this tick (P8 aggregates, P9 applies balance)
+TREE_S_N_CONSUMED = 3     # Actual N consumed this tick
 TREE_S_LITTER_N_BG = 4    # Below-ground litter nitrogen (roots) - unused, always 0
 
 # === Tree states_db[5] (public, double buffered) ===
@@ -145,11 +144,11 @@ def tree_actual_growth_step(
     states_db_tensor,
 ):
     """
-    Phase C (P7): Nutrient response + final growth + mortality + litter + free slot activation.
+    Phase C (P6): Nutrient response + final growth + mortality + litter + free slot activation.
 
-    Living trees: reads env_stress/diam_max from P3, n_supply_ratio from P4.
+    Living trees: reads env_stress/diam_max from P2, n_supply_ratio from P4.
     Free slots: reads num_to_recruit from P6, seedling_weight from P5 templates.
-    Templates: skipped (handled at P5).
+    Templates: skipped.
     """
     # ===== GET CURRENT STATE =====
     is_alive = states_db_tensor[agent_index][TREE_DB_IS_ALIVE]
@@ -161,17 +160,21 @@ def tree_actual_growth_step(
 
     # ===== ACTUAL GROWTH + MORTALITY: Process living trees only =====
     if is_alive > 0.5:
-        # Get species parameters
-        max_age = params_tensor[agent_index][TREE_P_MAX_AGE]
-        max_diam = params_tensor[agent_index][TREE_P_MAX_DIAM]
-        max_ht = params_tensor[agent_index][TREE_P_MAX_HT]
-        arfa_0 = params_tensor[agent_index][TREE_P_ARFA_0]
-        wood_bulk_dens = params_tensor[agent_index][TREE_P_WOOD_BULK_DENS]
-        lownutr_tol = int(params_tensor[agent_index][TREE_P_LOWNUTR_TOL])
-        evergreen = int(params_tensor[agent_index][TREE_P_EVERGREEN])
-        rootdepth = params_tensor[agent_index][TREE_P_ROOTDEPTH]
-        leafdiam_a = params_tensor[agent_index][TREE_P_LEAFDIAM_A]
-        leafarea_c = params_tensor[agent_index][TREE_P_LEAFAREA_C]
+        # Get species ID and compute globals base offset
+        species_id = int(params_tensor[agent_index][TREE_P_SPECIES_ID])
+        sp_base = SPECIES_BASE + species_id * NUM_SPECIES_TRAITS
+
+        # Get species parameters from globals_data
+        max_age = globals_data[sp_base + TRAIT_MAX_AGE]
+        max_diam = globals_data[sp_base + TRAIT_MAX_DIAM]
+        max_ht = globals_data[sp_base + TRAIT_MAX_HT]
+        arfa_0 = globals_data[sp_base + TRAIT_ARFA_0]
+        wood_bulk_dens = globals_data[sp_base + TRAIT_WOOD_BULK_DENS]
+        lownutr_tol = int(globals_data[sp_base + TRAIT_LOWNUTR_TOL])
+        evergreen = int(globals_data[sp_base + TRAIT_EVERGREEN])
+        rootdepth = globals_data[sp_base + TRAIT_ROOTDEPTH]
+        leafdiam_a = globals_data[sp_base + TRAIT_LEAFDIAM_A]
+        leafarea_c = globals_data[sp_base + TRAIT_LEAFAREA_C]
 
         # Get current tree structure from states_db (read buffer = previous tick values)
         diam = states_db_tensor[agent_index][TREE_DB_DIAM]
@@ -181,7 +184,7 @@ def tree_actual_growth_step(
         # Get internal physiology from params
         age = params_tensor[agent_index][TREE_P_AGE]
 
-        # Read intermediates from P3 (same tick, params has no double buffer)
+        # Read intermediates from P2 (same tick, params has no double buffer)
         env_stress = params_tensor[agent_index][TREE_P_ENV_STRESS]
         diam_max = params_tensor[agent_index][TREE_P_DIAM_MAX_CALC]
 
@@ -218,7 +221,7 @@ def tree_actual_growth_step(
         # nrc = 4 - lownutr_tol (invert tolerance class, GAPpy Species.f90:235)
         nrc = 4 - lownutr_idx
 
-        # Coefficient lookup by nrc (1-indexed: nrc=1→idx0, nrc=2→idx1, nrc=3→idx2)
+        # Coefficient lookup by nrc (1-indexed: nrc=1->idx0, nrc=2->idx1, nrc=3->idx2)
         c1 = -0.6274
         c2 = 3.600
         c3 = -1.994
@@ -306,13 +309,13 @@ def tree_actual_growth_step(
 
         growth_biomC = growth_stembc + growth_twigbc + growth_root_c
 
-        # Leaf biomass from growth (GAPpy: dc² * leafdiam_a * leafarea_c * 2.0)
+        # Leaf biomass from growth (GAPpy: dc^2 * leafdiam_a * leafarea_c * 2.0)
         # * 1000.0 converts GAPpy tonnes to GGap kg (TC_KG = TC * 1000)
         growth_leaf_bm = growth_dc * growth_dc * leafdiam_a * leafarea_c * 2.0 * 1000.0
 
         # ===== CANOPY HEIGHT SELF-PRUNING (GAPpy third tree loop, model.py:564-571) =====
         # GAPpy: check = fc_degday * fc_drought * fc_flood * forska_shade * nutrient
-        # forska_shade = light_rsp at canopy BASE (not tree top), computed at P3
+        # forska_shade = light_rsp at canopy BASE (not tree top), computed at P2
         forska_shade = params_tensor[agent_index][TREE_P_FORSKA_SHADE]
         fc_degday_val = params_tensor[agent_index][TREE_P_FC_DEGDAY]
         fc_drought_val = params_tensor[agent_index][TREE_P_FC_DROUGHT]
@@ -349,7 +352,7 @@ def tree_actual_growth_step(
 
         new_biomC = new_stembc + new_twigbc + new_root_c
 
-        # Leaf biomass (GAPpy: dc² * leafdiam_a * leafarea_c * 2.0, tonnes→kg)
+        # Leaf biomass (GAPpy: dc^2 * leafdiam_a * leafarea_c * 2.0, tonnes->kg)
         new_leaf_bm = new_dc * new_dc * leafdiam_a * leafarea_c * 2.0 * 1000.0
 
         # ===== COMPUTE N CONSUMED (GAPpy model.py:539-552) =====
@@ -375,9 +378,9 @@ def tree_actual_growth_step(
         else:
             # ===== CHECK MORTALITY (GAPpy: two independent survival checks) =====
 
-            # Read species-specific mortality tolerances
-            stress_tol = int(params_tensor[agent_index][TREE_P_STRESS_TOL])
-            age_tol = int(params_tensor[agent_index][TREE_P_AGE_TOL])
+            # Read species-specific mortality tolerances from globals
+            stress_tol = int(globals_data[sp_base + TRAIT_STRESS_TOL])
+            age_tol = int(globals_data[sp_base + TRAIT_AGE_TOL])
 
             # --- Age survival (GAPpy tree.py:178-202) ---
             # age_tol (1-3) selects from [4.605, 6.908, 11.51]
@@ -492,7 +495,7 @@ def tree_actual_growth_step(
     # ===== DORMANT SLOT ACTIVATION =====
     # Free slots (is_alive == 0) check if Gap signals recruitment, select species
     # from templates weighted by SEEDLING_WEIGHT, and activate as seedlings.
-    # By activating at P7, seedlings don't grow until next tick (matching GAPpy).
+    # By activating at P6, seedlings don't grow until next tick (matching GAPpy).
     # Templates (is_alive == -1) are handled at P5 and skip this step.
     elif is_alive > -0.5:
         # Read recruitment info from Gap neighbor
@@ -511,7 +514,7 @@ def tree_actual_growth_step(
 
         # Determine if this free slot should be recruited
         # recruit_prob = nrenew / free_slots (from P6), so
-        # expected activations = free_slots × recruit_prob = nrenew
+        # expected activations = free_slots * recruit_prob = nrenew
         if recruit_prob > 0.0:
             slot_priority = rand_uniform_philox(0, tick, agent_index, int(recruit_rand_seed) * 97 + 3)
 
@@ -555,50 +558,27 @@ def tree_actual_growth_step(
                         selected_neighbor_idx = last_template_idx
 
                 if selected_neighbor_idx >= 0:
-                    # Copy species traits [0-21] from template
+                    # Copy only SPECIES_ID from template (traits are in globals_data)
                     params_tensor[agent_index][TREE_P_SPECIES_ID] = params_tensor[selected_neighbor_idx][TREE_P_SPECIES_ID]
-                    params_tensor[agent_index][TREE_P_MAX_AGE] = params_tensor[selected_neighbor_idx][TREE_P_MAX_AGE]
-                    params_tensor[agent_index][TREE_P_MAX_DIAM] = params_tensor[selected_neighbor_idx][TREE_P_MAX_DIAM]
-                    params_tensor[agent_index][TREE_P_MAX_HT] = params_tensor[selected_neighbor_idx][TREE_P_MAX_HT]
-                    params_tensor[agent_index][TREE_P_ARFA_0] = params_tensor[selected_neighbor_idx][TREE_P_ARFA_0]
-                    params_tensor[agent_index][TREE_P_G] = params_tensor[selected_neighbor_idx][TREE_P_G]
-                    params_tensor[agent_index][TREE_P_SHADE_TOL] = params_tensor[selected_neighbor_idx][TREE_P_SHADE_TOL]
-                    params_tensor[agent_index][TREE_P_DEG_DAY_MIN] = params_tensor[selected_neighbor_idx][TREE_P_DEG_DAY_MIN]
-                    params_tensor[agent_index][TREE_P_DEG_DAY_OPT] = params_tensor[selected_neighbor_idx][TREE_P_DEG_DAY_OPT]
-                    params_tensor[agent_index][TREE_P_DEG_DAY_MAX] = params_tensor[selected_neighbor_idx][TREE_P_DEG_DAY_MAX]
-                    params_tensor[agent_index][TREE_P_INVADER] = params_tensor[selected_neighbor_idx][TREE_P_INVADER]
-                    params_tensor[agent_index][TREE_P_SEED] = params_tensor[selected_neighbor_idx][TREE_P_SEED]
-                    params_tensor[agent_index][TREE_P_SPROUT] = params_tensor[selected_neighbor_idx][TREE_P_SPROUT]
-                    params_tensor[agent_index][TREE_P_WOOD_BULK_DENS] = params_tensor[selected_neighbor_idx][TREE_P_WOOD_BULK_DENS]
-                    params_tensor[agent_index][TREE_P_LOWNUTR_TOL] = params_tensor[selected_neighbor_idx][TREE_P_LOWNUTR_TOL]
-                    params_tensor[agent_index][TREE_P_FLOOD_TOL] = params_tensor[selected_neighbor_idx][TREE_P_FLOOD_TOL]
-                    params_tensor[agent_index][TREE_P_DROUGHT_TOL] = params_tensor[selected_neighbor_idx][TREE_P_DROUGHT_TOL]
-                    params_tensor[agent_index][TREE_P_EVERGREEN] = params_tensor[selected_neighbor_idx][TREE_P_EVERGREEN]
-                    params_tensor[agent_index][TREE_P_FIRE_TOL] = params_tensor[selected_neighbor_idx][TREE_P_FIRE_TOL]
-                    params_tensor[agent_index][TREE_P_ROOTDEPTH] = params_tensor[selected_neighbor_idx][TREE_P_ROOTDEPTH]
-                    params_tensor[agent_index][TREE_P_STRESS_TOL] = params_tensor[selected_neighbor_idx][TREE_P_STRESS_TOL]
-                    params_tensor[agent_index][TREE_P_AGE_TOL] = params_tensor[selected_neighbor_idx][TREE_P_AGE_TOL]
-                    # Copy renewal params from template
-                    params_tensor[agent_index][TREE_P_SEED_SURV] = params_tensor[selected_neighbor_idx][TREE_P_SEED_SURV]
-                    params_tensor[agent_index][TREE_P_SEEDLING_LG] = params_tensor[selected_neighbor_idx][TREE_P_SEEDLING_LG]
-                    # Copy leaf area params from template
-                    params_tensor[agent_index][TREE_P_LEAFDIAM_A] = params_tensor[selected_neighbor_idx][TREE_P_LEAFDIAM_A]
-                    params_tensor[agent_index][TREE_P_LEAFAREA_C] = params_tensor[selected_neighbor_idx][TREE_P_LEAFAREA_C]
+
+                    # Look up species traits from globals_data
+                    sel_species_id = int(params_tensor[agent_index][TREE_P_SPECIES_ID])
+                    sel_sp_base = SPECIES_BASE + sel_species_id * NUM_SPECIES_TRAITS
 
                     # Seedling diameter: N(1.5, 1) clamped [0.5, 2.5]
-                    # Box-Muller normal, z in [-1, 1] → diam in [0.5, 2.5]
+                    # Box-Muller normal, z in [-1, 1] -> diam in [0.5, 2.5]
                     seedling_diam = 1.5 + rand_normal_bounded(0, tick, agent_index, int(recruit_rand_seed) * 97 + 5, -1.0, 1.0)
 
                     # Calculate initial height from seedling diameter (Forska equation)
-                    max_ht = params_tensor[agent_index][TREE_P_MAX_HT]
-                    arfa_0 = params_tensor[agent_index][TREE_P_ARFA_0]
+                    max_ht = globals_data[sel_sp_base + TRAIT_MAX_HT]
+                    arfa_0 = globals_data[sel_sp_base + TRAIT_ARFA_0]
                     delta_ht = max_ht - STD_HT
                     seedling_ht = STD_HT + delta_ht * (1.0 - cp.exp(-arfa_0 * seedling_diam / delta_ht))
 
                     # Calculate initial biomass from diameter (GAPpy tree.py biomass_c)
                     # GAPpy model.py:951 sets canopy_ht=1.0 for seedlings (not STD_HT)
-                    s_wbd = params_tensor[agent_index][TREE_P_WOOD_BULK_DENS]
-                    s_rdepth = params_tensor[agent_index][TREE_P_ROOTDEPTH]
+                    s_wbd = globals_data[sel_sp_base + TRAIT_WOOD_BULK_DENS]
+                    s_rdepth = globals_data[sel_sp_base + TRAIT_ROOTDEPTH]
                     s_canopy_ht = 1.0  # GAPpy model.py:951
                     # Basal diameter (canopy_ht=0 internally, GAPpy tree.py:151)
                     s_bd = seedling_diam
@@ -623,10 +603,10 @@ def tree_actual_growth_step(
 
                     # Seedling N consumed (GAPpy model.py:962-977)
                     # Note: conifer uses leaf_bm/C_N (NOT * CON_LEAF_B, unlike growth)
-                    seedling_lda = params_tensor[agent_index][TREE_P_LEAFDIAM_A]
-                    seedling_lca = params_tensor[agent_index][TREE_P_LEAFAREA_C]
+                    seedling_lda = globals_data[sel_sp_base + TRAIT_LEAFDIAM_A]
+                    seedling_lca = globals_data[sel_sp_base + TRAIT_LEAFAREA_C]
                     seedling_leaf_bm = s_dc * s_dc * seedling_lda * seedling_lca * 2.0 * 1000.0
-                    seedling_evergreen = int(params_tensor[agent_index][TREE_P_EVERGREEN])
+                    seedling_evergreen = int(globals_data[sel_sp_base + TRAIT_EVERGREEN])
                     if seedling_evergreen > 0:
                         n_consumed = seedling_leaf_bm / CON_LEAF_C_N + seedling_biomC / STEM_C_N
                         # Seedling litter (GAPpy model.py:970-971): leaf_bm * (leaf_b - 1.0)
@@ -661,4 +641,4 @@ def tree_actual_growth_step(
     # ===== WRITE LITTER + N CONSUMED TO states (Gap aggregates at P0 next tick) =====
     states_tensor[agent_index][TREE_S_LITTER_C] = litter_c          # Above-ground -> A0 layer
     states_tensor[agent_index][TREE_S_LITTER_N] = litter_n
-    states_tensor[agent_index][TREE_S_N_CONSUMED] = n_consumed      # P8 aggregates → P9 N balance
+    states_tensor[agent_index][TREE_S_N_CONSUMED] = n_consumed      # P8 aggregates -> P9 N balance
