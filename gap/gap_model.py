@@ -60,24 +60,13 @@ from gap.step_functions.site.site_nbalance_step import site_nbalance_step
 
 # Import globals layout
 from gap.globals_layout import (
-    GLOB_NUM_SPECIES, GLOB_NUM_SITES,
-    NUM_SPECIES_TRAITS, SPECIES_BASE, MAX_SPECIES,
-    TRAIT_MAX_AGE, TRAIT_MAX_DIAM, TRAIT_MAX_HT, TRAIT_ARFA_0, TRAIT_G,
-    TRAIT_SHADE_TOL, TRAIT_DEG_DAY_MIN, TRAIT_DEG_DAY_OPT, TRAIT_DEG_DAY_MAX,
-    TRAIT_INVADER, TRAIT_SEED, TRAIT_SPROUT, TRAIT_WOOD_BULK_DENS,
-    TRAIT_LOWNUTR_TOL, TRAIT_FLOOD_TOL, TRAIT_DROUGHT_TOL, TRAIT_EVERGREEN,
-    TRAIT_FIRE_TOL, TRAIT_ROOTDEPTH, TRAIT_STRESS_TOL, TRAIT_AGE_TOL,
-    TRAIT_SEED_SURV, TRAIT_SEEDLING_LG, TRAIT_LEAFDIAM_A, TRAIT_LEAFAREA_C,
-    TRAIT_MAX_DISPERSAL_DIST,
-    NUM_SITE_CONFIGS, SITE_CONFIG_BASE, MAX_SITES,
+    NUM_SPECIES_TRAITS, NUM_SITE_CONFIGS,
     CFG_TMIN_BASE, CFG_TMAX_BASE, CFG_PRCP_BASE,
     CFG_FIELD_CAP, CFG_PERM_WP, CFG_SLOPE, CFG_SIGMA, CFG_LAI,
     CFG_LATITUDE, CFG_LONGITUDE, CFG_RAIN_N,
     CFG_FIRE_PROB, CFG_WIND_PROB, CFG_BASE_H,
     CFG_TMIN_STD_BASE, CFG_TMAX_STD_BASE, CFG_PRCP_STD_BASE,
     CFG_TMP_LAPSE_BASE, CFG_PRCP_LAPSE_BASE,
-    RANGELIST_BASE,
-    GLOBALS_SIZE,
 )
 
 CURRENT_DIR = Path(__file__).resolve().parent
@@ -387,20 +376,13 @@ class GAPModel(Model):
 
         num_species = len(self.unique_species)
 
-        # === Register species traits as globals ===
-        # Register header
-        self.register_global_property(f"g_{GLOB_NUM_SPECIES}", float(num_species))
-        self.register_global_property(f"g_{GLOB_NUM_SITES}", 0.0)  # Updated later
-
-        # Register species traits (pad to MAX_SPECIES)
-        for sp in range(MAX_SPECIES):
+        # === Register species traits as 2D tensor global ===
+        species_traits = np.zeros((num_species, NUM_SPECIES_TRAITS))
+        for sp in range(num_species):
+            sp_info = self.species_by_id[sp]
             for t in range(NUM_SPECIES_TRAITS):
-                key = f"g_sp_{sp}_{t}"
-                val = 0.0
-                if sp < num_species:
-                    sp_info = self.species_by_id[sp]
-                    val = self._get_species_trait_value(sp_info, t)
-                self.register_global_property(key, val)
+                species_traits[sp, t] = self._get_species_trait_value(sp_info, t)
+        self.register_global_property("species_traits", species_traits)
 
         # === Load ALL site configs ===
         site_file = os.path.join(base_path, f"{prefix}_site.csv")
@@ -456,42 +438,35 @@ class GAPModel(Model):
                     continue
                 range_rows[int(row['site'])] = row
 
-        # Register site configs for all sites found
+        # Register site configs as 2D tensor global
         all_site_ids = sorted(site_rows.keys())
         num_sites = len(all_site_ids)
         self._num_sites_in_globals = num_sites
 
-        # Update num_sites in globals
-        self.set_global_property_value(f"g_{GLOB_NUM_SITES}", float(num_sites))
+        site_configs = np.zeros((num_sites, NUM_SITE_CONFIGS))
+        for site_slot in range(num_sites):
+            sid = all_site_ids[site_slot]
+            cfg_values = self._build_site_config(
+                sid, site_rows[sid], climate_rows.get(sid),
+                climate_std_rows.get(sid), altitude_rows.get(sid),
+                months
+            )
+            site_configs[site_slot] = cfg_values
+        self.register_global_property("site_configs", site_configs)
 
-        # Register site configs (pad to MAX_SITES)
-        for site_slot in range(MAX_SITES):
-            cfg_values = [0.0] * NUM_SITE_CONFIGS
-            if site_slot < num_sites:
-                sid = all_site_ids[site_slot]
-                cfg_values = self._build_site_config(
-                    sid, site_rows[sid], climate_rows.get(sid),
-                    climate_std_rows.get(sid), altitude_rows.get(sid),
-                    months
-                )
-            for c in range(NUM_SITE_CONFIGS):
-                self.register_global_property(f"g_cfg_{site_slot}_{c}", cfg_values[c])
-
-        # Register rangelist masks (pad to MAX_SITES × MAX_SPECIES)
-        for site_slot in range(MAX_SITES):
-            mask = [0.0] * MAX_SPECIES
-            if site_slot < num_sites:
-                sid = all_site_ids[site_slot]
-                rrow = range_rows.get(sid)
-                if rrow:
-                    for col, val in rrow.items():
-                        if col not in ('site', 'latitude', 'longitude'):
-                            if val == '1':
-                                sp_info = self.unique_species.get(col)
-                                if sp_info is not None:
-                                    mask[sp_info['global_id']] = 1.0
-            for sp in range(MAX_SPECIES):
-                self.register_global_property(f"g_rng_{site_slot}_{sp}", mask[sp])
+        # Register rangelist masks as 2D tensor global
+        rangelists = np.zeros((num_sites, num_species))
+        for site_slot in range(num_sites):
+            sid = all_site_ids[site_slot]
+            rrow = range_rows.get(sid)
+            if rrow:
+                for col, val in rrow.items():
+                    if col not in ('site', 'latitude', 'longitude'):
+                        if val == '1':
+                            sp_info = self.unique_species.get(col)
+                            if sp_info is not None:
+                                rangelists[site_slot, sp_info['global_id']] = 1.0
+        self.register_global_property("rangelists", rangelists)
 
         # Store site_id mapping for initialize_site
         self._site_id_to_slot = {sid: slot for slot, sid in enumerate(all_site_ids)}
@@ -633,17 +608,14 @@ class GAPModel(Model):
             if sp_code in self.unique_species:
                 site_species.append(self.unique_species[sp_code])
 
-        # Calculate degree days from globals config for display
+        # Calculate degree days from site_configs tensor for display
         BASE_TEMP = 5.0
         days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
         deg_days = 0.0
-        # Read from globals config
-        cfg_base = SITE_CONFIG_BASE + site_slot * NUM_SITE_CONFIGS
+        site_configs = self.get_global_property_value("site_configs")
         for i in range(12):
-            key = f"g_cfg_{site_slot}_{CFG_TMIN_BASE + i}"
-            tmin = self.get_global_property_value(key)
-            key2 = f"g_cfg_{site_slot}_{CFG_TMAX_BASE + i}"
-            tmax = self.get_global_property_value(key2)
+            tmin = site_configs[site_slot][CFG_TMIN_BASE + i]
+            tmax = site_configs[site_slot][CFG_TMAX_BASE + i]
             tavg = (tmin + tmax) / 2.0
             if tavg > BASE_TEMP:
                 deg_days += (tavg - BASE_TEMP) * days_per_month[i]

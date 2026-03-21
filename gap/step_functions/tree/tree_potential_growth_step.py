@@ -7,7 +7,7 @@ the soil N cycle computes the same-tick n_supply_ratio.
 
 Execution Flow:
     1. LIVING TREES (is_alive > 0.5):
-       - Read species_id from params, look up species traits from globals_data
+       - Read species_id from params, look up species traits from species_traits
        - Read climate from Gap (deg_days, dry_days, etc.)
        - Calculate light availability from neighbor heights
        - Calculate env stress: fc_degday * fc_drought * fc_light * fc_flood (NO fc_nutrient)
@@ -28,7 +28,7 @@ Property scheme:
 - params[17]: species_id + mutable state + intermediates + renewal - private, no buffer
 - states[5]: n_demand output (for Gap to aggregate at P3) - public, no buffer
 - states_db[5]: structure (is_alive, diam, height, canopy_ht) + seedling_weight - public, double buffered
-- globals_data: species traits stored at SPECIES_BASE + species_id * 26 + trait_offset
+- species_traits[species_id][trait]: 2D species traits tensor
 """
 
 import cupy as cp
@@ -58,11 +58,8 @@ TREE_P_SEEDBANK = 14
 TREE_P_SEEDLING = 15
 TREE_P_SEEDLING_WEIGHT = 16
 
-# === Species traits in globals_data ===
-SPECIES_BASE = 2
-NUM_SPECIES_TRAITS = 26
-
-# Trait offsets within each species block
+# === Species trait column indices ===
+# Trait offsets within each species row
 TRAIT_MAX_AGE = 0
 TRAIT_MAX_DIAM = 1
 TRAIT_MAX_HT = 2
@@ -132,7 +129,7 @@ SEEDLING_AGE = 1.0
 def tree_potential_growth_step(
     tick,
     agent_index,
-    globals_data,
+    species_traits, site_configs, rangelists,
     agent_ids,
     breeds,
     locations,
@@ -145,7 +142,7 @@ def tree_potential_growth_step(
 
     Computes env_stress = fc_degday * fc_drought * fc_light * fc_flood (no nutrient).
     Stores env_stress and diam_max in params for P5 to consume same-tick.
-    Species traits are read from globals_data instead of params_tensor.
+    Species traits are read from species_traits tensor instead of params_tensor.
     """
     # ===== GET CURRENT STATE =====
     is_alive = states_db_tensor[agent_index][TREE_DB_IS_ALIVE]
@@ -155,26 +152,25 @@ def tree_potential_growth_step(
 
     # ===== POTENTIAL GROWTH: Process living trees only =====
     if is_alive > 0.5:
-        # Get species ID from params, then look up traits from globals_data
+        # Get species ID from params, then look up traits from species_traits
         species_id = params_tensor[agent_index][TREE_P_SPECIES_ID]
-        sp_base = SPECIES_BASE + int(species_id) * NUM_SPECIES_TRAITS
 
-        # Read species traits from globals_data
-        max_diam = globals_data[sp_base + TRAIT_MAX_DIAM]
-        max_ht = globals_data[sp_base + TRAIT_MAX_HT]
-        arfa_0 = globals_data[sp_base + TRAIT_ARFA_0]
-        g = globals_data[sp_base + TRAIT_G]
-        shade_tol = int(globals_data[sp_base + TRAIT_SHADE_TOL])
-        deg_day_min = globals_data[sp_base + TRAIT_DEG_DAY_MIN]
-        deg_day_opt = globals_data[sp_base + TRAIT_DEG_DAY_OPT]
-        deg_day_max = globals_data[sp_base + TRAIT_DEG_DAY_MAX]
-        wood_bulk_dens = globals_data[sp_base + TRAIT_WOOD_BULK_DENS]
-        flood_tol = int(globals_data[sp_base + TRAIT_FLOOD_TOL])
-        drought_tol = int(globals_data[sp_base + TRAIT_DROUGHT_TOL])
-        evergreen = int(globals_data[sp_base + TRAIT_EVERGREEN])
-        rootdepth = globals_data[sp_base + TRAIT_ROOTDEPTH]
-        leafdiam_a = globals_data[sp_base + TRAIT_LEAFDIAM_A]
-        leafarea_c = globals_data[sp_base + TRAIT_LEAFAREA_C]
+        # Read species traits from species_traits tensor
+        max_diam = species_traits[int(species_id)][TRAIT_MAX_DIAM]
+        max_ht = species_traits[int(species_id)][TRAIT_MAX_HT]
+        arfa_0 = species_traits[int(species_id)][TRAIT_ARFA_0]
+        g = species_traits[int(species_id)][TRAIT_G]
+        shade_tol = int(species_traits[int(species_id)][TRAIT_SHADE_TOL])
+        deg_day_min = species_traits[int(species_id)][TRAIT_DEG_DAY_MIN]
+        deg_day_opt = species_traits[int(species_id)][TRAIT_DEG_DAY_OPT]
+        deg_day_max = species_traits[int(species_id)][TRAIT_DEG_DAY_MAX]
+        wood_bulk_dens = species_traits[int(species_id)][TRAIT_WOOD_BULK_DENS]
+        flood_tol = int(species_traits[int(species_id)][TRAIT_FLOOD_TOL])
+        drought_tol = int(species_traits[int(species_id)][TRAIT_DROUGHT_TOL])
+        evergreen = int(species_traits[int(species_id)][TRAIT_EVERGREEN])
+        rootdepth = species_traits[int(species_id)][TRAIT_ROOTDEPTH]
+        leafdiam_a = species_traits[int(species_id)][TRAIT_LEAFDIAM_A]
+        leafarea_c = species_traits[int(species_id)][TRAIT_LEAFAREA_C]
 
         # Get current tree structure from states_db
         diam = states_db_tensor[agent_index][TREE_DB_DIAM]

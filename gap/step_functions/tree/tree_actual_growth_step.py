@@ -2,11 +2,11 @@
 Tree actual growth step function for GGap model (Priority 6).
 Handles living tree growth + mortality + litter and free slot activation.
 
-Species traits are now read from globals_data instead of params_tensor.
+Species traits are now read from species_traits tensor instead of params_tensor.
 
 Execution Flow:
     1. FINAL GROWTH (living trees, is_alive > 0.5):
-       - Read species_id from params[0], look up traits in globals_data
+       - Read species_id from params[0], look up traits in species_traits
        - Read env_stress and diam_max from own params (written at P2, same tick)
        - Read n_supply_ratio from Gap neighbor states (written at P4, same tick)
        - Compute fc_nutrient from n_supply_ratio + lownutr_tol
@@ -18,14 +18,14 @@ Execution Flow:
     2. DORMANT ACTIVATION (free slots, is_alive == 0):
        - Read recruit_prob from Gap (written at P6, same tick)
        - Select species from templates weighted by seedling_weight
-       - Copy SPECIES_ID only, read traits from globals for initialization
+       - Copy SPECIES_ID only, read traits from species_traits for initialization
        - Set is_alive = 1.0 (visible next tick via double buffer)
 
     3. TEMPLATES (is_alive < -0.5): skipped
 
 Property scheme:
 - params[17]: species_id[0], mutable state [1-16]
-- globals_data[SPECIES_BASE + species_id * 26 + trait]: species traits
+- species_traits[species_id][trait]: 2D species traits tensor
 - states[5]: writes litter_c/n, n_consumed
 - states_db[5]: writes is_alive, diam, height, canopy_ht
 """
@@ -58,9 +58,7 @@ TREE_P_SEEDBANK = 14
 TREE_P_SEEDLING = 15
 TREE_P_SEEDLING_WEIGHT = 16
 
-# === Species traits in globals_data ===
-SPECIES_BASE = 2
-NUM_SPECIES_TRAITS = 26
+# === Species trait column indices ===
 # Trait offsets
 TRAIT_MAX_AGE = 0
 TRAIT_MAX_DIAM = 1
@@ -135,7 +133,7 @@ SEEDLING_AGE = 1.0
 def tree_actual_growth_step(
     tick,
     agent_index,
-    globals_data,
+    species_traits, site_configs, rangelists,
     agent_ids,
     breeds,
     locations,
@@ -160,21 +158,20 @@ def tree_actual_growth_step(
 
     # ===== ACTUAL GROWTH + MORTALITY: Process living trees only =====
     if is_alive > 0.5:
-        # Get species ID and compute globals base offset
+        # Get species ID
         species_id = int(params_tensor[agent_index][TREE_P_SPECIES_ID])
-        sp_base = SPECIES_BASE + species_id * NUM_SPECIES_TRAITS
 
-        # Get species parameters from globals_data
-        max_age = globals_data[sp_base + TRAIT_MAX_AGE]
-        max_diam = globals_data[sp_base + TRAIT_MAX_DIAM]
-        max_ht = globals_data[sp_base + TRAIT_MAX_HT]
-        arfa_0 = globals_data[sp_base + TRAIT_ARFA_0]
-        wood_bulk_dens = globals_data[sp_base + TRAIT_WOOD_BULK_DENS]
-        lownutr_tol = int(globals_data[sp_base + TRAIT_LOWNUTR_TOL])
-        evergreen = int(globals_data[sp_base + TRAIT_EVERGREEN])
-        rootdepth = globals_data[sp_base + TRAIT_ROOTDEPTH]
-        leafdiam_a = globals_data[sp_base + TRAIT_LEAFDIAM_A]
-        leafarea_c = globals_data[sp_base + TRAIT_LEAFAREA_C]
+        # Get species parameters from species_traits tensor
+        max_age = species_traits[species_id][TRAIT_MAX_AGE]
+        max_diam = species_traits[species_id][TRAIT_MAX_DIAM]
+        max_ht = species_traits[species_id][TRAIT_MAX_HT]
+        arfa_0 = species_traits[species_id][TRAIT_ARFA_0]
+        wood_bulk_dens = species_traits[species_id][TRAIT_WOOD_BULK_DENS]
+        lownutr_tol = int(species_traits[species_id][TRAIT_LOWNUTR_TOL])
+        evergreen = int(species_traits[species_id][TRAIT_EVERGREEN])
+        rootdepth = species_traits[species_id][TRAIT_ROOTDEPTH]
+        leafdiam_a = species_traits[species_id][TRAIT_LEAFDIAM_A]
+        leafarea_c = species_traits[species_id][TRAIT_LEAFAREA_C]
 
         # Get current tree structure from states_db (read buffer = previous tick values)
         diam = states_db_tensor[agent_index][TREE_DB_DIAM]
@@ -378,9 +375,9 @@ def tree_actual_growth_step(
         else:
             # ===== CHECK MORTALITY (GAPpy: two independent survival checks) =====
 
-            # Read species-specific mortality tolerances from globals
-            stress_tol = int(globals_data[sp_base + TRAIT_STRESS_TOL])
-            age_tol = int(globals_data[sp_base + TRAIT_AGE_TOL])
+            # Read species-specific mortality tolerances from species_traits
+            stress_tol = int(species_traits[species_id][TRAIT_STRESS_TOL])
+            age_tol = int(species_traits[species_id][TRAIT_AGE_TOL])
 
             # --- Age survival (GAPpy tree.py:178-202) ---
             # age_tol (1-3) selects from [4.605, 6.908, 11.51]
@@ -395,7 +392,7 @@ def tree_actual_growth_step(
             if age_k == 2:
                 age_check = 11.51
             age_mort_prob = age_check / max_age
-            age_rand = rand_uniform_philox(0, tick, agent_index, 1)
+            age_rand = rand_uniform_philox(tick, agent_index, 1)
             age_dies = 0
             if age_rand < age_mort_prob:
                 age_dies = 1
@@ -418,7 +415,7 @@ def tree_actual_growth_step(
                 stress_check = 0.40
             if stress_k == 4:
                 stress_check = 0.43
-            stress_rand = rand_uniform_philox(0, tick, agent_index, 2)
+            stress_rand = rand_uniform_philox(tick, agent_index, 2)
             growth_dies = 0
             if mort_marker > 0.5 and stress_rand < stress_check:
                 growth_dies = 1
@@ -516,7 +513,7 @@ def tree_actual_growth_step(
         # recruit_prob = nrenew / free_slots (from P6), so
         # expected activations = free_slots * recruit_prob = nrenew
         if recruit_prob > 0.0:
-            slot_priority = rand_uniform_philox(0, tick, agent_index, int(recruit_rand_seed) * 97 + 3)
+            slot_priority = rand_uniform_philox(tick, agent_index, int(recruit_rand_seed) * 97 + 3)
 
             if slot_priority < recruit_prob:
                 # D3 fix: CDF-based species selection (matches GAPpy model.py:917-938).
@@ -537,7 +534,7 @@ def tree_actual_growth_step(
                 # (matches GAPpy: normalize probs, build CDF, draw uniform)
                 selected_neighbor_idx = -1
                 if total_weight > 1e-10:
-                    rand_target = rand_uniform_philox(0, tick, agent_index, int(recruit_rand_seed) * 97 + 4) * total_weight
+                    rand_target = rand_uniform_philox(tick, agent_index, int(recruit_rand_seed) * 97 + 4) * total_weight
                     cum_weight = 0.0
                     last_template_idx = -1
                     i = 0
@@ -558,27 +555,26 @@ def tree_actual_growth_step(
                         selected_neighbor_idx = last_template_idx
 
                 if selected_neighbor_idx >= 0:
-                    # Copy only SPECIES_ID from template (traits are in globals_data)
+                    # Copy only SPECIES_ID from template (traits are in species_traits)
                     params_tensor[agent_index][TREE_P_SPECIES_ID] = params_tensor[selected_neighbor_idx][TREE_P_SPECIES_ID]
 
-                    # Look up species traits from globals_data
+                    # Look up species traits from species_traits tensor
                     sel_species_id = int(params_tensor[agent_index][TREE_P_SPECIES_ID])
-                    sel_sp_base = SPECIES_BASE + sel_species_id * NUM_SPECIES_TRAITS
 
                     # Seedling diameter: N(1.5, 1) clamped [0.5, 2.5]
                     # Box-Muller normal, z in [-1, 1] -> diam in [0.5, 2.5]
-                    seedling_diam = 1.5 + rand_normal_bounded(0, tick, agent_index, int(recruit_rand_seed) * 97 + 5, -1.0, 1.0)
+                    seedling_diam = 1.5 + rand_normal_bounded(tick, agent_index, int(recruit_rand_seed) * 97 + 5, -1.0, 1.0)
 
                     # Calculate initial height from seedling diameter (Forska equation)
-                    max_ht = globals_data[sel_sp_base + TRAIT_MAX_HT]
-                    arfa_0 = globals_data[sel_sp_base + TRAIT_ARFA_0]
+                    max_ht = species_traits[sel_species_id][TRAIT_MAX_HT]
+                    arfa_0 = species_traits[sel_species_id][TRAIT_ARFA_0]
                     delta_ht = max_ht - STD_HT
                     seedling_ht = STD_HT + delta_ht * (1.0 - cp.exp(-arfa_0 * seedling_diam / delta_ht))
 
                     # Calculate initial biomass from diameter (GAPpy tree.py biomass_c)
                     # GAPpy model.py:951 sets canopy_ht=1.0 for seedlings (not STD_HT)
-                    s_wbd = globals_data[sel_sp_base + TRAIT_WOOD_BULK_DENS]
-                    s_rdepth = globals_data[sel_sp_base + TRAIT_ROOTDEPTH]
+                    s_wbd = species_traits[sel_species_id][TRAIT_WOOD_BULK_DENS]
+                    s_rdepth = species_traits[sel_species_id][TRAIT_ROOTDEPTH]
                     s_canopy_ht = 1.0  # GAPpy model.py:951
                     # Basal diameter (canopy_ht=0 internally, GAPpy tree.py:151)
                     s_bd = seedling_diam
@@ -603,10 +599,10 @@ def tree_actual_growth_step(
 
                     # Seedling N consumed (GAPpy model.py:962-977)
                     # Note: conifer uses leaf_bm/C_N (NOT * CON_LEAF_B, unlike growth)
-                    seedling_lda = globals_data[sel_sp_base + TRAIT_LEAFDIAM_A]
-                    seedling_lca = globals_data[sel_sp_base + TRAIT_LEAFAREA_C]
+                    seedling_lda = species_traits[sel_species_id][TRAIT_LEAFDIAM_A]
+                    seedling_lca = species_traits[sel_species_id][TRAIT_LEAFAREA_C]
                     seedling_leaf_bm = s_dc * s_dc * seedling_lda * seedling_lca * 2.0 * 1000.0
-                    seedling_evergreen = int(globals_data[sel_sp_base + TRAIT_EVERGREEN])
+                    seedling_evergreen = int(species_traits[sel_species_id][TRAIT_EVERGREEN])
                     if seedling_evergreen > 0:
                         n_consumed = seedling_leaf_bm / CON_LEAF_C_N + seedling_biomC / STEM_C_N
                         # Seedling litter (GAPpy model.py:970-971): leaf_bm * (leaf_b - 1.0)

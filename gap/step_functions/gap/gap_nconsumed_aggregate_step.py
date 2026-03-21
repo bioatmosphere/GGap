@@ -33,7 +33,7 @@ TREE_DB_IS_ALIVE = 0
 def gap_nconsumed_aggregate_step(
     tick,
     agent_index,
-    globals_data,
+    species_traits, site_configs, rangelists,
     agent_ids,
     breeds,
     locations,

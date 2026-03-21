@@ -2,7 +2,7 @@
 Gap litter aggregate step function for GGap model (Priority 0).
 First step in the tick - aggregates litter from previous tick's tree output.
 
-Species traits (EVERGREEN, LEAFDIAM_A, MAX_DIAM) now read from globals_data
+Species traits (EVERGREEN, LEAFDIAM_A, MAX_DIAM) now read from species_traits
 via the tree's species_id, instead of from tree params.
 
 Execution Flow:
@@ -41,9 +41,6 @@ MAX_SPECIES = 50
 # === Tree params[17] (new layout) ===
 TREE_P_SPECIES_ID = 0
 
-# === Globals layout for species traits ===
-SPECIES_BASE = 2
-NUM_SPECIES_TRAITS = 26
 TRAIT_MAX_DIAM = 1
 TRAIT_EVERGREEN = 16
 TRAIT_LEAFDIAM_A = 23
@@ -68,7 +65,7 @@ PLOTSIZE = 500.0
 def gap_litter_aggregate_step(
     tick,
     agent_index,
-    globals_data,
+    species_traits, site_configs, rangelists,
     agent_ids,
     breeds,
     locations,
@@ -121,10 +118,9 @@ def gap_litter_aggregate_step(
 
                 # Read species traits from globals
                 n_species_id = int(params_tensor[neighbor_idx][TREE_P_SPECIES_ID])
-                n_sp_base = SPECIES_BASE + n_species_id * NUM_SPECIES_TRAITS
-                n_leafdiam_a = globals_data[n_sp_base + TRAIT_LEAFDIAM_A]
-                n_evergreen = int(globals_data[n_sp_base + TRAIT_EVERGREEN])
-                n_max_diam = globals_data[n_sp_base + TRAIT_MAX_DIAM]
+                n_leafdiam_a = species_traits[int(n_species_id)][TRAIT_LEAFDIAM_A]
+                n_evergreen = int(species_traits[int(n_species_id)][TRAIT_EVERGREEN])
+                n_max_diam = species_traits[int(n_species_id)][TRAIT_MAX_DIAM]
 
                 # Canopy diameter
                 n_dc = n_diam

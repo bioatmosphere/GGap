@@ -44,7 +44,7 @@ TREE_DB_IS_ALIVE = 0
 def gap_recruit_aggregate_step(
     tick,
     agent_index,
-    globals_data,
+    species_traits, site_configs, rangelists,
     agent_ids,
     breeds,
     locations,
@@ -118,7 +118,7 @@ def gap_recruit_aggregate_step(
         recruit_prob = num_to_recruit / free_slot_tree_count
 
     # Generate pseudo-random seed for species selection
-    recruit_rand_seed = rand_uniform_philox(0, tick, agent_index, 9) * 10000.0
+    recruit_rand_seed = rand_uniform_philox(tick, agent_index, 9) * 10000.0
 
     # Suppress recruitment during fire/wind recovery (GAPpy: can_recruit=False
     # when numtrees==0 and fire/wind counter > 0; nrenew=0 even at counter==1).

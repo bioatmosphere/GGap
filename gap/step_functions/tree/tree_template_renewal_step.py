@@ -24,7 +24,7 @@ Execution Flow:
 
 Property scheme:
 - params[17]: reads species_id, mutable seedbank/seedling; writes seedbank/seedling/regrowth/weight
-- species traits read from globals_data[SPECIES_BASE + species_id * 26 + trait]
+- species traits read from species_traits[species_id][trait]
 - states[5]: not used by templates
 - states_db[5]: reads is_alive, reads old seedling_weight for decrement
 """
@@ -44,10 +44,8 @@ TREE_P_SEEDBANK = 14
 TREE_P_SEEDLING = 15
 TREE_P_SEEDLING_WEIGHT = 16     # Non-buffered seedling weight (P7 free slots read same tick)
 
-# === Species traits in globals_data ===
-SPECIES_BASE = 2
-NUM_SPECIES_TRAITS = 26
-# Trait offsets (globals_data[SPECIES_BASE + species_id * 26 + offset])
+# === Species trait column indices ===
+# Trait offsets (species_traits[species_id][offset])
 TRAIT_SHADE_TOL = 5
 TRAIT_DEG_DAY_MIN = 6
 TRAIT_DEG_DAY_OPT = 7
@@ -93,7 +91,7 @@ PLOTSIZE = 500.0  # GAPpy parameters.py:59 — plot area m² (also max trees per
 def tree_template_renewal_step(
     tick,
     agent_index,
-    globals_data,
+    species_traits, site_configs, rangelists,
     agent_ids,
     breeds,
     locations,
@@ -154,24 +152,23 @@ def tree_template_renewal_step(
                 cum_con_lai = states_tensor[neighbor_idx][GAP_S_CUM_CON_LAI_BASE + 1]
             i = i + 1
 
-        # Read species_id from params, then look up traits from globals_data
+        # Read species_id from params, then look up traits from species_traits tensor
         species_id = params_tensor[agent_index][TREE_P_SPECIES_ID]
-        sp_base = SPECIES_BASE + int(species_id) * NUM_SPECIES_TRAITS
 
-        shade_tol = int(globals_data[sp_base + TRAIT_SHADE_TOL])
-        deg_day_min = globals_data[sp_base + TRAIT_DEG_DAY_MIN]
-        deg_day_opt = globals_data[sp_base + TRAIT_DEG_DAY_OPT]
-        deg_day_max = globals_data[sp_base + TRAIT_DEG_DAY_MAX]
-        invader_val = globals_data[sp_base + TRAIT_INVADER]
-        seed_val = globals_data[sp_base + TRAIT_SEED]
-        sprout_val = globals_data[sp_base + TRAIT_SPROUT]
-        lownutr_tol = int(globals_data[sp_base + TRAIT_LOWNUTR_TOL])
-        flood_tol = int(globals_data[sp_base + TRAIT_FLOOD_TOL])
-        drought_tol = int(globals_data[sp_base + TRAIT_DROUGHT_TOL])
-        evergreen = int(globals_data[sp_base + TRAIT_EVERGREEN])
-        fire_tol = int(globals_data[sp_base + TRAIT_FIRE_TOL])
-        seed_surv = globals_data[sp_base + TRAIT_SEED_SURV]
-        seedling_lg = globals_data[sp_base + TRAIT_SEEDLING_LG]
+        shade_tol = int(species_traits[int(species_id)][TRAIT_SHADE_TOL])
+        deg_day_min = species_traits[int(species_id)][TRAIT_DEG_DAY_MIN]
+        deg_day_opt = species_traits[int(species_id)][TRAIT_DEG_DAY_OPT]
+        deg_day_max = species_traits[int(species_id)][TRAIT_DEG_DAY_MAX]
+        invader_val = species_traits[int(species_id)][TRAIT_INVADER]
+        seed_val = species_traits[int(species_id)][TRAIT_SEED]
+        sprout_val = species_traits[int(species_id)][TRAIT_SPROUT]
+        lownutr_tol = int(species_traits[int(species_id)][TRAIT_LOWNUTR_TOL])
+        flood_tol = int(species_traits[int(species_id)][TRAIT_FLOOD_TOL])
+        drought_tol = int(species_traits[int(species_id)][TRAIT_DROUGHT_TOL])
+        evergreen = int(species_traits[int(species_id)][TRAIT_EVERGREEN])
+        fire_tol = int(species_traits[int(species_id)][TRAIT_FIRE_TOL])
+        seed_surv = species_traits[int(species_id)][TRAIT_SEED_SURV]
+        seedling_lg = species_traits[int(species_id)][TRAIT_SEEDLING_LG]
 
         # Read mutable renewal state from params
         seedbank = params_tensor[agent_index][TREE_P_SEEDBANK]

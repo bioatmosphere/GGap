@@ -40,7 +40,7 @@ UNIT_CONV = 0.02
 def site_nutrient_step(
     tick,
     agent_index,
-    globals_data,
+    species_traits, site_configs, rangelists,
     agent_ids,
     breeds,
     locations,

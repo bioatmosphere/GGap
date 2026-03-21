@@ -46,7 +46,7 @@ SITE_S_WIND_INTENSITY = 7
 def gap_climate_relay_step(
     tick,
     agent_index,
-    globals_data,
+    species_traits, site_configs, rangelists,
     agent_ids,
     breeds,
     locations,
