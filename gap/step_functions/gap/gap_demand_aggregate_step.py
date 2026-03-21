@@ -17,32 +17,10 @@ Execution Flow:
 import cupy as cp  # noqa: F401
 from cupyx import jit
 
-# === Breed IDs ===
-BREED_TREE = 0
-BREED_GAP = 1
-BREED_SITE = 2
-
-# === Gap params[2] (private) ===
-GAP_P_TOTAL_N_DEMAND = 1
-
-# === Gap states (public, no buffer) ===
-GAP_S_AVAIL_N = 2             # avail_n (copied from Site at P2 climate relay)
-GAP_S_N_SUPPLY_RATIO = 3
-GAP_S_LITTER_ACCUM_C = 4
-GAP_S_LITTER_ACCUM_N = 5
-GAP_S_TOTAL_N_DEMAND = 11     # Public slot for Site to read
-GAP_S_TOTAL_LAI = 12          # Per-gap normalized LAI (from P0)
-GAP_S_N_CONSUMED = 13         # N consumed by trees (written at P8, read at P9)
-
-# === Tree states[5] (for reading n_demand) ===
-TREE_S_N_DEMAND = 2
-
-# === Tree states_db[5] (for checking alive status) ===
-TREE_DB_IS_ALIVE = 0
-
-# Unit conversion: kg (tree-level) → tn/ha (soil pools)
-# = HEC_TO_M2 / plotsize / 1000 = 10000 / 500 / 1000
-UNIT_CONV = 0.02
+from gap.constants import (
+    Breed, TreeS, TreeDB, GapP, GapS,
+    UNIT_CONV,
+)
 
 
 @jit.rawkernel(device="cuda")
@@ -72,38 +50,38 @@ def gap_demand_aggregate_step(
         neighbor_idx = int(neighbor_indices[i])
         neighbor_breed = int(breeds[neighbor_idx])
 
-        if neighbor_breed == BREED_TREE:
-            tree_alive = states_db_tensor[neighbor_idx][TREE_DB_IS_ALIVE]
+        if neighbor_breed == Breed.TREE:
+            tree_alive = states_db_tensor[neighbor_idx][TreeDB.IS_ALIVE]
             if tree_alive > 0.5:
                 # Living tree: sum N demand
-                tree_n_demand = states_tensor[neighbor_idx][TREE_S_N_DEMAND]
+                tree_n_demand = states_tensor[neighbor_idx][TreeS.N_DEMAND]
                 total_n_dem = total_n_dem + tree_n_demand
 
         i = i + 1
 
     # Write to params (internal)
-    params_tensor[agent_index][GAP_P_TOTAL_N_DEMAND] = total_n_dem
+    params_tensor[agent_index][GapP.TOTAL_N_DEMAND] = total_n_dem
 
     # Write to states (public)
-    states_tensor[agent_index][GAP_S_TOTAL_N_DEMAND] = total_n_dem
+    states_tensor[agent_index][GapS.TOTAL_N_DEMAND] = total_n_dem
 
     # --- Compute per-gap N supply ratio (was P5 gap_sync_step) ---
     # GAPpy computes N_supply_demand per-plot (model.py:475-488):
     #   N_req = max(N_req * HEC_TO_M2 / plotsize, 0.00001)
     #   N_supply_demand = site.soil.avail_N / N_req
-    avail_n = states_tensor[agent_index][GAP_S_AVAIL_N]
+    avail_n = states_tensor[agent_index][GapS.AVAIL_N]
     gap_n_demand_scaled = total_n_dem * UNIT_CONV
     gap_n_supply_ratio = 1.0
     if gap_n_demand_scaled > 0.00001:
         gap_n_supply_ratio = avail_n / gap_n_demand_scaled
         if gap_n_supply_ratio > 1.0:
             gap_n_supply_ratio = 1.0
-    states_tensor[agent_index][GAP_S_N_SUPPLY_RATIO] = gap_n_supply_ratio
+    states_tensor[agent_index][GapS.N_SUPPLY_RATIO] = gap_n_supply_ratio
 
     # Clear accumulators (consumed by P1, P0 rewrites next tick)
-    states_tensor[agent_index][GAP_S_LITTER_ACCUM_C] = 0.0
-    states_tensor[agent_index][GAP_S_LITTER_ACCUM_N] = 0.0
-    states_tensor[agent_index][GAP_S_TOTAL_LAI] = 0.0
-    states_tensor[agent_index][GAP_S_N_CONSUMED] = 0.0
+    states_tensor[agent_index][GapS.LITTER_ACCUM_C] = 0.0
+    states_tensor[agent_index][GapS.LITTER_ACCUM_N] = 0.0
+    states_tensor[agent_index][GapS.TOTAL_LAI] = 0.0
+    states_tensor[agent_index][GapS.N_CONSUMED] = 0.0
     # Note: NUM_TO_RECRUIT and RECRUIT_RAND_SEED are NOT cleared here.
     # Trees read them at P7 (free slot activation). P6 overwrites them each tick.

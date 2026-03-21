@@ -20,45 +20,12 @@ Execution Flow:
 import cupy as cp  # noqa: F401
 from cupyx import jit
 
-# === Breed IDs ===
-BREED_TREE = 0
-BREED_GAP = 1
-BREED_SITE = 2
+from gap.constants import (
+    Breed, Trait, TreeP, TreeS, TreeDB, GapS,
+    STD_HT, PLOTSIZE, MAX_HEIGHT_BINS,
+)
 
-# === Gap states (public, no buffer) ===
-GAP_S_LITTER_ACCUM_C = 4
-GAP_S_LITTER_ACCUM_N = 5
-GAP_S_TOTAL_SEEDLING_WEIGHT = 9
-GAP_S_TOTAL_LAI = 12
-
-# Pre-aggregated light competition bins (P3/P5 read O(1))
-GAP_S_CUM_DEC_LAI_BASE = 16
-GAP_S_CUM_CON_LAI_BASE = 66
-GAP_S_AVAIL_SPEC_BASE = 116
-MAX_HEIGHT_BINS = 50
 MAX_SPECIES = 50
-
-# === Tree params[17] (new layout) ===
-TREE_P_SPECIES_ID = 0
-
-TRAIT_MAX_DIAM = 1
-TRAIT_EVERGREEN = 16
-TRAIT_LEAFDIAM_A = 23
-
-# === Tree states[5] (for reading litter from Tree neighbors) ===
-TREE_S_LITTER_C = 0
-TREE_S_LITTER_N = 1
-
-# === Tree states_db[5] (for checking alive status + dimensions + seedling weight) ===
-TREE_DB_IS_ALIVE = 0
-TREE_DB_DIAM = 1
-TREE_DB_HEIGHT = 2
-TREE_DB_CANOPY_HT = 3
-TREE_DB_SEEDLING_WEIGHT = 4
-
-# === Constants ===
-STD_HT = 1.3
-PLOTSIZE = 500.0
 
 
 @jit.rawkernel(device="cuda")
@@ -88,10 +55,10 @@ def gap_litter_aggregate_step(
 
     # --- 1. Zero the 150 new accumulator slots (3 × 50) ---
     for k in range(MAX_HEIGHT_BINS):
-        states_tensor[agent_index][GAP_S_CUM_DEC_LAI_BASE + k] = 0.0
-        states_tensor[agent_index][GAP_S_CUM_CON_LAI_BASE + k] = 0.0
+        states_tensor[agent_index][GapS.CUM_DEC_LAI_BASE + k] = 0.0
+        states_tensor[agent_index][GapS.CUM_CON_LAI_BASE + k] = 0.0
     for k in range(MAX_SPECIES):
-        states_tensor[agent_index][GAP_S_AVAIL_SPEC_BASE + k] = 0.0
+        states_tensor[agent_index][GapS.AVAIL_SPEC_BASE + k] = 0.0
 
     # --- 2. Loop through Tree neighbors ---
     neighbor_indices = locations[agent_index]
@@ -100,27 +67,27 @@ def gap_litter_aggregate_step(
         neighbor_idx = int(neighbor_indices[i])
         neighbor_breed = int(breeds[neighbor_idx])
 
-        if neighbor_breed == BREED_TREE:
-            tree_alive = states_db_tensor[neighbor_idx][TREE_DB_IS_ALIVE]
+        if neighbor_breed == Breed.TREE:
+            tree_alive = states_db_tensor[neighbor_idx][TreeDB.IS_ALIVE]
 
             # Read litter from ALL trees (alive + recently dead)
             if tree_alive > -0.5:
-                tree_litter_c = states_tensor[neighbor_idx][TREE_S_LITTER_C]
-                tree_litter_n = states_tensor[neighbor_idx][TREE_S_LITTER_N]
+                tree_litter_c = states_tensor[neighbor_idx][TreeS.LITTER_C]
+                tree_litter_n = states_tensor[neighbor_idx][TreeS.LITTER_N]
                 total_litter_c = total_litter_c + tree_litter_c
                 total_litter_n = total_litter_n + tree_litter_n
 
             if tree_alive > 0.5:
                 # === Living tree: compute LAI and bin by height layer ===
-                n_diam = states_db_tensor[neighbor_idx][TREE_DB_DIAM]
-                n_height = states_db_tensor[neighbor_idx][TREE_DB_HEIGHT]
-                n_canopy_ht = states_db_tensor[neighbor_idx][TREE_DB_CANOPY_HT]
+                n_diam = states_db_tensor[neighbor_idx][TreeDB.DIAM]
+                n_height = states_db_tensor[neighbor_idx][TreeDB.HEIGHT]
+                n_canopy_ht = states_db_tensor[neighbor_idx][TreeDB.CANOPY_HT]
 
                 # Read species traits from globals
-                n_species_id = int(params_tensor[neighbor_idx][TREE_P_SPECIES_ID])
-                n_leafdiam_a = species_traits[int(n_species_id)][TRAIT_LEAFDIAM_A]
-                n_evergreen = int(species_traits[int(n_species_id)][TRAIT_EVERGREEN])
-                n_max_diam = species_traits[int(n_species_id)][TRAIT_MAX_DIAM]
+                n_species_id = int(params_tensor[neighbor_idx][TreeP.SPECIES_ID])
+                n_leafdiam_a = species_traits[int(n_species_id)][Trait.LEAFDIAM_A]
+                n_evergreen = int(species_traits[int(n_species_id)][Trait.EVERGREEN])
+                n_max_diam = species_traits[int(n_species_id)][Trait.MAX_DIAM]
 
                 # Canopy diameter
                 n_dc = n_diam
@@ -154,20 +121,20 @@ def gap_litter_aggregate_step(
                     bin_idx = canht_int + layer
                     if bin_idx >= 0 and bin_idx < MAX_HEIGHT_BINS:
                         if n_evergreen > 0:
-                            states_tensor[agent_index][GAP_S_CUM_DEC_LAI_BASE + bin_idx] = states_tensor[agent_index][GAP_S_CUM_DEC_LAI_BASE + bin_idx] + lai_per_layer
-                            states_tensor[agent_index][GAP_S_CUM_CON_LAI_BASE + bin_idx] = states_tensor[agent_index][GAP_S_CUM_CON_LAI_BASE + bin_idx] + lai_per_layer
+                            states_tensor[agent_index][GapS.CUM_DEC_LAI_BASE + bin_idx] = states_tensor[agent_index][GapS.CUM_DEC_LAI_BASE + bin_idx] + lai_per_layer
+                            states_tensor[agent_index][GapS.CUM_CON_LAI_BASE + bin_idx] = states_tensor[agent_index][GapS.CUM_CON_LAI_BASE + bin_idx] + lai_per_layer
                         else:
-                            states_tensor[agent_index][GAP_S_CUM_DEC_LAI_BASE + bin_idx] = states_tensor[agent_index][GAP_S_CUM_DEC_LAI_BASE + bin_idx] + lai_per_layer
-                            states_tensor[agent_index][GAP_S_CUM_CON_LAI_BASE + bin_idx] = states_tensor[agent_index][GAP_S_CUM_CON_LAI_BASE + bin_idx] + lai_per_layer * 0.8
+                            states_tensor[agent_index][GapS.CUM_DEC_LAI_BASE + bin_idx] = states_tensor[agent_index][GapS.CUM_DEC_LAI_BASE + bin_idx] + lai_per_layer
+                            states_tensor[agent_index][GapS.CUM_CON_LAI_BASE + bin_idx] = states_tensor[agent_index][GapS.CUM_CON_LAI_BASE + bin_idx] + lai_per_layer * 0.8
 
                 # Check avail_spec: mature tree of this species
                 if n_species_id >= 0 and n_species_id < MAX_SPECIES:
                     if n_diam > n_max_diam * 0.05:
-                        states_tensor[agent_index][GAP_S_AVAIL_SPEC_BASE + n_species_id] = 1.0
+                        states_tensor[agent_index][GapS.AVAIL_SPEC_BASE + n_species_id] = 1.0
 
             elif tree_alive < -0.5:
                 # Template: read seedling weight for proportional decrement
-                template_weight = states_db_tensor[neighbor_idx][TREE_DB_SEEDLING_WEIGHT]
+                template_weight = states_db_tensor[neighbor_idx][TreeDB.SEEDLING_WEIGHT]
                 total_seedling_weight = total_seedling_weight + template_weight
 
         i = i + 1
@@ -175,14 +142,14 @@ def gap_litter_aggregate_step(
     # --- 3. Top-down cumulative prefix sum ---
     for k in range(49):
         layer = 48 - k
-        states_tensor[agent_index][GAP_S_CUM_DEC_LAI_BASE + layer] = states_tensor[agent_index][GAP_S_CUM_DEC_LAI_BASE + layer] + states_tensor[agent_index][GAP_S_CUM_DEC_LAI_BASE + layer + 1]
-        states_tensor[agent_index][GAP_S_CUM_CON_LAI_BASE + layer] = states_tensor[agent_index][GAP_S_CUM_CON_LAI_BASE + layer] + states_tensor[agent_index][GAP_S_CUM_CON_LAI_BASE + layer + 1]
+        states_tensor[agent_index][GapS.CUM_DEC_LAI_BASE + layer] = states_tensor[agent_index][GapS.CUM_DEC_LAI_BASE + layer] + states_tensor[agent_index][GapS.CUM_DEC_LAI_BASE + layer + 1]
+        states_tensor[agent_index][GapS.CUM_CON_LAI_BASE + layer] = states_tensor[agent_index][GapS.CUM_CON_LAI_BASE + layer] + states_tensor[agent_index][GapS.CUM_CON_LAI_BASE + layer + 1]
 
     # --- 4. Write aggregated outputs ---
-    states_tensor[agent_index][GAP_S_LITTER_ACCUM_C] = total_litter_c
-    states_tensor[agent_index][GAP_S_LITTER_ACCUM_N] = total_litter_n
+    states_tensor[agent_index][GapS.LITTER_ACCUM_C] = total_litter_c
+    states_tensor[agent_index][GapS.LITTER_ACCUM_N] = total_litter_n
 
     gap_lai = total_lai / PLOTSIZE
-    states_tensor[agent_index][GAP_S_TOTAL_LAI] = gap_lai
+    states_tensor[agent_index][GapS.TOTAL_LAI] = gap_lai
 
-    states_tensor[agent_index][GAP_S_TOTAL_SEEDLING_WEIGHT] = total_seedling_weight
+    states_tensor[agent_index][GapS.TOTAL_SEEDLING_WEIGHT] = total_seedling_weight

@@ -58,15 +58,9 @@ from gap.step_functions.tree.tree_actual_growth_step import tree_actual_growth_s
 from gap.step_functions.gap.gap_nconsumed_aggregate_step import gap_nconsumed_aggregate_step
 from gap.step_functions.site.site_nbalance_step import site_nbalance_step
 
-# Import globals layout
-from gap.globals_layout import (
-    NUM_SPECIES_TRAITS, NUM_SITE_CONFIGS,
-    CFG_TMIN_BASE, CFG_TMAX_BASE, CFG_PRCP_BASE,
-    CFG_FIELD_CAP, CFG_PERM_WP, CFG_SLOPE, CFG_SIGMA, CFG_LAI,
-    CFG_LATITUDE, CFG_LONGITUDE, CFG_RAIN_N,
-    CFG_FIRE_PROB, CFG_WIND_PROB, CFG_BASE_H,
-    CFG_TMIN_STD_BASE, CFG_TMAX_STD_BASE, CFG_PRCP_STD_BASE,
-    CFG_TMP_LAPSE_BASE, CFG_PRCP_LAPSE_BASE,
+# Import constants
+from gap.constants import (
+    Cfg, NUM_SPECIES_TRAITS, NUM_SITE_CONFIGS,
 )
 
 CURRENT_DIR = Path(__file__).resolve().parent
@@ -518,36 +512,36 @@ class GAPModel(Model):
                 tmax_val -= (altitude - elevation) * tmp_lapse[i] * 0.01
                 prcp_val = max(0.0, prcp_val + (altitude - elevation) * prcp_lapse[i] * 0.001)
 
-            cfg[CFG_TMIN_BASE + i] = tmin_val
-            cfg[CFG_TMAX_BASE + i] = tmax_val
-            cfg[CFG_PRCP_BASE + i] = prcp_val
+            cfg[Cfg.TMIN_BASE + i] = tmin_val
+            cfg[Cfg.TMAX_BASE + i] = tmax_val
+            cfg[Cfg.PRCP_BASE + i] = prcp_val
 
         # Soil/site params
         soil_rootdepth = 0.8
-        cfg[CFG_FIELD_CAP] = float(site_row['soilA_field_cap']) * soil_rootdepth
-        cfg[CFG_PERM_WP] = float(site_row['soilA_perm_wp']) * soil_rootdepth
-        cfg[CFG_SLOPE] = float(site_row['slope'])
-        cfg[CFG_SIGMA] = float(site_row['sigma'])
-        cfg[CFG_LAI] = float(site_row['lai'])
-        cfg[CFG_LATITUDE] = float(site_row['latitude'])
-        cfg[CFG_LONGITUDE] = float(site_row['longitude'])
-        cfg[CFG_RAIN_N] = 0.0
+        cfg[Cfg.FIELD_CAP] = float(site_row['soilA_field_cap']) * soil_rootdepth
+        cfg[Cfg.PERM_WP] = float(site_row['soilA_perm_wp']) * soil_rootdepth
+        cfg[Cfg.SLOPE] = float(site_row['slope'])
+        cfg[Cfg.SIGMA] = float(site_row['sigma'])
+        cfg[Cfg.LAI] = float(site_row['lai'])
+        cfg[Cfg.LATITUDE] = float(site_row['latitude'])
+        cfg[Cfg.LONGITUDE] = float(site_row['longitude'])
+        cfg[Cfg.RAIN_N] = 0.0
 
-        cfg[CFG_FIRE_PROB] = float(site_row.get('fire_prob', 0)) / 1000.0
-        cfg[CFG_WIND_PROB] = float(site_row.get('wind_prob', 0)) / 1000.0
-        cfg[CFG_BASE_H] = float(site_row.get('soil_base_h', 70.0))
+        cfg[Cfg.FIRE_PROB] = float(site_row.get('fire_prob', 0)) / 1000.0
+        cfg[Cfg.WIND_PROB] = float(site_row.get('wind_prob', 0)) / 1000.0
+        cfg[Cfg.BASE_H] = float(site_row.get('soil_base_h', 70.0))
 
         # Climate std devs
         if climate_std_row is not None:
             for i, month in enumerate(months):
-                cfg[CFG_TMIN_STD_BASE + i] = float(climate_std_row[f'tmn_std_{month}'])
-                cfg[CFG_TMAX_STD_BASE + i] = float(climate_std_row[f'tmx_std_{month}'])
-                cfg[CFG_PRCP_STD_BASE + i] = float(climate_std_row[f'prcp_std_{month}']) * 0.1
+                cfg[Cfg.TMIN_STD_BASE + i] = float(climate_std_row[f'tmn_std_{month}'])
+                cfg[Cfg.TMAX_STD_BASE + i] = float(climate_std_row[f'tmx_std_{month}'])
+                cfg[Cfg.PRCP_STD_BASE + i] = float(climate_std_row[f'prcp_std_{month}']) * 0.1
 
         # Lapse rates
         for i in range(12):
-            cfg[CFG_TMP_LAPSE_BASE + i] = tmp_lapse[i]
-            cfg[CFG_PRCP_LAPSE_BASE + i] = prcp_lapse[i]
+            cfg[Cfg.TMP_LAPSE_BASE + i] = tmp_lapse[i]
+            cfg[Cfg.PRCP_LAPSE_BASE + i] = prcp_lapse[i]
 
         return cfg
 
@@ -614,8 +608,8 @@ class GAPModel(Model):
         deg_days = 0.0
         site_configs = self.get_global_property_value("site_configs")
         for i in range(12):
-            tmin = site_configs[site_slot][CFG_TMIN_BASE + i]
-            tmax = site_configs[site_slot][CFG_TMAX_BASE + i]
+            tmin = site_configs[site_slot][Cfg.TMIN_BASE + i]
+            tmax = site_configs[site_slot][Cfg.TMAX_BASE + i]
             tavg = (tmin + tmax) / 2.0
             if tavg > BASE_TEMP:
                 deg_days += (tavg - BASE_TEMP) * days_per_month[i]

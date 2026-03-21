@@ -66,120 +66,17 @@ import cupy as cp
 from cupyx import jit
 from sagesim.math_utils import rand_uniform_philox, rand_uniform_xorshift, rand_normal_bounded
 
-# === Breed IDs ===
-BREED_TREE = 0
-BREED_GAP = 1
-BREED_SITE = 2
-
-# === Site params[12] (private) ===
-# Soil pools [0-8]:
-SITE_P_A0_C = 0
-SITE_P_A0_N = 1
-SITE_P_A_C = 2
-SITE_P_A_N = 3
-SITE_P_BL_C = 4
-SITE_P_BL_N = 5
-SITE_P_A0_W = 6
-SITE_P_A_W = 7
-SITE_P_BL_W = 8
-# Additional soil state [9-11]:
-SITE_P_LAI_W0 = 9
-SITE_P_ANNUAL_RUNOFF = 10
-SITE_P_SITE_ID = 11
-
-# Config offsets within each site's config block
-CFG_TMIN_BASE = 0        # 12 months: offsets 0-11
-CFG_TMAX_BASE = 12       # 12 months: offsets 12-23
-CFG_PRCP_BASE = 24       # 12 months: offsets 24-35
-CFG_FIELD_CAP = 36
-CFG_PERM_WP = 37
-CFG_SLOPE = 38
-CFG_SIGMA = 39
-CFG_LAI = 40
-CFG_LATITUDE = 41
-CFG_LONGITUDE = 42
-CFG_RAIN_N = 43
-CFG_FIRE_PROB = 44
-CFG_WIND_PROB = 45
-CFG_BASE_H = 46
-CFG_TMIN_STD_BASE = 47   # 12 months: offsets 47-58
-CFG_TMAX_STD_BASE = 59   # 12 months: offsets 59-70
-CFG_PRCP_STD_BASE = 71   # 12 months: offsets 71-82
-CFG_TMP_LAPSE_BASE = 83  # 12 months: offsets 83-94
-CFG_PRCP_LAPSE_BASE = 95 # 12 months: offsets 95-106
-
-# === Site states[16] (public) ===
-SITE_S_DEG_DAYS = 0
-SITE_S_DRY_DAYS = 1
-SITE_S_AVAIL_N = 2
-SITE_S_FLOOD_DAYS = 3  # Days when A layer is saturated
-SITE_S_FIRE_INTENSITY = 4  # Fire intensity this year (0-1)
-SITE_S_DRY_DAYS_BASE = 6   # Base layer drought fraction (for intolerant species)
-SITE_S_WIND_INTENSITY = 7  # Wind intensity this year (0-1, 0=no wind)
-SITE_S_ANNUAL_RAIN = 8     # Perturbed annual rainfall (cm)
-SITE_S_GROW_DAYS = 9       # Growing season days (tavg >= 5°C)
-SITE_S_POT_EVAP = 10       # Annual potential evapotranspiration (cm)
-SITE_S_ACT_EVAP = 11       # Annual actual evapotranspiration (cm)
-SITE_S_SOIL_RESP = 12      # Annual soil respiration (tn C/ha)
-SITE_S_C_INTO_A0 = 13      # Annual C litter input to A0 layer (tn C/ha)
-SITE_S_N_INTO_A0 = 14      # Annual N litter input to A0 layer (tn N/ha)
-SITE_S_NET_N_INTO_A0 = 15  # Net N leached to base layer (tn N/ha)
-
-# === Gap states[16] (for reading from Gap neighbors) ===
-GAP_S_LITTER_ACCUM_C = 4       # Above-ground litter -> A0 layer
-GAP_S_LITTER_ACCUM_N = 5
-GAP_S_TOTAL_N_DEMAND = 11      # N demand from trees (written at P4)
-GAP_S_TOTAL_LAI = 12           # Per-gap normalized LAI (from P0, GAPpy canopy())
-GAP_S_N_CONSUMED = 13          # N consumed by trees (now aggregated at P8, read at P9)
-
-# === UVAFME Constants (from soil.py) ===
-AO_CN_0 = 30.0
-SA_CN_0 = 4.0
-SB_CN_0 = 20.0
-AO_RESP = 5.24e-4
-SA_RESP = 1.24e-5
-SB_RESP = 2.74e-7
-
-BASE_MAX = 0.6
-BASE_MIN = 0.1
-AO_MIN = 0.025
-AO_MAX = 0.25
-LAI_MIN = 0.01
-LAI_MAX = 0.15
-
-# Atmospheric N in precipitation (tn N per cm precip)
-PRCP_N = 0.00002
-
-# Unit conversion: kg (tree-level) -> tn/ha (soil pools)
-# = HEC_TO_M2 / plotsize / 1000 = 10000 / 500 / 1000
-# Divide by gap_count at runtime (= /numplots equivalent)
-UNIT_CONV = 0.02
-
-# Days per month (for precip distribution)
-DAYS_PER_MONTH_0 = 31
-DAYS_PER_MONTH_1 = 28
-DAYS_PER_MONTH_2 = 31
-DAYS_PER_MONTH_3 = 30
-DAYS_PER_MONTH_4 = 31
-DAYS_PER_MONTH_5 = 30
-DAYS_PER_MONTH_6 = 31
-DAYS_PER_MONTH_7 = 31
-DAYS_PER_MONTH_8 = 30
-DAYS_PER_MONTH_9 = 31
-DAYS_PER_MONTH_10 = 30
-DAYS_PER_MONTH_11 = 31
-
-PI = 3.14159265359
-DEG2RAD = 0.017453
-
-# Hargreaves PET constants (GAPpy constants.py)
-H_B = 0.017214        # ~ 2*PI/365
-H_AS = 0.409           # Max solar declination (radians)
-H_AC = 0.033           # Eccentricity correction amplitude
-H_PHASE = -1.39        # Phase offset for declination
-H_AMP = 37.58603       # Radiation amplitude
-H_COEFF = 0.000093876  # Hargreaves coefficient
-H_ADDON = 17.8         # Hargreaves temperature offset
+from gap.constants import (
+    Breed, Cfg, SiteP, SiteS, GapS,
+    AO_CN_0, SA_CN_0, SB_CN_0, AO_RESP, SA_RESP, SB_RESP,
+    BASE_MAX, BASE_MIN, AO_MIN, AO_MAX, LAI_MIN, LAI_MAX,
+    PRCP_N, UNIT_CONV,
+    DAYS_PER_MONTH_0, DAYS_PER_MONTH_1, DAYS_PER_MONTH_2, DAYS_PER_MONTH_3,
+    DAYS_PER_MONTH_4, DAYS_PER_MONTH_5, DAYS_PER_MONTH_6, DAYS_PER_MONTH_7,
+    DAYS_PER_MONTH_8, DAYS_PER_MONTH_9, DAYS_PER_MONTH_10, DAYS_PER_MONTH_11,
+    PI,
+    H_B, H_AS, H_AC, H_PHASE, H_AMP, H_COEFF, H_ADDON,
+)
 
 
 @jit.rawkernel(device="cuda")
@@ -231,14 +128,14 @@ def site_soil_step(
         neighbor_idx = int(neighbor_indices[i])
         neighbor_breed = int(breeds[neighbor_idx])
 
-        if neighbor_breed == BREED_GAP:
-            gap_litter_c = states_tensor[neighbor_idx][GAP_S_LITTER_ACCUM_C]
-            gap_litter_n = states_tensor[neighbor_idx][GAP_S_LITTER_ACCUM_N]
+        if neighbor_breed == Breed.GAP:
+            gap_litter_c = states_tensor[neighbor_idx][GapS.LITTER_ACCUM_C]
+            gap_litter_n = states_tensor[neighbor_idx][GapS.LITTER_ACCUM_N]
             total_litter_c = total_litter_c + gap_litter_c
             total_litter_n = total_litter_n + gap_litter_n
 
             # Read per-gap normalized LAI (GAPpy canopy():362)
-            gap_lai = states_tensor[neighbor_idx][GAP_S_TOTAL_LAI]
+            gap_lai = states_tensor[neighbor_idx][GapS.TOTAL_LAI]
             total_gap_lai = total_gap_lai + gap_lai
 
             gap_count = gap_count + 1.0
@@ -252,33 +149,33 @@ def site_soil_step(
         total_litter_n = total_litter_n * uconv
 
     # ========== READ CURRENT SOIL STATE (from params_tensor) ==========
-    ao_c0 = params_tensor[agent_index][SITE_P_A0_C]
-    ao_n0 = params_tensor[agent_index][SITE_P_A0_N]
-    sa_c0 = params_tensor[agent_index][SITE_P_A_C]
-    sa_n0 = params_tensor[agent_index][SITE_P_A_N]
-    sb_c0 = params_tensor[agent_index][SITE_P_BL_C]
-    sb_n0 = params_tensor[agent_index][SITE_P_BL_N]
-    ao_w0 = params_tensor[agent_index][SITE_P_A0_W]
-    sa_w0 = params_tensor[agent_index][SITE_P_A_W]
-    sb_w0 = params_tensor[agent_index][SITE_P_BL_W]
-    lai_w0 = params_tensor[agent_index][SITE_P_LAI_W0]
+    ao_c0 = params_tensor[agent_index][SiteP.A0_C]
+    ao_n0 = params_tensor[agent_index][SiteP.A0_N]
+    sa_c0 = params_tensor[agent_index][SiteP.A_C]
+    sa_n0 = params_tensor[agent_index][SiteP.A_N]
+    sb_c0 = params_tensor[agent_index][SiteP.BL_C]
+    sb_n0 = params_tensor[agent_index][SiteP.BL_N]
+    ao_w0 = params_tensor[agent_index][SiteP.A0_W]
+    sa_w0 = params_tensor[agent_index][SiteP.A_W]
+    sb_w0 = params_tensor[agent_index][SiteP.BL_W]
+    lai_w0 = params_tensor[agent_index][SiteP.LAI_W0]
 
     # ========== READ SITE CONFIG ==========
-    site_id = int(params_tensor[agent_index][SITE_P_SITE_ID])
+    site_id = int(params_tensor[agent_index][SiteP.SITE_ID])
 
     # Read site properties from site_configs
-    sa_fc = site_configs[int(site_id)][CFG_FIELD_CAP]
-    sa_pwp = site_configs[int(site_id)][CFG_PERM_WP]
-    slope = site_configs[int(site_id)][CFG_SLOPE]
-    sigma = site_configs[int(site_id)][CFG_SIGMA]
-    latitude = site_configs[int(site_id)][CFG_LATITUDE]
+    sa_fc = site_configs[int(site_id)][Cfg.FIELD_CAP]
+    sa_pwp = site_configs[int(site_id)][Cfg.PERM_WP]
+    slope = site_configs[int(site_id)][Cfg.SLOPE]
+    sigma = site_configs[int(site_id)][Cfg.SIGMA]
+    latitude = site_configs[int(site_id)][Cfg.LATITUDE]
 
     # N balance moved to site_nbalance_step (P9) -- runs AFTER P7 growth,
     # so it uses same-tick avail_N and n_consumed (no 1-tick delay).
 
     # ========== DYNAMIC LAI FROM TREE CANOPY (GAPpy canopy():282-362) ==========
     # Average per-gap normalized LAI across gaps (= /numplots equivalent)
-    lai = site_configs[int(site_id)][CFG_LAI]  # Fallback: initial CSV value
+    lai = site_configs[int(site_id)][Cfg.LAI]  # Fallback: initial CSV value
     if gap_count > 0.5:
         dynamic_lai = total_gap_lai / gap_count
         if dynamic_lai > 0.01:
@@ -293,84 +190,84 @@ def site_soil_step(
         lai = 1.0
 
     # ========== READ MONTHLY CLIMATE STD DEVS (from globals) ==========
-    tmin_std_0 = site_configs[int(site_id)][CFG_TMIN_STD_BASE + 0]
-    tmin_std_1 = site_configs[int(site_id)][CFG_TMIN_STD_BASE + 1]
-    tmin_std_2 = site_configs[int(site_id)][CFG_TMIN_STD_BASE + 2]
-    tmin_std_3 = site_configs[int(site_id)][CFG_TMIN_STD_BASE + 3]
-    tmin_std_4 = site_configs[int(site_id)][CFG_TMIN_STD_BASE + 4]
-    tmin_std_5 = site_configs[int(site_id)][CFG_TMIN_STD_BASE + 5]
-    tmin_std_6 = site_configs[int(site_id)][CFG_TMIN_STD_BASE + 6]
-    tmin_std_7 = site_configs[int(site_id)][CFG_TMIN_STD_BASE + 7]
-    tmin_std_8 = site_configs[int(site_id)][CFG_TMIN_STD_BASE + 8]
-    tmin_std_9 = site_configs[int(site_id)][CFG_TMIN_STD_BASE + 9]
-    tmin_std_10 = site_configs[int(site_id)][CFG_TMIN_STD_BASE + 10]
-    tmin_std_11 = site_configs[int(site_id)][CFG_TMIN_STD_BASE + 11]
+    tmin_std_0 = site_configs[int(site_id)][Cfg.TMIN_STD_BASE + 0]
+    tmin_std_1 = site_configs[int(site_id)][Cfg.TMIN_STD_BASE + 1]
+    tmin_std_2 = site_configs[int(site_id)][Cfg.TMIN_STD_BASE + 2]
+    tmin_std_3 = site_configs[int(site_id)][Cfg.TMIN_STD_BASE + 3]
+    tmin_std_4 = site_configs[int(site_id)][Cfg.TMIN_STD_BASE + 4]
+    tmin_std_5 = site_configs[int(site_id)][Cfg.TMIN_STD_BASE + 5]
+    tmin_std_6 = site_configs[int(site_id)][Cfg.TMIN_STD_BASE + 6]
+    tmin_std_7 = site_configs[int(site_id)][Cfg.TMIN_STD_BASE + 7]
+    tmin_std_8 = site_configs[int(site_id)][Cfg.TMIN_STD_BASE + 8]
+    tmin_std_9 = site_configs[int(site_id)][Cfg.TMIN_STD_BASE + 9]
+    tmin_std_10 = site_configs[int(site_id)][Cfg.TMIN_STD_BASE + 10]
+    tmin_std_11 = site_configs[int(site_id)][Cfg.TMIN_STD_BASE + 11]
 
-    tmax_std_0 = site_configs[int(site_id)][CFG_TMAX_STD_BASE + 0]
-    tmax_std_1 = site_configs[int(site_id)][CFG_TMAX_STD_BASE + 1]
-    tmax_std_2 = site_configs[int(site_id)][CFG_TMAX_STD_BASE + 2]
-    tmax_std_3 = site_configs[int(site_id)][CFG_TMAX_STD_BASE + 3]
-    tmax_std_4 = site_configs[int(site_id)][CFG_TMAX_STD_BASE + 4]
-    tmax_std_5 = site_configs[int(site_id)][CFG_TMAX_STD_BASE + 5]
-    tmax_std_6 = site_configs[int(site_id)][CFG_TMAX_STD_BASE + 6]
-    tmax_std_7 = site_configs[int(site_id)][CFG_TMAX_STD_BASE + 7]
-    tmax_std_8 = site_configs[int(site_id)][CFG_TMAX_STD_BASE + 8]
-    tmax_std_9 = site_configs[int(site_id)][CFG_TMAX_STD_BASE + 9]
-    tmax_std_10 = site_configs[int(site_id)][CFG_TMAX_STD_BASE + 10]
-    tmax_std_11 = site_configs[int(site_id)][CFG_TMAX_STD_BASE + 11]
+    tmax_std_0 = site_configs[int(site_id)][Cfg.TMAX_STD_BASE + 0]
+    tmax_std_1 = site_configs[int(site_id)][Cfg.TMAX_STD_BASE + 1]
+    tmax_std_2 = site_configs[int(site_id)][Cfg.TMAX_STD_BASE + 2]
+    tmax_std_3 = site_configs[int(site_id)][Cfg.TMAX_STD_BASE + 3]
+    tmax_std_4 = site_configs[int(site_id)][Cfg.TMAX_STD_BASE + 4]
+    tmax_std_5 = site_configs[int(site_id)][Cfg.TMAX_STD_BASE + 5]
+    tmax_std_6 = site_configs[int(site_id)][Cfg.TMAX_STD_BASE + 6]
+    tmax_std_7 = site_configs[int(site_id)][Cfg.TMAX_STD_BASE + 7]
+    tmax_std_8 = site_configs[int(site_id)][Cfg.TMAX_STD_BASE + 8]
+    tmax_std_9 = site_configs[int(site_id)][Cfg.TMAX_STD_BASE + 9]
+    tmax_std_10 = site_configs[int(site_id)][Cfg.TMAX_STD_BASE + 10]
+    tmax_std_11 = site_configs[int(site_id)][Cfg.TMAX_STD_BASE + 11]
 
-    prcp_std_0 = site_configs[int(site_id)][CFG_PRCP_STD_BASE + 0]
-    prcp_std_1 = site_configs[int(site_id)][CFG_PRCP_STD_BASE + 1]
-    prcp_std_2 = site_configs[int(site_id)][CFG_PRCP_STD_BASE + 2]
-    prcp_std_3 = site_configs[int(site_id)][CFG_PRCP_STD_BASE + 3]
-    prcp_std_4 = site_configs[int(site_id)][CFG_PRCP_STD_BASE + 4]
-    prcp_std_5 = site_configs[int(site_id)][CFG_PRCP_STD_BASE + 5]
-    prcp_std_6 = site_configs[int(site_id)][CFG_PRCP_STD_BASE + 6]
-    prcp_std_7 = site_configs[int(site_id)][CFG_PRCP_STD_BASE + 7]
-    prcp_std_8 = site_configs[int(site_id)][CFG_PRCP_STD_BASE + 8]
-    prcp_std_9 = site_configs[int(site_id)][CFG_PRCP_STD_BASE + 9]
-    prcp_std_10 = site_configs[int(site_id)][CFG_PRCP_STD_BASE + 10]
-    prcp_std_11 = site_configs[int(site_id)][CFG_PRCP_STD_BASE + 11]
+    prcp_std_0 = site_configs[int(site_id)][Cfg.PRCP_STD_BASE + 0]
+    prcp_std_1 = site_configs[int(site_id)][Cfg.PRCP_STD_BASE + 1]
+    prcp_std_2 = site_configs[int(site_id)][Cfg.PRCP_STD_BASE + 2]
+    prcp_std_3 = site_configs[int(site_id)][Cfg.PRCP_STD_BASE + 3]
+    prcp_std_4 = site_configs[int(site_id)][Cfg.PRCP_STD_BASE + 4]
+    prcp_std_5 = site_configs[int(site_id)][Cfg.PRCP_STD_BASE + 5]
+    prcp_std_6 = site_configs[int(site_id)][Cfg.PRCP_STD_BASE + 6]
+    prcp_std_7 = site_configs[int(site_id)][Cfg.PRCP_STD_BASE + 7]
+    prcp_std_8 = site_configs[int(site_id)][Cfg.PRCP_STD_BASE + 8]
+    prcp_std_9 = site_configs[int(site_id)][Cfg.PRCP_STD_BASE + 9]
+    prcp_std_10 = site_configs[int(site_id)][Cfg.PRCP_STD_BASE + 10]
+    prcp_std_11 = site_configs[int(site_id)][Cfg.PRCP_STD_BASE + 11]
 
     # ========== READ MONTHLY CLIMATE (from globals) ==========
-    tmin_0 = site_configs[int(site_id)][CFG_TMIN_BASE + 0]
-    tmin_1 = site_configs[int(site_id)][CFG_TMIN_BASE + 1]
-    tmin_2 = site_configs[int(site_id)][CFG_TMIN_BASE + 2]
-    tmin_3 = site_configs[int(site_id)][CFG_TMIN_BASE + 3]
-    tmin_4 = site_configs[int(site_id)][CFG_TMIN_BASE + 4]
-    tmin_5 = site_configs[int(site_id)][CFG_TMIN_BASE + 5]
-    tmin_6 = site_configs[int(site_id)][CFG_TMIN_BASE + 6]
-    tmin_7 = site_configs[int(site_id)][CFG_TMIN_BASE + 7]
-    tmin_8 = site_configs[int(site_id)][CFG_TMIN_BASE + 8]
-    tmin_9 = site_configs[int(site_id)][CFG_TMIN_BASE + 9]
-    tmin_10 = site_configs[int(site_id)][CFG_TMIN_BASE + 10]
-    tmin_11 = site_configs[int(site_id)][CFG_TMIN_BASE + 11]
+    tmin_0 = site_configs[int(site_id)][Cfg.TMIN_BASE + 0]
+    tmin_1 = site_configs[int(site_id)][Cfg.TMIN_BASE + 1]
+    tmin_2 = site_configs[int(site_id)][Cfg.TMIN_BASE + 2]
+    tmin_3 = site_configs[int(site_id)][Cfg.TMIN_BASE + 3]
+    tmin_4 = site_configs[int(site_id)][Cfg.TMIN_BASE + 4]
+    tmin_5 = site_configs[int(site_id)][Cfg.TMIN_BASE + 5]
+    tmin_6 = site_configs[int(site_id)][Cfg.TMIN_BASE + 6]
+    tmin_7 = site_configs[int(site_id)][Cfg.TMIN_BASE + 7]
+    tmin_8 = site_configs[int(site_id)][Cfg.TMIN_BASE + 8]
+    tmin_9 = site_configs[int(site_id)][Cfg.TMIN_BASE + 9]
+    tmin_10 = site_configs[int(site_id)][Cfg.TMIN_BASE + 10]
+    tmin_11 = site_configs[int(site_id)][Cfg.TMIN_BASE + 11]
 
-    tmax_0 = site_configs[int(site_id)][CFG_TMAX_BASE + 0]
-    tmax_1 = site_configs[int(site_id)][CFG_TMAX_BASE + 1]
-    tmax_2 = site_configs[int(site_id)][CFG_TMAX_BASE + 2]
-    tmax_3 = site_configs[int(site_id)][CFG_TMAX_BASE + 3]
-    tmax_4 = site_configs[int(site_id)][CFG_TMAX_BASE + 4]
-    tmax_5 = site_configs[int(site_id)][CFG_TMAX_BASE + 5]
-    tmax_6 = site_configs[int(site_id)][CFG_TMAX_BASE + 6]
-    tmax_7 = site_configs[int(site_id)][CFG_TMAX_BASE + 7]
-    tmax_8 = site_configs[int(site_id)][CFG_TMAX_BASE + 8]
-    tmax_9 = site_configs[int(site_id)][CFG_TMAX_BASE + 9]
-    tmax_10 = site_configs[int(site_id)][CFG_TMAX_BASE + 10]
-    tmax_11 = site_configs[int(site_id)][CFG_TMAX_BASE + 11]
+    tmax_0 = site_configs[int(site_id)][Cfg.TMAX_BASE + 0]
+    tmax_1 = site_configs[int(site_id)][Cfg.TMAX_BASE + 1]
+    tmax_2 = site_configs[int(site_id)][Cfg.TMAX_BASE + 2]
+    tmax_3 = site_configs[int(site_id)][Cfg.TMAX_BASE + 3]
+    tmax_4 = site_configs[int(site_id)][Cfg.TMAX_BASE + 4]
+    tmax_5 = site_configs[int(site_id)][Cfg.TMAX_BASE + 5]
+    tmax_6 = site_configs[int(site_id)][Cfg.TMAX_BASE + 6]
+    tmax_7 = site_configs[int(site_id)][Cfg.TMAX_BASE + 7]
+    tmax_8 = site_configs[int(site_id)][Cfg.TMAX_BASE + 8]
+    tmax_9 = site_configs[int(site_id)][Cfg.TMAX_BASE + 9]
+    tmax_10 = site_configs[int(site_id)][Cfg.TMAX_BASE + 10]
+    tmax_11 = site_configs[int(site_id)][Cfg.TMAX_BASE + 11]
 
-    prcp_0 = site_configs[int(site_id)][CFG_PRCP_BASE + 0]
-    prcp_1 = site_configs[int(site_id)][CFG_PRCP_BASE + 1]
-    prcp_2 = site_configs[int(site_id)][CFG_PRCP_BASE + 2]
-    prcp_3 = site_configs[int(site_id)][CFG_PRCP_BASE + 3]
-    prcp_4 = site_configs[int(site_id)][CFG_PRCP_BASE + 4]
-    prcp_5 = site_configs[int(site_id)][CFG_PRCP_BASE + 5]
-    prcp_6 = site_configs[int(site_id)][CFG_PRCP_BASE + 6]
-    prcp_7 = site_configs[int(site_id)][CFG_PRCP_BASE + 7]
-    prcp_8 = site_configs[int(site_id)][CFG_PRCP_BASE + 8]
-    prcp_9 = site_configs[int(site_id)][CFG_PRCP_BASE + 9]
-    prcp_10 = site_configs[int(site_id)][CFG_PRCP_BASE + 10]
-    prcp_11 = site_configs[int(site_id)][CFG_PRCP_BASE + 11]
+    prcp_0 = site_configs[int(site_id)][Cfg.PRCP_BASE + 0]
+    prcp_1 = site_configs[int(site_id)][Cfg.PRCP_BASE + 1]
+    prcp_2 = site_configs[int(site_id)][Cfg.PRCP_BASE + 2]
+    prcp_3 = site_configs[int(site_id)][Cfg.PRCP_BASE + 3]
+    prcp_4 = site_configs[int(site_id)][Cfg.PRCP_BASE + 4]
+    prcp_5 = site_configs[int(site_id)][Cfg.PRCP_BASE + 5]
+    prcp_6 = site_configs[int(site_id)][Cfg.PRCP_BASE + 6]
+    prcp_7 = site_configs[int(site_id)][Cfg.PRCP_BASE + 7]
+    prcp_8 = site_configs[int(site_id)][Cfg.PRCP_BASE + 8]
+    prcp_9 = site_configs[int(site_id)][Cfg.PRCP_BASE + 9]
+    prcp_10 = site_configs[int(site_id)][Cfg.PRCP_BASE + 10]
+    prcp_11 = site_configs[int(site_id)][Cfg.PRCP_BASE + 11]
 
     # ========== MONTHLY CLIMATE PERTURBATION ==========
     # Box-Muller normal samples clamped to [-1,1] for temp, [-0.5,0.5] for precip.
@@ -514,7 +411,7 @@ def site_soil_step(
     annual_prcp_cm = prcp_0 + prcp_1 + prcp_2 + prcp_3 + prcp_4 + prcp_5 + prcp_6 + prcp_7 + prcp_8 + prcp_9 + prcp_10 + prcp_11
 
     # ========== WATER BALANCE LIMITS ==========
-    sbh = site_configs[int(site_id)][CFG_BASE_H]
+    sbh = site_configs[int(site_id)][Cfg.BASE_H]
     if sbh < 1.0:
         sbh = 70.0  # Fallback if not set
     laiw_min = lai * LAI_MIN
@@ -1210,36 +1107,36 @@ def site_soil_step(
 
     # ========== WRITE FINAL RESULTS ==========
     # Soil pools (params - private)
-    params_tensor[agent_index][SITE_P_A0_C] = ao_c0
-    params_tensor[agent_index][SITE_P_A0_N] = ao_n0
-    params_tensor[agent_index][SITE_P_A_C] = sa_c0
-    params_tensor[agent_index][SITE_P_A_N] = sa_n0
-    params_tensor[agent_index][SITE_P_BL_C] = sb_c0
-    params_tensor[agent_index][SITE_P_BL_N] = sb_n0
-    params_tensor[agent_index][SITE_P_A0_W] = ao_w0
-    params_tensor[agent_index][SITE_P_A_W] = sa_w0
-    params_tensor[agent_index][SITE_P_BL_W] = sb_w0
-    params_tensor[agent_index][SITE_P_LAI_W0] = lai_w0
-    params_tensor[agent_index][SITE_P_ANNUAL_RUNOFF] = annual_runoff  # For N balance at P9
+    params_tensor[agent_index][SiteP.A0_C] = ao_c0
+    params_tensor[agent_index][SiteP.A0_N] = ao_n0
+    params_tensor[agent_index][SiteP.A_C] = sa_c0
+    params_tensor[agent_index][SiteP.A_N] = sa_n0
+    params_tensor[agent_index][SiteP.BL_C] = sb_c0
+    params_tensor[agent_index][SiteP.BL_N] = sb_n0
+    params_tensor[agent_index][SiteP.A0_W] = ao_w0
+    params_tensor[agent_index][SiteP.A_W] = sa_w0
+    params_tensor[agent_index][SiteP.BL_W] = sb_w0
+    params_tensor[agent_index][SiteP.LAI_W0] = lai_w0
+    params_tensor[agent_index][SiteP.ANNUAL_RUNOFF] = annual_runoff  # For N balance at P9
 
     # Growing degree days (accumulated daily, base 5C)
-    states_tensor[agent_index][SITE_S_DEG_DAYS] = deg_days
+    states_tensor[agent_index][SiteS.DEG_DAYS] = deg_days
 
     # Available N = mineralization + atmospheric deposition
-    states_tensor[agent_index][SITE_S_AVAIL_N] = total_avail_n + rain_n
+    states_tensor[agent_index][SiteS.AVAIL_N] = total_avail_n + rain_n
 
     # Flood days for this year
-    states_tensor[agent_index][SITE_S_FLOOD_DAYS] = flood_days
+    states_tensor[agent_index][SiteS.FLOOD_DAYS] = flood_days
 
     # Dry days from soil water balance (fraction 0-1)
-    states_tensor[agent_index][SITE_S_DRY_DAYS] = dry_days
+    states_tensor[agent_index][SiteS.DRY_DAYS] = dry_days
 
     # Base layer drought fraction (for intolerant species dual-metric)
-    states_tensor[agent_index][SITE_S_DRY_DAYS_BASE] = dry_days_base_frac
+    states_tensor[agent_index][SiteS.DRY_DAYS_BASE] = dry_days_base_frac
 
     # ========== FIRE PROBABILITY ==========
     # Fire probability from globals (per 1000 years, already converted to annual at load)
-    fire_prob = site_configs[int(site_id)][CFG_FIRE_PROB]
+    fire_prob = site_configs[int(site_id)][Cfg.FIRE_PROB]
 
     # Dry conditions increase fire risk beyond base probability
     estimated_dry_days = 0.0
@@ -1267,10 +1164,10 @@ def site_soil_step(
         if fire_intensity > 1.0:
             fire_intensity = 1.0
 
-    states_tensor[agent_index][SITE_S_FIRE_INTENSITY] = fire_intensity
+    states_tensor[agent_index][SiteS.FIRE_INTENSITY] = fire_intensity
 
     # ========== WIND PROBABILITY (GAPpy model.py:623-655) ==========
-    wind_prob = site_configs[int(site_id)][CFG_WIND_PROB]
+    wind_prob = site_configs[int(site_id)][Cfg.WIND_PROB]
 
     # Stochastic wind check
     wind_rand = rand_uniform_philox(tick, agent_index, 11)
@@ -1281,15 +1178,15 @@ def site_soil_step(
         if wind_intensity > 1.0:
             wind_intensity = 1.0
 
-    states_tensor[agent_index][SITE_S_WIND_INTENSITY] = wind_intensity
+    states_tensor[agent_index][SiteS.WIND_INTENSITY] = wind_intensity
 
     # Stochastic climate outputs (for CSV export)
-    states_tensor[agent_index][SITE_S_ANNUAL_RAIN] = annual_prcp_cm
-    states_tensor[agent_index][SITE_S_GROW_DAYS] = grow_days_5
-    states_tensor[agent_index][SITE_S_POT_EVAP] = total_pet
-    states_tensor[agent_index][SITE_S_ACT_EVAP] = total_aet
+    states_tensor[agent_index][SiteS.ANNUAL_RAIN] = annual_prcp_cm
+    states_tensor[agent_index][SiteS.GROW_DAYS] = grow_days_5
+    states_tensor[agent_index][SiteS.POT_EVAP] = total_pet
+    states_tensor[agent_index][SiteS.ACT_EVAP] = total_aet
 
     # Soil outputs (for CSV export)
-    states_tensor[agent_index][SITE_S_SOIL_RESP] = total_resp
-    states_tensor[agent_index][SITE_S_C_INTO_A0] = total_litter_c
-    states_tensor[agent_index][SITE_S_N_INTO_A0] = total_litter_n
+    states_tensor[agent_index][SiteS.SOIL_RESP] = total_resp
+    states_tensor[agent_index][SiteS.C_INTO_A0] = total_litter_c
+    states_tensor[agent_index][SiteS.N_INTO_A0] = total_litter_n

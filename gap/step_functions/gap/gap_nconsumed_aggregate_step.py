@@ -14,19 +14,9 @@ Execution Flow:
 import cupy as cp  # noqa: F401
 from cupyx import jit
 
-# === Breed IDs ===
-BREED_TREE = 0
-BREED_GAP = 1
-BREED_SITE = 2
-
-# === Gap states[16] (public, no buffer) ===
-GAP_S_N_CONSUMED = 13  # Total N consumed by trees (for P9 N balance)
-
-# === Tree states[5] (for reading n_consumed) ===
-TREE_S_N_CONSUMED = 3
-
-# === Tree states_db[5] (for checking alive status) ===
-TREE_DB_IS_ALIVE = 0
+from gap.constants import (
+    Breed, TreeS, TreeDB, GapS,
+)
 
 
 @jit.rawkernel(device="cuda")
@@ -55,14 +45,14 @@ def gap_nconsumed_aggregate_step(
         neighbor_idx = int(neighbor_indices[i])
         neighbor_breed = int(breeds[neighbor_idx])
 
-        if neighbor_breed == BREED_TREE:
-            tree_alive = states_db_tensor[neighbor_idx][TREE_DB_IS_ALIVE]
+        if neighbor_breed == Breed.TREE:
+            tree_alive = states_db_tensor[neighbor_idx][TreeDB.IS_ALIVE]
             # Read from all non-template trees (alive + recently dead + newly recruited)
             # Templates (is_alive == -1) have n_consumed = 0, so reading is harmless
             if tree_alive > -0.5:
-                tree_n_consumed = states_tensor[neighbor_idx][TREE_S_N_CONSUMED]
+                tree_n_consumed = states_tensor[neighbor_idx][TreeS.N_CONSUMED]
                 total_n_consumed = total_n_consumed + tree_n_consumed
 
         i = i + 1
 
-    states_tensor[agent_index][GAP_S_N_CONSUMED] = total_n_consumed
+    states_tensor[agent_index][GapS.N_CONSUMED] = total_n_consumed

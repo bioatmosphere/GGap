@@ -34,99 +34,11 @@ import cupy as cp
 from cupyx import jit
 from sagesim.math_utils import rand_uniform_philox, rand_normal_bounded
 
-# === Breed IDs ===
-BREED_TREE = 0
-BREED_GAP = 1
-BREED_SITE = 2
-
-# === Tree params[17] (private) ===
-TREE_P_SPECIES_ID = 0
-TREE_P_AGE = 1
-TREE_P_BIOMC = 2
-TREE_P_BIOMN = 3
-TREE_P_LEAF_BM = 4
-TREE_P_X = 5
-TREE_P_Y = 6
-TREE_P_LIGHT_AVAIL = 7
-TREE_P_FC_DEGDAY = 8
-TREE_P_FC_DROUGHT = 9
-TREE_P_FC_FLOOD = 10
-TREE_P_ENV_STRESS = 11
-TREE_P_DIAM_MAX_CALC = 12
-TREE_P_FORSKA_SHADE = 13
-TREE_P_SEEDBANK = 14
-TREE_P_SEEDLING = 15
-TREE_P_SEEDLING_WEIGHT = 16
-
-# === Species trait column indices ===
-# Trait offsets
-TRAIT_MAX_AGE = 0
-TRAIT_MAX_DIAM = 1
-TRAIT_MAX_HT = 2
-TRAIT_ARFA_0 = 3
-TRAIT_G = 4
-TRAIT_SHADE_TOL = 5
-TRAIT_DEG_DAY_MIN = 6
-TRAIT_DEG_DAY_OPT = 7
-TRAIT_DEG_DAY_MAX = 8
-TRAIT_INVADER = 9
-TRAIT_SEED = 10
-TRAIT_SPROUT = 11
-TRAIT_WOOD_BULK_DENS = 12
-TRAIT_LOWNUTR_TOL = 13
-TRAIT_FLOOD_TOL = 14
-TRAIT_DROUGHT_TOL = 15
-TRAIT_EVERGREEN = 16
-TRAIT_FIRE_TOL = 17
-TRAIT_ROOTDEPTH = 18
-TRAIT_STRESS_TOL = 19
-TRAIT_AGE_TOL = 20
-TRAIT_SEED_SURV = 21
-TRAIT_SEEDLING_LG = 22
-TRAIT_LEAFDIAM_A = 23
-TRAIT_LEAFAREA_C = 24
-TRAIT_MAX_DISPERSAL_DIST = 25
-
-# === Tree states[5] (public, no buffer) ===
-TREE_S_LITTER_C = 0       # Above-ground litter carbon
-TREE_S_LITTER_N = 1       # Above-ground litter nitrogen
-TREE_S_N_DEMAND = 2
-TREE_S_N_CONSUMED = 3     # Actual N consumed this tick
-TREE_S_LITTER_N_BG = 4    # Below-ground litter nitrogen (roots) - unused, always 0
-
-# === Tree states_db[5] (public, double buffered) ===
-TREE_DB_IS_ALIVE = 0
-TREE_DB_DIAM = 1
-TREE_DB_HEIGHT = 2
-TREE_DB_CANOPY_HT = 3
-TREE_DB_SEEDLING_WEIGHT = 4
-
-# === Gap states[16] (for reading from Gap neighbor) ===
-GAP_S_DEG_DAYS = 0
-GAP_S_DRY_DAYS = 1
-GAP_S_AVAIL_N = 2
-GAP_S_N_SUPPLY_RATIO = 3
-GAP_S_LITTER_ACCUM_C = 4
-GAP_S_LITTER_ACCUM_N = 5
-GAP_S_NUM_TO_RECRUIT = 6
-GAP_S_RECRUIT_RAND_SEED = 7
-GAP_S_FLOOD_DAYS = 8
-GAP_S_TOTAL_SEEDLING_WEIGHT = 9
-GAP_S_FIRE_INTENSITY = 10
-GAP_S_DRY_DAYS_BASE = 14
-GAP_S_WIND_INTENSITY = 15
-
-# === Constants ===
-PI = 3.14159265359
-STD_HT = 1.3
-
-STEM_C_N = 450.0        # GAPpy constants.py:77
-CON_LEAF_C_N = 60.0     # GAPpy constants.py:71
-DEC_LEAF_C_N = 40.0     # GAPpy constants.py:74
-CON_LEAF_B = 1.3        # GAPpy: 1.0 + CON_LEAF_RATIO (0.3)
-TC_KG = 0.039269908  # PI / 80 - stem volume constant, biomC in kg (cm, m, g/cm³)
-
-SEEDLING_AGE = 1.0
+from gap.constants import (
+    Breed, Trait, TreeP, TreeS, TreeDB, GapS,
+    STD_HT, TC_KG, SEEDLING_AGE,
+    STEM_C_N, CON_LEAF_C_N, DEC_LEAF_C_N, CON_LEAF_B,
+)
 
 
 @jit.rawkernel(device="cuda")
@@ -149,7 +61,7 @@ def tree_actual_growth_step(
     Templates: skipped.
     """
     # ===== GET CURRENT STATE =====
-    is_alive = states_db_tensor[agent_index][TREE_DB_IS_ALIVE]
+    is_alive = states_db_tensor[agent_index][TreeDB.IS_ALIVE]
 
     # Initialize outputs (above-ground litter + N consumed for balance)
     litter_c = 0.0
@@ -159,31 +71,31 @@ def tree_actual_growth_step(
     # ===== ACTUAL GROWTH + MORTALITY: Process living trees only =====
     if is_alive > 0.5:
         # Get species ID
-        species_id = int(params_tensor[agent_index][TREE_P_SPECIES_ID])
+        species_id = int(params_tensor[agent_index][TreeP.SPECIES_ID])
 
         # Get species parameters from species_traits tensor
-        max_age = species_traits[species_id][TRAIT_MAX_AGE]
-        max_diam = species_traits[species_id][TRAIT_MAX_DIAM]
-        max_ht = species_traits[species_id][TRAIT_MAX_HT]
-        arfa_0 = species_traits[species_id][TRAIT_ARFA_0]
-        wood_bulk_dens = species_traits[species_id][TRAIT_WOOD_BULK_DENS]
-        lownutr_tol = int(species_traits[species_id][TRAIT_LOWNUTR_TOL])
-        evergreen = int(species_traits[species_id][TRAIT_EVERGREEN])
-        rootdepth = species_traits[species_id][TRAIT_ROOTDEPTH]
-        leafdiam_a = species_traits[species_id][TRAIT_LEAFDIAM_A]
-        leafarea_c = species_traits[species_id][TRAIT_LEAFAREA_C]
+        max_age = species_traits[species_id][Trait.MAX_AGE]
+        max_diam = species_traits[species_id][Trait.MAX_DIAM]
+        max_ht = species_traits[species_id][Trait.MAX_HT]
+        arfa_0 = species_traits[species_id][Trait.ARFA_0]
+        wood_bulk_dens = species_traits[species_id][Trait.WOOD_BULK_DENS]
+        lownutr_tol = int(species_traits[species_id][Trait.LOWNUTR_TOL])
+        evergreen = int(species_traits[species_id][Trait.EVERGREEN])
+        rootdepth = species_traits[species_id][Trait.ROOTDEPTH]
+        leafdiam_a = species_traits[species_id][Trait.LEAFDIAM_A]
+        leafarea_c = species_traits[species_id][Trait.LEAFAREA_C]
 
         # Get current tree structure from states_db (read buffer = previous tick values)
-        diam = states_db_tensor[agent_index][TREE_DB_DIAM]
-        height = states_db_tensor[agent_index][TREE_DB_HEIGHT]
-        canopy_ht = states_db_tensor[agent_index][TREE_DB_CANOPY_HT]
+        diam = states_db_tensor[agent_index][TreeDB.DIAM]
+        height = states_db_tensor[agent_index][TreeDB.HEIGHT]
+        canopy_ht = states_db_tensor[agent_index][TreeDB.CANOPY_HT]
 
         # Get internal physiology from params
-        age = params_tensor[agent_index][TREE_P_AGE]
+        age = params_tensor[agent_index][TreeP.AGE]
 
         # Read intermediates from P2 (same tick, params has no double buffer)
-        env_stress = params_tensor[agent_index][TREE_P_ENV_STRESS]
-        diam_max = params_tensor[agent_index][TREE_P_DIAM_MAX_CALC]
+        env_stress = params_tensor[agent_index][TreeP.ENV_STRESS]
+        diam_max = params_tensor[agent_index][TreeP.DIAM_MAX_CALC]
 
         # ===== READ FROM GAP NEIGHBOR (written at P4, same tick) =====
         n_supply_ratio = 1.0
@@ -195,18 +107,18 @@ def tree_actual_growth_step(
         while i < len(neighbor_indices) and neighbor_indices[i] != -1:
             neighbor_idx = int(neighbor_indices[i])
             neighbor_breed = int(breeds[neighbor_idx])
-            if neighbor_breed == BREED_GAP:
-                n_supply_ratio = states_tensor[neighbor_idx][GAP_S_N_SUPPLY_RATIO]
-                fire_intensity = states_tensor[neighbor_idx][GAP_S_FIRE_INTENSITY]
-                wind_intensity = states_tensor[neighbor_idx][GAP_S_WIND_INTENSITY]
+            if neighbor_breed == Breed.GAP:
+                n_supply_ratio = states_tensor[neighbor_idx][GapS.N_SUPPLY_RATIO]
+                fire_intensity = states_tensor[neighbor_idx][GapS.FIRE_INTENSITY]
+                wind_intensity = states_tensor[neighbor_idx][GapS.WIND_INTENSITY]
             i = i + 1
 
         # ===== GROWTH COMPUTATION (GAPpy growth() runs before mortality()) =====
         # All living trees grow first; fire/wind death uses post-growth biomass.
 
         # Read old biomass for N consumed tracking (GAPpy model.py:467,539)
-        old_biomC = params_tensor[agent_index][TREE_P_BIOMC]
-        old_leaf_bm = params_tensor[agent_index][TREE_P_LEAF_BM]
+        old_biomC = params_tensor[agent_index][TreeP.BIOMC]
+        old_leaf_bm = params_tensor[agent_index][TreeP.LEAF_BM]
 
         # ===== COMPUTE NUTRIENT RESPONSE (GAPpy poor_soil_rsp quadratic) =====
         lownutr_idx = lownutr_tol
@@ -313,10 +225,10 @@ def tree_actual_growth_step(
         # ===== CANOPY HEIGHT SELF-PRUNING (GAPpy third tree loop, model.py:564-571) =====
         # GAPpy: check = fc_degday * fc_drought * fc_flood * forska_shade * nutrient
         # forska_shade = light_rsp at canopy BASE (not tree top), computed at P2
-        forska_shade = params_tensor[agent_index][TREE_P_FORSKA_SHADE]
-        fc_degday_val = params_tensor[agent_index][TREE_P_FC_DEGDAY]
-        fc_drought_val = params_tensor[agent_index][TREE_P_FC_DROUGHT]
-        fc_flood_val = params_tensor[agent_index][TREE_P_FC_FLOOD]
+        forska_shade = params_tensor[agent_index][TreeP.FORSKA_SHADE]
+        fc_degday_val = params_tensor[agent_index][TreeP.FC_DEGDAY]
+        fc_drought_val = params_tensor[agent_index][TreeP.FC_DROUGHT]
+        fc_flood_val = params_tensor[agent_index][TreeP.FC_FLOOD]
         forska_check = fc_degday_val * fc_drought_val * fc_flood_val * forska_shade * fc_nutrient
         new_canopy_ht = canopy_ht
         if forska_check <= 0.05:
@@ -376,8 +288,8 @@ def tree_actual_growth_step(
             # ===== CHECK MORTALITY (GAPpy: two independent survival checks) =====
 
             # Read species-specific mortality tolerances from species_traits
-            stress_tol = int(species_traits[species_id][TRAIT_STRESS_TOL])
-            age_tol = int(species_traits[species_id][TRAIT_AGE_TOL])
+            stress_tol = int(species_traits[species_id][Trait.STRESS_TOL])
+            age_tol = int(species_traits[species_id][Trait.AGE_TOL])
 
             # --- Age survival (GAPpy tree.py:178-202) ---
             # age_tol (1-3) selects from [4.605, 6.908, 11.51]
@@ -478,16 +390,16 @@ def tree_actual_growth_step(
         new_age = age + 1.0
 
         # ===== WRITE TO params (internal physiology) =====
-        params_tensor[agent_index][TREE_P_AGE] = new_age
-        params_tensor[agent_index][TREE_P_BIOMC] = new_biomC
-        params_tensor[agent_index][TREE_P_BIOMN] = new_biomC / STEM_C_N
-        params_tensor[agent_index][TREE_P_LEAF_BM] = new_leaf_bm
+        params_tensor[agent_index][TreeP.AGE] = new_age
+        params_tensor[agent_index][TreeP.BIOMC] = new_biomC
+        params_tensor[agent_index][TreeP.BIOMN] = new_biomC / STEM_C_N
+        params_tensor[agent_index][TreeP.LEAF_BM] = new_leaf_bm
 
         # ===== WRITE TO states_db (structure - double buffered) =====
-        states_db_tensor[agent_index][TREE_DB_IS_ALIVE] = is_alive
-        states_db_tensor[agent_index][TREE_DB_DIAM] = new_diam
-        states_db_tensor[agent_index][TREE_DB_HEIGHT] = new_height
-        states_db_tensor[agent_index][TREE_DB_CANOPY_HT] = new_canopy_ht
+        states_db_tensor[agent_index][TreeDB.IS_ALIVE] = is_alive
+        states_db_tensor[agent_index][TreeDB.DIAM] = new_diam
+        states_db_tensor[agent_index][TreeDB.HEIGHT] = new_height
+        states_db_tensor[agent_index][TreeDB.CANOPY_HT] = new_canopy_ht
 
     # ===== DORMANT SLOT ACTIVATION =====
     # Free slots (is_alive == 0) check if Gap signals recruitment, select species
@@ -504,9 +416,9 @@ def tree_actual_growth_step(
         while i < len(neighbor_indices) and neighbor_indices[i] != -1:
             neighbor_idx = int(neighbor_indices[i])
             neighbor_breed = int(breeds[neighbor_idx])
-            if neighbor_breed == BREED_GAP:
-                recruit_prob = states_tensor[neighbor_idx][GAP_S_NUM_TO_RECRUIT]
-                recruit_rand_seed = states_tensor[neighbor_idx][GAP_S_RECRUIT_RAND_SEED]
+            if neighbor_breed == Breed.GAP:
+                recruit_prob = states_tensor[neighbor_idx][GapS.NUM_TO_RECRUIT]
+                recruit_rand_seed = states_tensor[neighbor_idx][GapS.RECRUIT_RAND_SEED]
             i = i + 1
 
         # Determine if this free slot should be recruited
@@ -523,10 +435,10 @@ def tree_actual_growth_step(
                 while i < len(neighbor_indices) and neighbor_indices[i] != -1:
                     neighbor_idx = int(neighbor_indices[i])
                     neighbor_breed = int(breeds[neighbor_idx])
-                    if neighbor_breed == BREED_TREE:
-                        neighbor_alive = states_db_tensor[neighbor_idx][TREE_DB_IS_ALIVE]
+                    if neighbor_breed == Breed.TREE:
+                        neighbor_alive = states_db_tensor[neighbor_idx][TreeDB.IS_ALIVE]
                         if neighbor_alive < -0.5:
-                            weight = params_tensor[neighbor_idx][TREE_P_SEEDLING_WEIGHT]
+                            weight = params_tensor[neighbor_idx][TreeP.SEEDLING_WEIGHT]
                             total_weight = total_weight + weight
                     i = i + 1
 
@@ -541,11 +453,11 @@ def tree_actual_growth_step(
                     while i < len(neighbor_indices) and neighbor_indices[i] != -1:
                         neighbor_idx = int(neighbor_indices[i])
                         neighbor_breed = int(breeds[neighbor_idx])
-                        if neighbor_breed == BREED_TREE:
-                            neighbor_alive = states_db_tensor[neighbor_idx][TREE_DB_IS_ALIVE]
+                        if neighbor_breed == Breed.TREE:
+                            neighbor_alive = states_db_tensor[neighbor_idx][TreeDB.IS_ALIVE]
                             if neighbor_alive < -0.5:
                                 last_template_idx = neighbor_idx
-                                weight = params_tensor[neighbor_idx][TREE_P_SEEDLING_WEIGHT]
+                                weight = params_tensor[neighbor_idx][TreeP.SEEDLING_WEIGHT]
                                 cum_weight = cum_weight + weight
                                 if cum_weight > rand_target and selected_neighbor_idx < 0:
                                     selected_neighbor_idx = neighbor_idx
@@ -556,25 +468,25 @@ def tree_actual_growth_step(
 
                 if selected_neighbor_idx >= 0:
                     # Copy only SPECIES_ID from template (traits are in species_traits)
-                    params_tensor[agent_index][TREE_P_SPECIES_ID] = params_tensor[selected_neighbor_idx][TREE_P_SPECIES_ID]
+                    params_tensor[agent_index][TreeP.SPECIES_ID] = params_tensor[selected_neighbor_idx][TreeP.SPECIES_ID]
 
                     # Look up species traits from species_traits tensor
-                    sel_species_id = int(params_tensor[agent_index][TREE_P_SPECIES_ID])
+                    sel_species_id = int(params_tensor[agent_index][TreeP.SPECIES_ID])
 
                     # Seedling diameter: N(1.5, 1) clamped [0.5, 2.5]
                     # Box-Muller normal, z in [-1, 1] -> diam in [0.5, 2.5]
                     seedling_diam = 1.5 + rand_normal_bounded(tick, agent_index, int(recruit_rand_seed) * 97 + 5, -1.0, 1.0)
 
                     # Calculate initial height from seedling diameter (Forska equation)
-                    max_ht = species_traits[sel_species_id][TRAIT_MAX_HT]
-                    arfa_0 = species_traits[sel_species_id][TRAIT_ARFA_0]
+                    max_ht = species_traits[sel_species_id][Trait.MAX_HT]
+                    arfa_0 = species_traits[sel_species_id][Trait.ARFA_0]
                     delta_ht = max_ht - STD_HT
                     seedling_ht = STD_HT + delta_ht * (1.0 - cp.exp(-arfa_0 * seedling_diam / delta_ht))
 
                     # Calculate initial biomass from diameter (GAPpy tree.py biomass_c)
                     # GAPpy model.py:951 sets canopy_ht=1.0 for seedlings (not STD_HT)
-                    s_wbd = species_traits[sel_species_id][TRAIT_WOOD_BULK_DENS]
-                    s_rdepth = species_traits[sel_species_id][TRAIT_ROOTDEPTH]
+                    s_wbd = species_traits[sel_species_id][Trait.WOOD_BULK_DENS]
+                    s_rdepth = species_traits[sel_species_id][Trait.ROOTDEPTH]
                     s_canopy_ht = 1.0  # GAPpy model.py:951
                     # Basal diameter (canopy_ht=0 internally, GAPpy tree.py:151)
                     s_bd = seedling_diam
@@ -599,10 +511,10 @@ def tree_actual_growth_step(
 
                     # Seedling N consumed (GAPpy model.py:962-977)
                     # Note: conifer uses leaf_bm/C_N (NOT * CON_LEAF_B, unlike growth)
-                    seedling_lda = species_traits[sel_species_id][TRAIT_LEAFDIAM_A]
-                    seedling_lca = species_traits[sel_species_id][TRAIT_LEAFAREA_C]
+                    seedling_lda = species_traits[sel_species_id][Trait.LEAFDIAM_A]
+                    seedling_lca = species_traits[sel_species_id][Trait.LEAFAREA_C]
                     seedling_leaf_bm = s_dc * s_dc * seedling_lda * seedling_lca * 2.0 * 1000.0
-                    seedling_evergreen = int(species_traits[sel_species_id][TRAIT_EVERGREEN])
+                    seedling_evergreen = int(species_traits[sel_species_id][Trait.EVERGREEN])
                     if seedling_evergreen > 0:
                         n_consumed = seedling_leaf_bm / CON_LEAF_C_N + seedling_biomC / STEM_C_N
                         # Seedling litter (GAPpy model.py:970-971): leaf_bm * (leaf_b - 1.0)
@@ -615,26 +527,26 @@ def tree_actual_growth_step(
                         litter_n = seedling_leaf_bm / DEC_LEAF_C_N
 
                     # Initialize physiology as seedling
-                    params_tensor[agent_index][TREE_P_AGE] = SEEDLING_AGE
-                    params_tensor[agent_index][TREE_P_BIOMC] = seedling_biomC
-                    params_tensor[agent_index][TREE_P_BIOMN] = seedling_biomC / STEM_C_N
+                    params_tensor[agent_index][TreeP.AGE] = SEEDLING_AGE
+                    params_tensor[agent_index][TreeP.BIOMC] = seedling_biomC
+                    params_tensor[agent_index][TreeP.BIOMN] = seedling_biomC / STEM_C_N
                     # Seedling leaf biomass: set to 0.0 so first-tick P2 conifer N-demand
                     # computes (1.3*new_leaf - 0.0)/60, matching GAPpy bleaf[it]=0.0 init
-                    params_tensor[agent_index][TREE_P_LEAF_BM] = 0.0
-                    params_tensor[agent_index][TREE_P_LIGHT_AVAIL] = 1.0
-                    params_tensor[agent_index][TREE_P_FC_DEGDAY] = 1.0
-                    params_tensor[agent_index][TREE_P_FC_DROUGHT] = 1.0
-                    params_tensor[agent_index][TREE_P_FC_FLOOD] = 1.0
+                    params_tensor[agent_index][TreeP.LEAF_BM] = 0.0
+                    params_tensor[agent_index][TreeP.LIGHT_AVAIL] = 1.0
+                    params_tensor[agent_index][TreeP.FC_DEGDAY] = 1.0
+                    params_tensor[agent_index][TreeP.FC_DROUGHT] = 1.0
+                    params_tensor[agent_index][TreeP.FC_FLOOD] = 1.0
 
                     # Set structure for seedling (canopy_ht=1.0, GAPpy model.py:951)
-                    states_db_tensor[agent_index][TREE_DB_DIAM] = seedling_diam
-                    states_db_tensor[agent_index][TREE_DB_HEIGHT] = seedling_ht
-                    states_db_tensor[agent_index][TREE_DB_CANOPY_HT] = s_canopy_ht
+                    states_db_tensor[agent_index][TreeDB.DIAM] = seedling_diam
+                    states_db_tensor[agent_index][TreeDB.HEIGHT] = seedling_ht
+                    states_db_tensor[agent_index][TreeDB.CANOPY_HT] = s_canopy_ht
 
                     # Activate the seedling (visible next tick via double buffer)
-                    states_db_tensor[agent_index][TREE_DB_IS_ALIVE] = 1.0
+                    states_db_tensor[agent_index][TreeDB.IS_ALIVE] = 1.0
 
     # ===== WRITE LITTER + N CONSUMED TO states (Gap aggregates at P0 next tick) =====
-    states_tensor[agent_index][TREE_S_LITTER_C] = litter_c          # Above-ground -> A0 layer
-    states_tensor[agent_index][TREE_S_LITTER_N] = litter_n
-    states_tensor[agent_index][TREE_S_N_CONSUMED] = n_consumed      # P8 aggregates -> P9 N balance
+    states_tensor[agent_index][TreeS.LITTER_C] = litter_c          # Above-ground -> A0 layer
+    states_tensor[agent_index][TreeS.LITTER_N] = litter_n
+    states_tensor[agent_index][TreeS.N_CONSUMED] = n_consumed      # P8 aggregates -> P9 N balance

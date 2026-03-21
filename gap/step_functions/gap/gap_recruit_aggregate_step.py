@@ -20,24 +20,10 @@ import cupy as cp  # noqa: F401
 from cupyx import jit
 from sagesim.math_utils import rand_uniform_philox
 
-# === Breed IDs ===
-BREED_TREE = 0
-BREED_GAP = 1
-BREED_SITE = 2
-
-# === Gap states[16] (public, no buffer) ===
-GAP_S_NUM_TO_RECRUIT = 6
-GAP_S_RECRUIT_RAND_SEED = 7
-GAP_S_RECOVERY_YEARS = 166     # Fire/wind recovery countdown (P2 sets, P6 decrements)
-
-# === Tree params[17] (for reading template regrowth) ===
-TREE_P_ENV_STRESS = 11  # Templates store regrowth here (written at P5, same tick)
-
-# === Constants ===
-PLOTSIZE = 500.0  # GAPpy parameters.py:59 — plot area m² (also max trees per plot)
-
-# === Tree states_db[5] (for checking alive status) ===
-TREE_DB_IS_ALIVE = 0
+from gap.constants import (
+    Breed, TreeP, TreeDB, GapS,
+    PLOTSIZE,
+)
 
 
 @jit.rawkernel(device="cuda")
@@ -69,8 +55,8 @@ def gap_recruit_aggregate_step(
         neighbor_idx = int(neighbor_indices[i])
         neighbor_breed = int(breeds[neighbor_idx])
 
-        if neighbor_breed == BREED_TREE:
-            tree_alive = states_db_tensor[neighbor_idx][TREE_DB_IS_ALIVE]
+        if neighbor_breed == Breed.TREE:
+            tree_alive = states_db_tensor[neighbor_idx][TreeDB.IS_ALIVE]
             if tree_alive > 0.5:
                 living_tree_count = living_tree_count + 1.0
             elif tree_alive > -0.5:
@@ -78,7 +64,7 @@ def gap_recruit_aggregate_step(
                 free_slot_tree_count = free_slot_tree_count + 1.0
             else:
                 # Template (is_alive == -1): read regrowth for growmax
-                template_regrowth = params_tensor[neighbor_idx][TREE_P_ENV_STRESS]
+                template_regrowth = params_tensor[neighbor_idx][TreeP.ENV_STRESS]
                 if template_regrowth > growmax:
                     growmax = template_regrowth
 
@@ -122,12 +108,12 @@ def gap_recruit_aggregate_step(
 
     # Suppress recruitment during fire/wind recovery (GAPpy: can_recruit=False
     # when numtrees==0 and fire/wind counter > 0; nrenew=0 even at counter==1).
-    recovery_years = states_tensor[agent_index][GAP_S_RECOVERY_YEARS]
+    recovery_years = states_tensor[agent_index][GapS.RECOVERY_YEARS]
     if recovery_years > 0.5:
         recruit_prob = 0.0
         # Decrement counter (P5 already read current value this tick)
-        states_tensor[agent_index][GAP_S_RECOVERY_YEARS] = recovery_years - 1.0
+        states_tensor[agent_index][GapS.RECOVERY_YEARS] = recovery_years - 1.0
 
     # Write recruitment probability + seed (P7 free slots read from Gap)
-    states_tensor[agent_index][GAP_S_NUM_TO_RECRUIT] = recruit_prob
-    states_tensor[agent_index][GAP_S_RECRUIT_RAND_SEED] = recruit_rand_seed
+    states_tensor[agent_index][GapS.NUM_TO_RECRUIT] = recruit_prob
+    states_tensor[agent_index][GapS.RECRUIT_RAND_SEED] = recruit_rand_seed

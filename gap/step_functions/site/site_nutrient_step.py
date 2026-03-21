@@ -19,21 +19,10 @@ Execution Flow:
 import cupy as cp  # noqa: F401
 from cupyx import jit
 
-# === Breed IDs ===
-BREED_TREE = 0
-BREED_GAP = 1
-BREED_SITE = 2
-
-# === Site states[8] (public) ===
-SITE_S_AVAIL_N = 2
-SITE_S_N_SUPPLY_RATIO = 5
-
-# === Gap states[16] (for reading total_n_demand from Gap neighbors) ===
-GAP_S_TOTAL_N_DEMAND = 11
-
-# Unit conversion: kg (tree-level) → tn/ha (soil pools)
-# = HEC_TO_M2 / plotsize / 1000 = 10000 / 500 / 1000
-UNIT_CONV = 0.02
+from gap.constants import (
+    Breed, GapS, SiteS,
+    UNIT_CONV,
+)
 
 
 @jit.rawkernel(device="cuda")
@@ -57,7 +46,7 @@ def site_nutrient_step(
     Gap sync step (P5) relays this to Gap states for trees to read.
     """
     # Read avail_n (computed at P1 by site_soil_step, same tick)
-    avail_n = states_tensor[agent_index][SITE_S_AVAIL_N]
+    avail_n = states_tensor[agent_index][SiteS.AVAIL_N]
 
     # Sum total N demand from all Gap neighbors
     site_total_n_demand = 0.0
@@ -69,8 +58,8 @@ def site_nutrient_step(
         neighbor_idx = int(neighbor_indices[i])
         neighbor_breed = int(breeds[neighbor_idx])
 
-        if neighbor_breed == BREED_GAP:
-            gap_n_demand = states_tensor[neighbor_idx][GAP_S_TOTAL_N_DEMAND]
+        if neighbor_breed == Breed.GAP:
+            gap_n_demand = states_tensor[neighbor_idx][GapS.TOTAL_N_DEMAND]
             site_total_n_demand = site_total_n_demand + gap_n_demand
             gap_count = gap_count + 1.0
 
@@ -88,4 +77,4 @@ def site_nutrient_step(
             n_supply_ratio = 2.0  # Cap at 2x supply
 
     # Write to own states (Gap reads at P5)
-    states_tensor[agent_index][SITE_S_N_SUPPLY_RATIO] = n_supply_ratio
+    states_tensor[agent_index][SiteS.N_SUPPLY_RATIO] = n_supply_ratio

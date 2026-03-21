@@ -20,27 +20,10 @@ Execution Flow:
 import cupy as cp  # noqa: F401
 from cupyx import jit
 
-# === Breed IDs ===
-BREED_TREE = 0
-BREED_GAP = 1
-BREED_SITE = 2
-
-# === Site params[12] (private, soil pools adjusted in-place) ===
-SITE_P_A_C = 2
-SITE_P_A_N = 3
-SITE_P_BL_C = 4
-SITE_P_BL_N = 5
-SITE_P_ANNUAL_RUNOFF = 10
-
-# === Site states[16] (public) ===
-SITE_S_AVAIL_N = 2
-SITE_S_NET_N_INTO_A0 = 15
-
-# === Gap states (for reading N consumed from Gap neighbors) ===
-GAP_S_N_CONSUMED = 13
-
-# Unit conversion: kg (tree-level) -> tn/ha (soil pools)
-UNIT_CONV = 0.02
+from gap.constants import (
+    Breed, SiteP, SiteS, GapS,
+    UNIT_CONV,
+)
 
 
 @jit.rawkernel(device="cuda")
@@ -63,10 +46,10 @@ def site_nbalance_step(
     Matches GAPpy model.py:993-1005.
     """
     # Read avail_N computed by P1 this tick
-    avail_n = states_tensor[agent_index][SITE_S_AVAIL_N]
+    avail_n = states_tensor[agent_index][SiteS.AVAIL_N]
 
     # Read annual runoff computed by P1 this tick
-    annual_runoff = params_tensor[agent_index][SITE_P_ANNUAL_RUNOFF]
+    annual_runoff = params_tensor[agent_index][SiteP.ANNUAL_RUNOFF]
 
     # Sum N consumed from all Gap neighbors (aggregated at P8, same tick)
     total_n_consumed = 0.0
@@ -78,8 +61,8 @@ def site_nbalance_step(
         neighbor_idx = int(neighbor_indices[i])
         neighbor_breed = int(breeds[neighbor_idx])
 
-        if neighbor_breed == BREED_GAP:
-            gap_n_consumed = states_tensor[neighbor_idx][GAP_S_N_CONSUMED]
+        if neighbor_breed == Breed.GAP:
+            gap_n_consumed = states_tensor[neighbor_idx][GapS.N_CONSUMED]
             total_n_consumed = total_n_consumed + gap_n_consumed
             gap_count = gap_count + 1.0
 
@@ -90,10 +73,10 @@ def site_nbalance_step(
         total_n_consumed = total_n_consumed * UNIT_CONV / gap_count
 
     # Read current soil pools (written by P1 same tick, params has no double buffer)
-    sa_n0 = params_tensor[agent_index][SITE_P_A_N]
-    sa_c0 = params_tensor[agent_index][SITE_P_A_C]
-    sb_c0 = params_tensor[agent_index][SITE_P_BL_C]
-    sb_n0 = params_tensor[agent_index][SITE_P_BL_N]
+    sa_n0 = params_tensor[agent_index][SiteP.A_N]
+    sa_c0 = params_tensor[agent_index][SiteP.A_C]
+    sb_c0 = params_tensor[agent_index][SiteP.BL_C]
+    sb_n0 = params_tensor[agent_index][SiteP.BL_N]
 
     # Surplus = available N - consumed N (GAPpy model.py:993)
     surplus = avail_n - total_n_consumed
@@ -121,10 +104,10 @@ def site_nbalance_step(
     sb_n0 = sb_n0 + net_n_leach
 
     # Write adjusted soil pools back
-    params_tensor[agent_index][SITE_P_A_N] = sa_n0
-    params_tensor[agent_index][SITE_P_A_C] = sa_c0
-    params_tensor[agent_index][SITE_P_BL_C] = sb_c0
-    params_tensor[agent_index][SITE_P_BL_N] = sb_n0
+    params_tensor[agent_index][SiteP.A_N] = sa_n0
+    params_tensor[agent_index][SiteP.A_C] = sa_c0
+    params_tensor[agent_index][SiteP.BL_C] = sb_c0
+    params_tensor[agent_index][SiteP.BL_N] = sb_n0
 
     # Export net N leached for CSV output
-    states_tensor[agent_index][SITE_S_NET_N_INTO_A0] = net_n_leach
+    states_tensor[agent_index][SiteS.NET_N_INTO_A0] = net_n_leach
