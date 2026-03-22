@@ -25,14 +25,13 @@ from gap.constants import (
     STD_HT, PLOTSIZE, MAX_HEIGHT_BINS,
 )
 
-MAX_SPECIES = 50
 
 
 @jit.rawkernel(device="cuda")
 def gap_litter_aggregate_step(
     tick,
     agent_index,
-    species_traits, site_configs, rangelists,
+    species_traits, site_configs, rangelists, site_distances,
     agent_ids,
     breeds,
     locations,
@@ -57,8 +56,10 @@ def gap_litter_aggregate_step(
     for k in range(MAX_HEIGHT_BINS):
         states_tensor[agent_index][GapS.CUM_DEC_LAI_BASE + k] = 0.0
         states_tensor[agent_index][GapS.CUM_CON_LAI_BASE + k] = 0.0
-    for k in range(MAX_SPECIES):
-        states_tensor[agent_index][GapS.AVAIL_SPEC_BASE + k] = 0.0
+    sp = 0
+    while sp < len(species_traits):
+        states_tensor[agent_index][GapS.AVAIL_SPEC_BASE + sp] = 0.0
+        sp = sp + 1
 
     # --- 2. Loop through Tree neighbors ---
     neighbor_indices = locations[agent_index]
@@ -128,7 +129,7 @@ def gap_litter_aggregate_step(
                             states_tensor[agent_index][GapS.CUM_CON_LAI_BASE + bin_idx] = states_tensor[agent_index][GapS.CUM_CON_LAI_BASE + bin_idx] + lai_per_layer * 0.8
 
                 # Check avail_spec: mature tree of this species
-                if n_species_id >= 0 and n_species_id < MAX_SPECIES:
+                if n_species_id >= 0 and n_species_id < len(species_traits):
                     if n_diam > n_max_diam * 0.05:
                         states_tensor[agent_index][GapS.AVAIL_SPEC_BASE + n_species_id] = 1.0
 

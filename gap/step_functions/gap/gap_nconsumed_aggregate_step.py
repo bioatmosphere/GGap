@@ -23,7 +23,7 @@ from gap.constants import (
 def gap_nconsumed_aggregate_step(
     tick,
     agent_index,
-    species_traits, site_configs, rangelists,
+    species_traits, site_configs, rangelists, site_distances,
     agent_ids,
     breeds,
     locations,

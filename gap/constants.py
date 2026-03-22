@@ -223,6 +223,8 @@ class SiteS(IntEnum):
     C_INTO_A0 = 13
     N_INTO_A0 = 14
     NET_N_INTO_A0 = 15
+    SITE_AVAIL_SPEC_BASE = 16  # num_species slots: site-averaged avail_spec (for ghost export)
+    # IMPORTED_SEEDS_BASE = SITE_AVAIL_SPEC_BASE + num_species (computed at runtime)
 
 
 # ============================================================
@@ -248,6 +250,10 @@ UNIT_CONV = 0.02
 
 # Max height bins for LAI profiles
 MAX_HEIGHT_BINS = 50
+
+# Dispersal constants
+DISPERSAL_CUTOFF_FACTOR = 5.0  # sites within this × max_dispersal_dist are connected
+EARTH_RADIUS_KM = 6371.0       # for haversine distance (CPU-side only)
 
 
 # ============================================================

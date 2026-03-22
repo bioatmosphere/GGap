@@ -83,7 +83,7 @@ from gap.constants import (
 def site_soil_step(
     tick,
     agent_index,
-    species_traits, site_configs, rangelists,
+    species_traits, site_configs, rangelists, site_distances,
     agent_ids,
     breeds,
     locations,

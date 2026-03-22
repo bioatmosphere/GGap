@@ -42,7 +42,7 @@ from gap.constants import (
 def tree_template_renewal_step(
     tick,
     agent_index,
-    species_traits, site_configs, rangelists,
+    species_traits, site_configs, rangelists, site_distances,
     agent_ids,
     breeds,
     locations,
@@ -263,11 +263,16 @@ def tree_template_renewal_step(
             if regrowth <= 0.05:
                 regrowth = 0.0
 
-        # --- 4. Read avail_spec from Gap (pre-aggregated at P0) ---
+        # --- 4. Read avail_spec and imported_seeds from Gap ---
+        num_species = len(species_traits)
         avail_spec = 0.0
+        imported_seeds = 0.0
         species_idx = int(species_id)
-        if gap_idx >= 0 and species_idx >= 0 and species_idx < 50:
+        if gap_idx >= 0 and species_idx >= 0 and species_idx < num_species:
             avail_spec = states_tensor[gap_idx][GapS.AVAIL_SPEC_BASE + species_idx]
+            # imported_seeds relayed from Site at P2 (written at P10 previous tick)
+            gap_imported_base = GapS.RECOVERY_YEARS + 1
+            imported_seeds = states_tensor[gap_idx][gap_imported_base + species_idx]
 
         # --- 5. Seedbank/seedling pipeline ---
         # Branches: fire / wind / recovery(>1) / post-disturbance(==1) / normal / frozen
@@ -335,7 +340,7 @@ def tree_template_renewal_step(
             convert_threshold = 0.05
             if tick > 0:
                 convert_threshold = 0.01
-            seedbank = seedbank + invader_val + seed_val * avail_spec + sprout_val * avail_spec
+            seedbank = seedbank + invader_val + seed_val * avail_spec + sprout_val * avail_spec + imported_seeds
             if raw_regrowth >= convert_threshold:
                 seedling = seedling + seedbank
                 seedbank = 0.0

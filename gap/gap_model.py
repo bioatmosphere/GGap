@@ -57,10 +57,12 @@ from gap.step_functions.gap.gap_recruit_aggregate_step import gap_recruit_aggreg
 from gap.step_functions.tree.tree_actual_growth_step import tree_actual_growth_step
 from gap.step_functions.gap.gap_nconsumed_aggregate_step import gap_nconsumed_aggregate_step
 from gap.step_functions.site.site_nbalance_step import site_nbalance_step
+from gap.step_functions.site.site_seed_dispersal_step import site_seed_dispersal_step
 
 # Import constants
 from gap.constants import (
     Cfg, NUM_SPECIES_TRAITS, NUM_SITE_CONFIGS,
+    DISPERSAL_CUTOFF_FACTOR, EARTH_RADIUS_KM,
 )
 
 CURRENT_DIR = Path(__file__).resolve().parent
@@ -189,6 +191,31 @@ class GAPModel(Model):
         space = NetworkSpace()
         super().__init__(space)
 
+        # Species registry (deduplicated across sites)
+        self.unique_species = {}
+        self.species_by_id = {}  # global_id -> species info dict
+
+        # Track agents
+        self.sites = []  # site info dicts
+        self.site_agents = []  # site agent IDs
+        self.gap_agents = []  # gap agent IDs
+        self.tree_ids = []  # tree agent IDs
+        self.tree_to_gap = {}  # tree_agent_id -> gap_agent_id
+
+        # Track number of sites loaded into globals
+        self._num_sites_in_globals = 0
+        self._breeds_registered = False
+
+    def _register_breeds(self, num_species):
+        """Register breeds with dynamic state sizes based on num_species.
+
+        Must be called after load_globals() determines num_species.
+        Gap states: 167 (existing) + num_species (imported_seeds relay)
+        Site states: 16 (existing) + num_species (avail_spec) + num_species (imported_seeds)
+        """
+        gap_states_size = GAP_STATES_SIZE + num_species
+        site_states_size = 16 + num_species * 2
+
         # === Create Tree breed (breed_id = 0) ===
         self._tree_breed = Breed("Tree")
         self._tree_breed.register_property("params", [0.0] * TREE_PARAMS_SIZE, neighbor_visible=False)
@@ -217,7 +244,7 @@ class GAPModel(Model):
         # === Create Gap breed (breed_id = 1) ===
         self._gap_breed = Breed("Gap")
         self._gap_breed.register_property("params", [0.0] * 2, neighbor_visible=False)
-        self._gap_breed.register_property("states", [0.0] * GAP_STATES_SIZE, neighbor_visible=True)
+        self._gap_breed.register_property("states", [0.0] * gap_states_size, neighbor_visible=True)
         self._gap_breed.register_property("states_db", [0.0] * 1, neighbor_visible=True)
         self._gap_breed.register_step_func(
             gap_litter_aggregate_step,
@@ -254,7 +281,7 @@ class GAPModel(Model):
         # === Create Site breed (breed_id = 2) ===
         self._site_breed = Breed("Site")
         self._site_breed.register_property("params", [0.0] * SITE_PARAMS_SIZE, neighbor_visible=False)
-        self._site_breed.register_property("states", [0.0] * 16, neighbor_visible=True)
+        self._site_breed.register_property("states", [0.0] * site_states_size, neighbor_visible=True)
         self._site_breed.register_property("states_db", [0.0] * 1, neighbor_visible=True)
         self._site_breed.register_step_func(
             site_soil_step,
@@ -268,21 +295,19 @@ class GAPModel(Model):
             priority=9,
             no_double_buffer=["params", "states", "states_db"],
         )
+        self._site_breed.register_step_func(
+            site_seed_dispersal_step,
+            CURRENT_DIR / "step_functions" / "site" / "site_seed_dispersal_step.py",
+            priority=10,
+            no_double_buffer=["params", "states", "states_db"],
+        )
         self.register_breed(breed=self._site_breed)
 
-        # Species registry (deduplicated across sites)
-        self.unique_species = {}
-        self.species_by_id = {}  # global_id -> species info dict
-
-        # Track agents
-        self.sites = []  # site info dicts
-        self.site_agents = []  # site agent IDs
-        self.gap_agents = []  # gap agent IDs
-        self.tree_ids = []  # tree agent IDs
-        self.tree_to_gap = {}  # tree_agent_id -> gap_agent_id
-
-        # Track number of sites loaded into globals
-        self._num_sites_in_globals = 0
+        # Register site_distances global (placeholder, updated by connect_sites)
+        num_sites = self._num_sites_in_globals
+        self.register_global_property("site_distances",
+                                      np.zeros((num_sites, num_sites)))
+        self._breeds_registered = True
 
     def load_globals(self, data_dir="input_data", prefix="UVAFME2012"):
         """
@@ -364,6 +389,7 @@ class GAPModel(Model):
                 'seedling_lg': float(row['NDS']),
                 'leafdiam_a': leafdiam_a,
                 'leafarea_c': leafarea_c,
+                'max_dispersal_dist': float(row.get('max_dispersal_dist', 10.0)),
             }
             self.unique_species[species_code] = sp_info
             self.species_by_id[global_id] = sp_info
@@ -462,6 +488,10 @@ class GAPModel(Model):
                                 rangelists[site_slot, sp_info['global_id']] = 1.0
         self.register_global_property("rangelists", rangelists)
 
+        # Register breeds now that num_species is known
+        if not self._breeds_registered:
+            self._register_breeds(num_species)
+
         # Store site_id mapping for initialize_site
         self._site_id_to_slot = {sid: slot for slot, sid in enumerate(all_site_ids)}
         self._site_rows = site_rows
@@ -476,10 +506,11 @@ class GAPModel(Model):
             'lownutr_tol', 'flood_tol', 'drought_tol', 'evergreen',
             'fire_tol', 'rootdepth', 'stress_tol', 'age_tol',
             'seed_surv', 'seedling_lg', 'leafdiam_a', 'leafarea_c',
+            'max_dispersal_dist',
         ]
         if trait_idx < len(mapping):
             return float(sp_info[mapping[trait_idx]])
-        return 0.0  # MAX_DISPERSAL_DIST (new, default 0)
+        return 0.0
 
     def _build_site_config(self, site_id, site_row, climate_row,
                            climate_std_row, altitude_row, months):
@@ -632,8 +663,10 @@ class GAPModel(Model):
         params[SITE_P_ANNUAL_RUNOFF] = 0.0
         params[SITE_P_SITE_ID] = float(site_slot)  # Globals slot index
 
-        # === Build states[16] ===
-        states = [0.0] * 16
+        # === Build states (dynamic size: 16 base + num_species avail + num_species imported) ===
+        num_species = len(self.unique_species)
+        site_states_size = 16 + num_species * 2
+        states = [0.0] * site_states_size
         states[SITE_S_DEG_DAYS] = deg_days
         states[SITE_S_DRY_DAYS] = dry_days
         states[SITE_S_AVAIL_N] = 0.1
@@ -691,7 +724,9 @@ class GAPModel(Model):
         params[GAP_P_GAP_ID] = float(gap_id)
         params[GAP_P_TOTAL_N_DEMAND] = 0.0
 
-        states = [0.0] * GAP_STATES_SIZE
+        num_species = len(self.unique_species)
+        gap_states_size = GAP_STATES_SIZE + num_species
+        states = [0.0] * gap_states_size
         states[GAP_S_DEG_DAYS] = deg_days
         states[GAP_S_DRY_DAYS] = dry_days
         states[GAP_S_AVAIL_N] = 0.1
@@ -848,6 +883,62 @@ class GAPModel(Model):
     def connect_agents(self, agent_0, agent_1, directed=False):
         """Connect two agents. Bidirectional by default, one-way if directed=True."""
         self.get_space().connect_agents(agent_0, agent_1, directed=directed)
+
+    def connect_sites(self):
+        """Connect site agents for inter-site seed dispersal.
+
+        Computes haversine distance between each site pair. Only connects
+        sites within DISPERSAL_CUTOFF_FACTOR * max(max_dispersal_dist).
+        Stores pre-computed distances in site_distances global tensor.
+        """
+        import math
+
+        num_sites = len(self.site_agents)
+        if num_sites < 2:
+            return
+
+        # Get max dispersal distance across all species
+        max_disp = 0.0
+        for sp_info in self.unique_species.values():
+            d = sp_info.get('max_dispersal_dist', 0.0)
+            if d > max_disp:
+                max_disp = d
+
+        cutoff = DISPERSAL_CUTOFF_FACTOR * max_disp
+
+        # Build distance matrix and connect qualifying pairs
+        distances = np.zeros((self._num_sites_in_globals, self._num_sites_in_globals))
+        for i in range(num_sites):
+            for j in range(i + 1, num_sites):
+                site_i = self.sites[i]
+                site_j = self.sites[j]
+                slot_i = site_i['site_slot']
+                slot_j = site_j['site_slot']
+
+                lat1 = site_i.get('latitude', 0.0)
+                lon1 = site_i.get('longitude', 0.0)
+                lat2 = site_j.get('latitude', 0.0)
+                lon2 = site_j.get('longitude', 0.0)
+
+                # Haversine distance in km
+                lat1_r = math.radians(lat1)
+                lat2_r = math.radians(lat2)
+                dlat = math.radians(lat2 - lat1)
+                dlon = math.radians(lon2 - lon1)
+                a = (math.sin(dlat / 2.0) ** 2 +
+                     math.cos(lat1_r) * math.cos(lat2_r) * math.sin(dlon / 2.0) ** 2)
+                c = 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
+                dist = EARTH_RADIUS_KM * c
+
+                distances[slot_i, slot_j] = dist
+                distances[slot_j, slot_i] = dist
+
+                if cutoff > 0.0 and dist <= cutoff:
+                    self.connect_agents(self.site_agents[i], self.site_agents[j])
+                    print(f"  Connected site {site_i['site_id']} <-> site {site_j['site_id']} "
+                          f"(distance: {dist:.1f} km, cutoff: {cutoff:.1f} km)")
+
+        self.set_global_property_value("site_distances", distances)
 
     def get_species_count(self):
         return len(self.unique_species)

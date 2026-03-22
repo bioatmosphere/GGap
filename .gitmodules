@@ -1,7 +1,7 @@
 [submodule "SAGESim"]
 	path = SAGESim
 	url = https://github.com/ORNL/SAGESim.git
-	branch = dev
+	branch = 46-gpu-communications
 [submodule "GAPpy"]
 	path = GAPpy
 	url = https://github.com/bioatmosphere/GAPpy.git
