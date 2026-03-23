@@ -49,6 +49,7 @@ def tree_template_renewal_step(
     params_tensor,
     states_tensor,
     states_db_tensor,
+    gap_lai, gap_species, site_species, gap_lai_idx, gap_species_idx, site_species_idx,
 ):
     """
     Template renewal step (priority 5).
@@ -99,8 +100,8 @@ def tree_template_renewal_step(
                 # D4 fix: ground-level light reads layer 1 (matches GAPpy dec_light[0]
                 # = exp(xt * lvd_c3[1] / plotsize) which uses cumulative LAI from
                 # layer 1+, excluding the ground layer itself)
-                cum_dec_lai = states_tensor[neighbor_idx][GapS.CUM_DEC_LAI_BASE + 1]
-                cum_con_lai = states_tensor[neighbor_idx][GapS.CUM_CON_LAI_BASE + 1]
+                cum_dec_lai = gap_lai[gap_lai_idx[neighbor_idx]][1][0]
+                cum_con_lai = gap_lai[gap_lai_idx[neighbor_idx]][1][1]
             i = i + 1
 
         # Read species_id from params, then look up traits from species_traits tensor
@@ -269,10 +270,9 @@ def tree_template_renewal_step(
         imported_seeds = 0.0
         species_idx = int(species_id)
         if gap_idx >= 0 and species_idx >= 0 and species_idx < num_species:
-            avail_spec = states_tensor[gap_idx][GapS.AVAIL_SPEC_BASE + species_idx]
+            avail_spec = gap_species[gap_species_idx[gap_idx]][species_idx]
             # imported_seeds relayed from Site at P2 (written at P10 previous tick)
-            gap_imported_base = GapS.RECOVERY_YEARS + 1
-            imported_seeds = states_tensor[gap_idx][gap_imported_base + species_idx]
+            imported_seeds = gap_species[gap_species_idx[gap_idx]][num_species + species_idx]
 
         # --- 5. Seedbank/seedling pipeline ---
         # Branches: fire / wind / recovery(>1) / post-disturbance(==1) / normal / frozen

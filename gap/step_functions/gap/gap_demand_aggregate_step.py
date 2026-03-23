@@ -34,6 +34,8 @@ def gap_demand_aggregate_step(
     params_tensor,
     states_tensor,
     states_db_tensor,
+    gap_lai, gap_species, site_species,
+    gap_lai_idx, gap_species_idx, site_species_idx,
 ):
     """
     Gap N demand aggregate + sync step (priority 4).

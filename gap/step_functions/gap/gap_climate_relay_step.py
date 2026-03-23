@@ -1,7 +1,7 @@
 """
 Gap climate relay step function for GGap model (Priority 2).
 Copies climate from Site to Gap states so trees can read current-tick climate at P3.
-Also relays imported_seeds from Site (written at P10 previous tick) to Gap
+Also relays imported_seeds from site_species to gap_species (breed-local arrays)
 for P5 templates to read.
 
 This runs AFTER P1 (site soil) but BEFORE P3 (tree potential growth),
@@ -11,7 +11,7 @@ Execution Flow:
     1. Find Site neighbor
     2. Copy deg_days, dry_days, flood_days, fire/wind intensity, dry_days_base
     3. Copy avail_n (for P5 templates and P7 disturbance gate)
-    4. Copy imported_seeds from SiteS to GapS (for P5 template seedbank)
+    4. Copy imported_seeds from site_species to gap_species (for P5 template seedbank)
 """
 
 import cupy as cp  # noqa: F401
@@ -33,6 +33,8 @@ def gap_climate_relay_step(
     params_tensor,
     states_tensor,
     states_db_tensor,
+    gap_lai, gap_species, site_species,
+    gap_lai_idx, gap_species_idx, site_species_idx,
 ):
     """
     Gap climate relay step (priority 2).
@@ -82,14 +84,13 @@ def gap_climate_relay_step(
     elif site_wind_intensity > 0.01:
         states_tensor[agent_index][GapS.RECOVERY_YEARS] = 3.0
 
-    # Relay imported_seeds from Site → Gap (written at P10 previous tick)
-    # P5 templates read from GapS for seedbank accumulation
+    # Relay imported_seeds from site_species → gap_species (written at P10 previous tick)
+    # P5 templates read from gap_species for seedbank accumulation
     num_species = len(species_traits)
-    imported_seeds_base_site = SiteS.SITE_AVAIL_SPEC_BASE + num_species
-    imported_seeds_base_gap = GapS.RECOVERY_YEARS + 1
+    gsp_row = gap_species_idx[agent_index]
     if site_idx >= 0:
+        ssp_row = site_species_idx[site_idx]
         sp = 0
         while sp < num_species:
-            states_tensor[agent_index][imported_seeds_base_gap + sp] = \
-                states_tensor[site_idx][imported_seeds_base_site + sp]
+            gap_species[gsp_row][num_species + sp] = site_species[ssp_row][num_species + sp]
             sp = sp + 1

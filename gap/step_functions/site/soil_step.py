@@ -90,6 +90,8 @@ def site_soil_step(
     params_tensor,
     states_tensor,
     states_db_tensor,
+    gap_lai, gap_species, site_species,
+    gap_lai_idx, gap_species_idx, site_species_idx,
 ):
     """
     Soil biogeochemistry step function (priority 1).
@@ -135,8 +137,8 @@ def site_soil_step(
             total_litter_n = total_litter_n + gap_litter_n
 
             # Read per-gap normalized LAI (GAPpy canopy():362)
-            gap_lai = states_tensor[neighbor_idx][GapS.TOTAL_LAI]
-            total_gap_lai = total_gap_lai + gap_lai
+            neighbor_gap_lai = states_tensor[neighbor_idx][GapS.TOTAL_LAI]
+            total_gap_lai = total_gap_lai + neighbor_gap_lai
 
             gap_count = gap_count + 1.0
 

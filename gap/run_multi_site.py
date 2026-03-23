@@ -241,7 +241,8 @@ def main():
             print(f"  site_{sid}/: genus_data.csv, species_data.csv, site_data.csv, soil_data.csv"
                   + ("" if args.no_tree_data else ", tree_data.csv"))
 
-    # Setup GPU kernels
+    # Register breed-local arrays and setup GPU kernels
+    model.register_breed_local_arrays()
     if rank == 0:
         print("\nSetting up GPU kernels...")
     model.setup(use_gpu=True)

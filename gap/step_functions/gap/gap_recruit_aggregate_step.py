@@ -37,6 +37,8 @@ def gap_recruit_aggregate_step(
     params_tensor,
     states_tensor,
     states_db_tensor,
+    gap_lai, gap_species, site_species,
+    gap_lai_idx, gap_species_idx, site_species_idx,
 ):
     """
     Gap recruitment aggregate step (priority 6).

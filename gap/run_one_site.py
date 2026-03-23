@@ -201,6 +201,9 @@ def main():
               + ("" if args.no_tree_data else ", tree_data.csv"))
         print("\nSetting up GPU kernels...")
 
+    # Register breed-local arrays (must be after all agents created, before setup)
+    model.register_breed_local_arrays()
+
     # Setup model (generates GPU kernels)
     model.setup(use_gpu=True)
 

@@ -146,7 +146,8 @@ def main():
         model.print_statistics(tick=0, by_gap=args.show_gap_details)
         print("\nSetting up GPU kernels...")
 
-    # Setup model (generates GPU kernels)
+    # Register breed-local arrays and setup model (generates GPU kernels)
+    model.register_breed_local_arrays()
     model.setup(use_gpu=True)
 
     if rank == 0:

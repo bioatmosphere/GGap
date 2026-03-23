@@ -6,7 +6,7 @@ Species traits (EVERGREEN, LEAFDIAM_A, MAX_DIAM) now read from species_traits
 via the tree's species_id, instead of from tree params.
 
 Execution Flow:
-    1. Zero cumulative LAI bins (50 dec + 50 con) and avail_spec flags (50)
+    1. Zero cumulative LAI bins in gap_lai and avail_spec flags in gap_species
     2. Loop through Tree neighbors:
        - Sum litter_c, litter_n from living trees (written at P7 of previous tick)
        - Read species_id from tree params → look up EVERGREEN, LEAFDIAM_A, MAX_DIAM from globals
@@ -38,6 +38,8 @@ def gap_litter_aggregate_step(
     params_tensor,
     states_tensor,
     states_db_tensor,
+    gap_lai, gap_species, site_species,
+    gap_lai_idx, gap_species_idx, site_species_idx,
 ):
     """
     Gap litter aggregate step (priority 0).
@@ -52,13 +54,17 @@ def gap_litter_aggregate_step(
     total_seedling_weight = 0.0
     total_lai = 0.0
 
-    # --- 1. Zero the 150 new accumulator slots (3 × 50) ---
+    # Get breed-local array rows for this gap
+    lai_row = gap_lai_idx[agent_index]
+    sp_row = gap_species_idx[agent_index]
+
+    # --- 1. Zero the LAI bins and avail_spec flags ---
     for k in range(MAX_HEIGHT_BINS):
-        states_tensor[agent_index][GapS.CUM_DEC_LAI_BASE + k] = 0.0
-        states_tensor[agent_index][GapS.CUM_CON_LAI_BASE + k] = 0.0
+        gap_lai[lai_row][k][0] = 0.0
+        gap_lai[lai_row][k][1] = 0.0
     sp = 0
     while sp < len(species_traits):
-        states_tensor[agent_index][GapS.AVAIL_SPEC_BASE + sp] = 0.0
+        gap_species[sp_row][sp] = 0.0
         sp = sp + 1
 
     # --- 2. Loop through Tree neighbors ---
@@ -122,16 +128,16 @@ def gap_litter_aggregate_step(
                     bin_idx = canht_int + layer
                     if bin_idx >= 0 and bin_idx < MAX_HEIGHT_BINS:
                         if n_evergreen > 0:
-                            states_tensor[agent_index][GapS.CUM_DEC_LAI_BASE + bin_idx] = states_tensor[agent_index][GapS.CUM_DEC_LAI_BASE + bin_idx] + lai_per_layer
-                            states_tensor[agent_index][GapS.CUM_CON_LAI_BASE + bin_idx] = states_tensor[agent_index][GapS.CUM_CON_LAI_BASE + bin_idx] + lai_per_layer
+                            gap_lai[lai_row][bin_idx][0] = gap_lai[lai_row][bin_idx][0] + lai_per_layer
+                            gap_lai[lai_row][bin_idx][1] = gap_lai[lai_row][bin_idx][1] + lai_per_layer
                         else:
-                            states_tensor[agent_index][GapS.CUM_DEC_LAI_BASE + bin_idx] = states_tensor[agent_index][GapS.CUM_DEC_LAI_BASE + bin_idx] + lai_per_layer
-                            states_tensor[agent_index][GapS.CUM_CON_LAI_BASE + bin_idx] = states_tensor[agent_index][GapS.CUM_CON_LAI_BASE + bin_idx] + lai_per_layer * 0.8
+                            gap_lai[lai_row][bin_idx][0] = gap_lai[lai_row][bin_idx][0] + lai_per_layer
+                            gap_lai[lai_row][bin_idx][1] = gap_lai[lai_row][bin_idx][1] + lai_per_layer * 0.8
 
                 # Check avail_spec: mature tree of this species
                 if n_species_id >= 0 and n_species_id < len(species_traits):
                     if n_diam > n_max_diam * 0.05:
-                        states_tensor[agent_index][GapS.AVAIL_SPEC_BASE + n_species_id] = 1.0
+                        gap_species[sp_row][n_species_id] = 1.0
 
             elif tree_alive < -0.5:
                 # Template: read seedling weight for proportional decrement
@@ -143,14 +149,14 @@ def gap_litter_aggregate_step(
     # --- 3. Top-down cumulative prefix sum ---
     for k in range(49):
         layer = 48 - k
-        states_tensor[agent_index][GapS.CUM_DEC_LAI_BASE + layer] = states_tensor[agent_index][GapS.CUM_DEC_LAI_BASE + layer] + states_tensor[agent_index][GapS.CUM_DEC_LAI_BASE + layer + 1]
-        states_tensor[agent_index][GapS.CUM_CON_LAI_BASE + layer] = states_tensor[agent_index][GapS.CUM_CON_LAI_BASE + layer] + states_tensor[agent_index][GapS.CUM_CON_LAI_BASE + layer + 1]
+        gap_lai[lai_row][layer][0] = gap_lai[lai_row][layer][0] + gap_lai[lai_row][layer + 1][0]
+        gap_lai[lai_row][layer][1] = gap_lai[lai_row][layer][1] + gap_lai[lai_row][layer + 1][1]
 
     # --- 4. Write aggregated outputs ---
     states_tensor[agent_index][GapS.LITTER_ACCUM_C] = total_litter_c
     states_tensor[agent_index][GapS.LITTER_ACCUM_N] = total_litter_n
 
-    gap_lai = total_lai / PLOTSIZE
-    states_tensor[agent_index][GapS.TOTAL_LAI] = gap_lai
+    total_lai_scaled = total_lai / PLOTSIZE
+    states_tensor[agent_index][GapS.TOTAL_LAI] = total_lai_scaled
 
     states_tensor[agent_index][GapS.TOTAL_SEEDLING_WEIGHT] = total_seedling_weight

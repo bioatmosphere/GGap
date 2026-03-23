@@ -52,6 +52,8 @@ def tree_potential_growth_step(
     params_tensor,
     states_tensor,
     states_db_tensor,
+    gap_lai, gap_species, site_species,
+    gap_lai_idx, gap_species_idx, site_species_idx,
 ):
     """
     Phase A (P2): Environmental stress + potential growth + N demand.
@@ -130,11 +132,12 @@ def tree_potential_growth_step(
                 dry_days = states_tensor[neighbor_idx][GapS.DRY_DAYS]
                 dry_days_base = states_tensor[neighbor_idx][GapS.DRY_DAYS_BASE]
                 flood_days = states_tensor[neighbor_idx][GapS.FLOOD_DAYS]
-                # O(1) cumulative LAI reads (pre-aggregated at P0)
-                cum_dec_lai = states_tensor[neighbor_idx][GapS.CUM_DEC_LAI_BASE + tree_height_layer]
-                cum_con_lai = states_tensor[neighbor_idx][GapS.CUM_CON_LAI_BASE + tree_height_layer]
-                cum_dec_lai_base = states_tensor[neighbor_idx][GapS.CUM_DEC_LAI_BASE + tree_base_layer]
-                cum_con_lai_base = states_tensor[neighbor_idx][GapS.CUM_CON_LAI_BASE + tree_base_layer]
+                # O(1) cumulative LAI reads from breed-local array (pre-aggregated at P0)
+                grow = gap_lai_idx[neighbor_idx]
+                cum_dec_lai = gap_lai[grow][tree_height_layer][0]
+                cum_con_lai = gap_lai[grow][tree_height_layer][1]
+                cum_dec_lai_base = gap_lai[grow][tree_base_layer][0]
+                cum_con_lai_base = gap_lai[grow][tree_base_layer][1]
             i = i + 1
 
         # Beer-Lambert (GAPpy model.py:347-348): exp(xt * cumLAI / plotsize)

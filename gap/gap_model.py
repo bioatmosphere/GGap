@@ -113,7 +113,8 @@ TREE_DB_SEEDLING_WEIGHT = 4  # seedling * regrowth (written by templates at P5, 
 GAP_P_GAP_ID = 0
 GAP_P_TOTAL_N_DEMAND = 1
 
-# states[167]: climate + nutrients + litter_pool + recruitment + seedling_weight + fire + wind + n_demand + bg_litter + dry_days_base + cum_lai_bins + avail_spec
+# states[17]: climate + nutrients + litter_pool + recruitment + seedling_weight + fire + wind + n_demand + bg_litter + dry_days_base + recovery_years
+# CUM_DEC_LAI, CUM_CON_LAI, AVAIL_SPEC moved to breed-local arrays
 GAP_S_DEG_DAYS = 0
 GAP_S_DRY_DAYS = 1
 GAP_S_AVAIL_N = 2
@@ -130,13 +131,8 @@ GAP_S_LITTER_ACCUM_C_BG = 12
 GAP_S_LITTER_ACCUM_N_BG = 13
 GAP_S_DRY_DAYS_BASE = 14
 GAP_S_WIND_INTENSITY = 15
-
-MAX_HEIGHT_BINS = 50
-GAP_S_CUM_DEC_LAI_BASE = 16   # cum_dec_lai[0..49] at slots 16-65
-GAP_S_CUM_CON_LAI_BASE = 66   # cum_con_lai[0..49] at slots 66-115
-GAP_S_AVAIL_SPEC_BASE = 116   # avail_spec[0..49] at slots 116-165
-GAP_S_RECOVERY_YEARS = 166
-GAP_STATES_SIZE = 167
+GAP_S_RECOVERY_YEARS = 16
+GAP_STATES_SIZE = 17
 
 GAP_DB_PLACEHOLDER = 0
 
@@ -213,8 +209,8 @@ class GAPModel(Model):
         Gap states: 167 (existing) + num_species (imported_seeds relay)
         Site states: 16 (existing) + num_species (avail_spec) + num_species (imported_seeds)
         """
-        gap_states_size = GAP_STATES_SIZE + num_species
-        site_states_size = 16 + num_species * 2
+        gap_states_size = GAP_STATES_SIZE  # 17 (was 167+num_species)
+        site_states_size = 16             # (was 16+2*num_species)
 
         # === Create Tree breed (breed_id = 0) ===
         self._tree_breed = Breed("Tree")
@@ -663,10 +659,8 @@ class GAPModel(Model):
         params[SITE_P_ANNUAL_RUNOFF] = 0.0
         params[SITE_P_SITE_ID] = float(site_slot)  # Globals slot index
 
-        # === Build states (dynamic size: 16 base + num_species avail + num_species imported) ===
-        num_species = len(self.unique_species)
-        site_states_size = 16 + num_species * 2
-        states = [0.0] * site_states_size
+        # === Build states (fixed 16 — species arrays moved to breed-local) ===
+        states = [0.0] * 16
         states[SITE_S_DEG_DAYS] = deg_days
         states[SITE_S_DRY_DAYS] = dry_days
         states[SITE_S_AVAIL_N] = 0.1
@@ -724,9 +718,7 @@ class GAPModel(Model):
         params[GAP_P_GAP_ID] = float(gap_id)
         params[GAP_P_TOTAL_N_DEMAND] = 0.0
 
-        num_species = len(self.unique_species)
-        gap_states_size = GAP_STATES_SIZE + num_species
-        states = [0.0] * gap_states_size
+        states = [0.0] * GAP_STATES_SIZE
         states[GAP_S_DEG_DAYS] = deg_days
         states[GAP_S_DRY_DAYS] = dry_days
         states[GAP_S_AVAIL_N] = 0.1
@@ -883,6 +875,35 @@ class GAPModel(Model):
     def connect_agents(self, agent_0, agent_1, directed=False):
         """Connect two agents. Bidirectional by default, one-way if directed=True."""
         self.get_space().connect_agents(agent_0, agent_1, directed=directed)
+
+    def register_breed_local_arrays(self):
+        """Register breed-local arrays for LAI, gap species, and site species.
+
+        Must be called after all agents are created but before setup().
+        These arrays replace the variable-length portions that were previously
+        embedded in states_tensor (CUM_DEC_LAI, CUM_CON_LAI, AVAIL_SPEC,
+        SITE_AVAIL_SPEC, IMPORTED_SEEDS).
+        """
+        from gap.constants import MAX_HEIGHT_BINS
+        num_gaps = len(self.gap_agents)
+        num_sites = len(self.site_agents)
+        num_species = len(self.unique_species)
+
+        # gap_lai: (num_gaps, MAX_HEIGHT_BINS, 2) — dec LAI at [:,:,0], con LAI at [:,:,1]
+        self.register_breed_local_array(
+            "gap_lai", breed=self._gap_breed,
+            shape_per_agent=(MAX_HEIGHT_BINS, 2))
+
+        # gap_species: (num_gaps, num_species*2) — avail_spec at [0:N], imported_seeds relay at [N:2N]
+        self.register_breed_local_array(
+            "gap_species", breed=self._gap_breed,
+            shape_per_agent=(num_species * 2,))
+
+        # site_species: (num_sites, num_species*2) — site_avail_spec at [0:N], imported_seeds at [N:2N]
+        self.register_breed_local_array(
+            "site_species", breed=self._site_breed,
+            shape_per_agent=(num_species * 2,),
+            ghost_exchange=True)
 
     def connect_sites(self):
         """Connect site agents for inter-site seed dispersal.

@@ -24,7 +24,7 @@ import cupy as cp
 from cupyx import jit
 
 from gap.constants import (
-    Breed, Trait, SiteP, SiteS, GapS,
+    Breed, Trait, SiteP,
 )
 
 
@@ -39,6 +39,8 @@ def site_seed_dispersal_step(
     params_tensor,
     states_tensor,
     states_db_tensor,
+    gap_lai, gap_species, site_species,
+    gap_lai_idx, gap_species_idx, site_species_idx,
 ):
     """
     Site seed dispersal step (priority 10).
@@ -46,10 +48,10 @@ def site_seed_dispersal_step(
     Aggregates own avail_spec from gap neighbors (for ghost export).
     Reads neighbor site ghost avail_spec (previous tick) and computes
     dispersal using negative exponential kernel.
-    Writes imported_seeds to SiteS for P2 gap relay next tick.
+    Writes imported_seeds to site_species for P2 gap relay next tick.
     """
     num_species = len(species_traits)
-    imported_seeds_base = SiteS.SITE_AVAIL_SPEC_BASE + num_species
+    srow = site_species_idx[agent_index]
 
     own_site_id = int(params_tensor[agent_index][SiteP.SITE_ID])
 
@@ -64,10 +66,10 @@ def site_seed_dispersal_step(
     site_neighbor_3 = -1
     num_site_neighbors = 0
 
-    # Zero avail_spec accumulator in SiteS
+    # Zero avail_spec accumulator in site_species
     sp = 0
     while sp < num_species:
-        states_tensor[agent_index][SiteS.SITE_AVAIL_SPEC_BASE + sp] = 0.0
+        site_species[srow][sp] = 0.0
         sp = sp + 1
 
     neighbor_indices = locations[agent_index]
@@ -81,9 +83,9 @@ def site_seed_dispersal_step(
             # Accumulate avail_spec from this gap
             sp = 0
             while sp < num_species:
-                gap_avail = states_tensor[neighbor_idx][GapS.AVAIL_SPEC_BASE + sp]
-                states_tensor[agent_index][SiteS.SITE_AVAIL_SPEC_BASE + sp] = \
-                    states_tensor[agent_index][SiteS.SITE_AVAIL_SPEC_BASE + sp] + gap_avail
+                gap_avail = gap_species[gap_species_idx[neighbor_idx]][sp]
+                site_species[srow][sp] = \
+                    site_species[srow][sp] + gap_avail
                 sp = sp + 1
 
         elif neighbor_breed == Breed.SITE:
@@ -104,15 +106,15 @@ def site_seed_dispersal_step(
     if gap_count > 0.5:
         sp = 0
         while sp < num_species:
-            states_tensor[agent_index][SiteS.SITE_AVAIL_SPEC_BASE + sp] = \
-                states_tensor[agent_index][SiteS.SITE_AVAIL_SPEC_BASE + sp] / gap_count
+            site_species[srow][sp] = \
+                site_species[srow][sp] / gap_count
             sp = sp + 1
 
     # --- 3. Compute dispersal from each neighbor site ---
-    # Zero imported_seeds
+    # Zero imported_seeds (second half of site_species row)
     sp = 0
     while sp < num_species:
-        states_tensor[agent_index][imported_seeds_base + sp] = 0.0
+        site_species[srow][num_species + sp] = 0.0
         sp = sp + 1
 
     # Process each neighbor site
@@ -132,7 +134,7 @@ def site_seed_dispersal_step(
 
             sp = 0
             while sp < num_species:
-                neighbor_avail = states_tensor[neighbor_idx][SiteS.SITE_AVAIL_SPEC_BASE + sp]
+                neighbor_avail = site_species[site_species_idx[neighbor_idx]][sp]
 
                 if neighbor_avail > 0.0:
                     # Check if species is in our rangelist
@@ -143,8 +145,8 @@ def site_seed_dispersal_step(
                             weight = cp.exp(-distance / max_disp)
                             seed_num = species_traits[sp][Trait.SEED]
                             seed_import = seed_num * neighbor_avail * weight
-                            states_tensor[agent_index][imported_seeds_base + sp] = \
-                                states_tensor[agent_index][imported_seeds_base + sp] + seed_import
+                            site_species[srow][num_species + sp] = \
+                                site_species[srow][num_species + sp] + seed_import
 
                 sp = sp + 1
 
@@ -154,6 +156,6 @@ def site_seed_dispersal_step(
     if gap_count > 0.5:
         sp = 0
         while sp < num_species:
-            states_tensor[agent_index][imported_seeds_base + sp] = \
-                states_tensor[agent_index][imported_seeds_base + sp] / gap_count
+            site_species[srow][num_species + sp] = \
+                site_species[srow][num_species + sp] / gap_count
             sp = sp + 1

@@ -179,10 +179,9 @@ class GapS(IntEnum):
     N_CONSUMED = 13
     DRY_DAYS_BASE = 14
     WIND_INTENSITY = 15
-    CUM_DEC_LAI_BASE = 16    # cum_dec_lai[0..49] at slots 16-65
-    CUM_CON_LAI_BASE = 66    # cum_con_lai[0..49] at slots 66-115
-    AVAIL_SPEC_BASE = 116    # species availability at slots 116-165
-    RECOVERY_YEARS = 166
+    RECOVERY_YEARS = 16
+    # Total: 17 columns (was 167+num_species)
+    # CUM_DEC_LAI, CUM_CON_LAI, AVAIL_SPEC moved to breed-local arrays
 
 
 # ============================================================
@@ -223,8 +222,8 @@ class SiteS(IntEnum):
     C_INTO_A0 = 13
     N_INTO_A0 = 14
     NET_N_INTO_A0 = 15
-    SITE_AVAIL_SPEC_BASE = 16  # num_species slots: site-averaged avail_spec (for ghost export)
-    # IMPORTED_SEEDS_BASE = SITE_AVAIL_SPEC_BASE + num_species (computed at runtime)
+    # Total: 16 columns (was 16+2*num_species)
+    # SITE_AVAIL_SPEC and IMPORTED_SEEDS moved to breed-local arrays
 
 
 # ============================================================

@@ -37,6 +37,8 @@ def site_nbalance_step(
     params_tensor,
     states_tensor,
     states_db_tensor,
+    gap_lai, gap_species, site_species,
+    gap_lai_idx, gap_species_idx, site_species_idx,
 ):
     """
     Site N balance step (priority 9).
