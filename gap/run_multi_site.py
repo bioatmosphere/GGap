@@ -50,14 +50,18 @@ num_workers = comm.Get_size()
 def collect_per_site_data(model, sites):
     """Collect site params/states and tree data per site.
 
-    Returns list of (site_params, site_states, tree_data, gap_agents) per site.
+    Returns list of (site_params, site_states, tree_data, gap_agents) per site
+    on rank 0, None on other ranks.
     """
-    # Bulk download all breeds
+    # Bulk download all breeds (returns None on non-root ranks)
     all_site_params = model.get_breed_data("Site", "params")
     all_site_states = model.get_breed_data("Site", "states")
     all_tree_params = model.get_breed_data("Tree", "params")
     all_tree_sdb = model.get_breed_data("Tree", "states_db")
     all_tree_ids = model.get_breed_agent_ids("Tree")
+
+    if all_site_params is None:
+        return None
 
     results = []
     for site_idx, site in enumerate(sites):
@@ -115,8 +119,8 @@ def main():
     parser.add_argument(
         "--site_ids",
         type=str,
-        required=True,
-        help="Comma-separated site IDs (e.g., '0,1')"
+        default=None,
+        help="Comma-separated site IDs (e.g., '0,1'). Default: all sites from CSV."
     )
     parser.add_argument(
         "--num_gaps",
@@ -165,9 +169,27 @@ def main():
         action="store_true",
         help="Skip writing tree_data.csv (can be very large)"
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducibility (default: random)"
+    )
 
     args = parser.parse_args()
-    site_ids = [int(x.strip()) for x in args.site_ids.split(",")]
+
+    if args.site_ids is not None:
+        site_ids = [int(x.strip()) for x in args.site_ids.split(",")]
+    else:
+        # Auto-detect all site IDs from CSV
+        import csv
+        site_file = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            args.data_dir, f"{args.prefix}_site.csv"
+        )
+        with open(site_file, 'r') as f:
+            reader = csv.DictReader(f)
+            site_ids = [int(row['site']) for row in reader]
 
     if rank == 0:
         print("=" * 60)
@@ -178,12 +200,15 @@ def main():
         print(f"  Gaps per site: {args.num_gaps}")
         print(f"  Max trees per gap: {args.maxtrees}")
         print(f"  Years: {args.years}")
+        print(f"  Seed: {args.seed if args.seed is not None else 'random'}")
         print()
 
     t_total_start = time.time()
 
     # Create model and load globals
     model = GAPModel()
+    if args.seed is not None:
+        model.set_seed(args.seed)
 
     if rank == 0:
         print("Loading globals (species traits + site configs)...")
@@ -192,27 +217,21 @@ def main():
     if rank == 0:
         print(f"  {model.get_species_count()} species loaded")
 
-    # Initialize all sites
+    # Partition sites across workers, then initialize
+    model.partition_sites(site_ids)
+
     sites = []
     for sid in site_ids:
         if rank == 0:
-            print(f"\nInitializing site {sid}...")
-        site = model.initialize_site(
-            site_id=sid,
-            data_dir=args.data_dir,
-            prefix=args.prefix,
+            print(f"\nInitializing site {sid} → rank {model._site_partition[sid]}...")
+        site = model.initialize_site_with_gaps(
+            sid, args.num_gaps, args.maxtrees,
+            data_dir=args.data_dir, prefix=args.prefix,
         )
         sites.append(site)
         if rank == 0:
             print(f"  {site['site_name']} ({site['latitude']:.2f}°N, {site['longitude']:.2f}°W)")
-            print(f"  {len(site['species'])} species, deg_days: {site['deg_days']:.0f}")
-
-    # Initialize gaps and trees for each site
-    for site in sites:
-        if rank == 0:
-            print(f"\nCreating {args.num_gaps} gaps for site {site['site_id']}...")
-        for gap_num in range(args.num_gaps):
-            model.initialize_trees(site=site, maxtrees=args.maxtrees)
+            print(f"  {len(site['species'])} species, {args.num_gaps} gaps, deg_days: {site['deg_days']:.0f}")
 
     # Connect sites for dispersal
     if rank == 0:
@@ -226,16 +245,16 @@ def main():
         print(f"\nTotal agents: {total_agents}")
         print(f"  {len(model.site_agents)} sites, {len(model.gap_agents)} gaps, {len(model.tree_ids)} trees")
 
-    # Initialize per-site output writers
+    # Initialize per-site output writers (rank 0 only)
     writers = {}
-    for site in sites:
-        sid = site['site_id']
-        site_output_dir = os.path.join(args.output_dir, f"site_{sid}")
-        writer = OutputWriter(site_output_dir, site_id=sid)
-        writer.open(model.species_by_id, args.num_gaps)
-        writers[sid] = writer
-
     if rank == 0:
+        for site in sites:
+            sid = site['site_id']
+            site_output_dir = os.path.join(args.output_dir, f"site_{sid}")
+            writer = OutputWriter(site_output_dir, site_id=sid)
+            writer.open(model.species_by_id, args.num_gaps)
+            writers[sid] = writer
+
         print(f"\nOutput directories:")
         for sid in writers:
             print(f"  site_{sid}/: genus_data.csv, species_data.csv, site_data.csv, soil_data.csv"
@@ -264,11 +283,11 @@ def main():
 
         current_year = year_batch + years_to_run
 
-        # Collect per-site data
+        # Collect per-site data (returns None on non-root ranks)
         per_site = collect_per_site_data(model, sites)
         t_collect_end = time.time()
 
-        if rank == 0:
+        if rank == 0 and per_site is not None:
             # Write CSV outputs for each site
             for site_idx, (site_params, site_states, tree_data, gap_agents) in enumerate(per_site):
                 sid = sites[site_idx]['site_id']

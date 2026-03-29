@@ -163,7 +163,7 @@ def site_soil_step(
     lai_w0 = params_tensor[agent_index][SiteP.LAI_W0]
 
     # ========== READ SITE CONFIG ==========
-    site_id = int(params_tensor[agent_index][SiteP.SITE_ID])
+    site_id = int(site_species_idx[agent_index])
 
     # Read site properties from site_configs
     sa_fc = site_configs[int(site_id)][Cfg.FIELD_CAP]

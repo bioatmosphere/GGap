@@ -53,7 +53,7 @@ def site_seed_dispersal_step(
     num_species = len(species_traits)
     srow = site_species_idx[agent_index]
 
-    own_site_id = int(params_tensor[agent_index][SiteP.SITE_ID])
+    own_site_id = int(site_species_idx[agent_index])
 
     # --- 1. Iterate neighbors: aggregate avail_spec from gaps, collect site neighbors ---
     gap_count = 0.0
@@ -129,7 +129,7 @@ def site_seed_dispersal_step(
             neighbor_idx = site_neighbor_3
 
         if neighbor_idx >= 0:
-            neighbor_site_id = int(params_tensor[neighbor_idx][SiteP.SITE_ID])
+            neighbor_site_id = int(site_species_idx[neighbor_idx])
             distance = site_distances[own_site_id][neighbor_site_id]
 
             sp = 0

@@ -41,10 +41,14 @@ except ImportError:
     if _sagesim_path not in sys.path:
         sys.path.insert(0, _sagesim_path)
 
+from mpi4py import MPI
 from sagesim.model import Model
 from sagesim.space import NetworkSpace
 from sagesim.breed import Breed
 from pathlib import Path
+
+comm = MPI.COMM_WORLD
+num_workers = comm.Get_size()
 
 # Import step functions from organized folder
 from gap.step_functions.gap.gap_litter_aggregate_step import gap_litter_aggregate_step
@@ -577,6 +581,7 @@ class GAPModel(Model):
         site_id: int = 0,
         data_dir: str = "input_data",
         prefix: str = "UVAFME2012",
+        rank: int = None,
     ):
         """
         Initialize a site from UVAFME CSV files.
@@ -623,11 +628,12 @@ class GAPModel(Model):
                                 species_present.add(col)
                     break
 
-        # Filter species for this site
-        site_species = []
-        for sp_code in species_present:
-            if sp_code in self.unique_species:
-                site_species.append(self.unique_species[sp_code])
+        # Filter species for this site (sorted by global_id for deterministic ordering)
+        site_species = sorted(
+            [self.unique_species[sp_code] for sp_code in species_present
+             if sp_code in self.unique_species],
+            key=lambda sp: sp['global_id']
+        )
 
         # Calculate degree days from site_configs tensor for display
         BASE_TEMP = 5.0
@@ -672,6 +678,7 @@ class GAPModel(Model):
         # Create site agent
         site_agent_id = self.create_agent_of_breed(
             self._site_breed,
+            rank=rank,
             params=params,
             states=states,
             states_db=[0.0] * 1,
@@ -688,6 +695,7 @@ class GAPModel(Model):
             'site_id': site_id,
             'site_slot': site_slot,
             'site_agent_id': site_agent_id,
+            'rank': rank,
             'site_name': site_row.get('name', f'Site_{site_id}'),
             'latitude': float(site_row['latitude']),
             'longitude': float(site_row['longitude']),
@@ -706,7 +714,7 @@ class GAPModel(Model):
 
         return site_info
 
-    def initialize_gap(self, site):
+    def initialize_gap(self, site, rank: int = None):
         """Initialize a gap agent and connect it to the site."""
         gap_id = len(self.gap_agents)
         site_agent_id = site['site_agent_id']
@@ -726,6 +734,7 @@ class GAPModel(Model):
 
         gap_agent_id = self.create_agent_of_breed(
             self._gap_breed,
+            rank=rank,
             params=params,
             states=states,
             states_db=[0.0] * 1,
@@ -742,6 +751,7 @@ class GAPModel(Model):
         site,
         gap_agent_id=None,
         maxtrees=1000,
+        rank: int = None,
     ):
         """
         Initialize tree slots in a gap. All start as free (renewal fills forest).
@@ -751,7 +761,7 @@ class GAPModel(Model):
             raise ValueError("Must have at least one tree slot")
 
         if gap_agent_id is None:
-            gap_agent_id = self.initialize_gap(site)
+            gap_agent_id = self.initialize_gap(site, rank=rank)
 
         site_species = site['species']
         num_species = len(site_species)
@@ -766,7 +776,7 @@ class GAPModel(Model):
         # Create template trees (one per species)
         for species_info in site_species:
             agent_id = self._create_tree_agent(
-                gap_agent_id, species_info, diam=0.0, age=0.0, is_alive=-1.0
+                gap_agent_id, species_info, diam=0.0, age=0.0, is_alive=-1.0, rank=rank
             )
             template_trees.append(agent_id)
 
@@ -776,7 +786,7 @@ class GAPModel(Model):
             placeholder_species = site_species[0]
             for _ in range(free_slot_count):
                 agent_id = self._create_tree_agent(
-                    gap_agent_id, placeholder_species, diam=0.0, age=0.0, is_alive=0.0
+                    gap_agent_id, placeholder_species, diam=0.0, age=0.0, is_alive=0.0, rank=rank
                 )
                 created_trees.append(agent_id)
 
@@ -787,7 +797,7 @@ class GAPModel(Model):
 
         return created_trees, initial_alive_count
 
-    def _create_tree_agent(self, gap_agent_id, species_info, diam, age, is_alive=1.0):
+    def _create_tree_agent(self, gap_agent_id, species_info, diam, age, is_alive=1.0, rank=None):
         """
         Create a single tree agent. Only stores species_id + mutable state in params.
         Species traits are looked up from globals via species_id.
@@ -860,6 +870,7 @@ class GAPModel(Model):
 
         agent_id = self.create_agent_of_breed(
             self._tree_breed,
+            rank=rank,
             params=params,
             states=states,
             states_db=states_db,
@@ -890,20 +901,64 @@ class GAPModel(Model):
         num_species = len(self.unique_species)
 
         # gap_lai: (num_gaps, MAX_HEIGHT_BINS, 2) — dec LAI at [:,:,0], con LAI at [:,:,1]
+        # neighbor_visible=False: gaps and their trees are always on the same rank
         self.register_breed_local_array(
             "gap_lai", breed=self._gap_breed,
-            shape_per_agent=(MAX_HEIGHT_BINS, 2))
+            shape_per_agent=(MAX_HEIGHT_BINS, 2),
+            neighbor_visible=False)
 
         # gap_species: (num_gaps, num_species*2) — avail_spec at [0:N], imported_seeds relay at [N:2N]
         self.register_breed_local_array(
             "gap_species", breed=self._gap_breed,
-            shape_per_agent=(num_species * 2,))
+            shape_per_agent=(num_species * 2,),
+            neighbor_visible=False)
 
         # site_species: (num_sites, num_species*2) — site_avail_spec at [0:N], imported_seeds at [N:2N]
+        # neighbor_visible=True (default): sites on different ranks exchange dispersal data
         self.register_breed_local_array(
             "site_species", breed=self._site_breed,
-            shape_per_agent=(num_species * 2,),
-            ghost_exchange=True)
+            shape_per_agent=(num_species * 2,))
+
+    def partition_sites(self, site_ids, strategy='round_robin'):
+        """Compute site → rank mapping. Call before initialize_site_with_gaps().
+
+        Strategies:
+        - 'round_robin': site_ids[i] → rank i % num_workers (default)
+        - Future: 'metis' using site connectivity graph
+
+        :param site_ids: List of site IDs to partition
+        :param strategy: Partition strategy name
+        """
+        self._site_partition = {}
+        if strategy == 'round_robin':
+            for i, sid in enumerate(site_ids):
+                self._site_partition[sid] = i % num_workers
+        else:
+            raise ValueError(f"Unknown partition strategy: {strategy}")
+
+    def initialize_site_with_gaps(self, site_id, num_gaps, maxtrees,
+                                   data_dir="input_data", prefix="UVAFME2012",
+                                   rank=None):
+        """Initialize a site with all its gaps and trees on the same rank.
+
+        Uses rank from partition_sites() if rank not specified.
+
+        :param site_id: Site ID from CSV files
+        :param num_gaps: Number of gaps to create for this site
+        :param maxtrees: Max tree slots per gap
+        :param data_dir: Directory containing UVAFME CSV files
+        :param prefix: File prefix for CSV files
+        :param rank: Target rank (overrides partition). If None, uses partition.
+        :return: site_info dict
+        """
+        if rank is None:
+            rank = self._site_partition.get(site_id)
+
+        site = self.initialize_site(
+            site_id=site_id, data_dir=data_dir, prefix=prefix, rank=rank)
+        for _ in range(num_gaps):
+            self.initialize_trees(site=site, maxtrees=maxtrees, rank=rank)
+        return site
 
     def connect_sites(self):
         """Connect site agents for inter-site seed dispersal.
@@ -993,7 +1048,7 @@ class GAPModel(Model):
         return stats
 
     def collect_tree_data(self):
-        """Collect data for all living trees. Returns dict of numpy arrays.
+        """Collect data for all living trees. Returns dict on rank 0, None otherwise.
 
         Species traits (evergreen) looked up from model's species dict,
         not from tree params.
@@ -1001,6 +1056,10 @@ class GAPModel(Model):
         params_np = self.get_breed_data("Tree", "params")
         states_db_np = self.get_breed_data("Tree", "states_db")
         agent_ids_np = self.get_breed_agent_ids("Tree")
+
+        # Non-root ranks: get_breed_data returns None in multi-worker mode
+        if params_np is None:
+            return None
 
         alive_mask = states_db_np[:, TREE_DB_IS_ALIVE] > 0.5
         alive_params = params_np[alive_mask]

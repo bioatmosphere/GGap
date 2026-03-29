@@ -45,8 +45,8 @@ num_workers = comm.Get_size()
 
 if num_workers > 1:
     if rank == 0:
-        print("ERROR: Multi-rank MPI not yet supported (cross-priority data flow")
-        print("requires all agents on same rank). Run with: python run_one_site.py")
+        print("ERROR: run_one_site.py requires single worker (all agents on one rank).")
+        print("Use run_multi_site.py for multi-worker execution.")
     comm.Abort(1)
 
 
@@ -107,6 +107,12 @@ def main():
         action="store_true",
         help="Skip writing tree_data.csv (can be very large)"
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducibility (default: random)"
+    )
 
     args = parser.parse_args()
 
@@ -123,12 +129,16 @@ def main():
         print(f"  File prefix: {args.prefix}")
         print(f"  Site ID: {args.site_id}")
         print(f"  Output directory: {args.output_dir}")
+        print(f"  Seed: {args.seed if args.seed is not None else 'random'}")
+        print(f"  Workers: {num_workers}")
         print()
 
     t_total_start = time.time()
 
     # Create model
     model = GAPModel()
+    if args.seed is not None:
+        model.set_seed(args.seed)
 
     if rank == 0:
         print("Loading globals (species traits + site configs)...")
