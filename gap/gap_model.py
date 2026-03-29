@@ -8,24 +8,25 @@ Agent Hierarchy:
 - Tree agents: individual trees with species_id + mutable state (traits in globals)
 
 Constants (species traits + site config) are stored in SAGESim globals,
-shared read-only across all agents and ranks. See globals_layout.py.
+shared read-only across all agents and ranks.
 
 Network Connections:
 - Site <-> Gap: each gap connects to its parent site (bidirectional)
 - Gap <-> Tree: each tree connects to its parent gap (bidirectional)
 - Free -> Template: each free slot connects to all templates (directed, for P7 species selection)
 
-Property Scheme (3 properties per breed):
-- params:    neighbor_visible=False  (private data, not shared)
-- states:    neighbor_visible=True, no double buffer (public, cross-priority reads)
-- states_db: neighbor_visible=True, no double buffer (public, cross-priority reads)
+Property Scheme (2 properties per breed):
+- params: neighbor_visible=False  (self-read only, private mutable state)
+- states: neighbor_visible=True   (neighbor-readable, cross-breed communication)
 
 Property Arrays by Breed:
-  Tree: params[17], states[5], states_db[5]
-        (params: species_id + mutable physiology + intermediates + renewal state)
-  Gap:  params[2],  states[167], states_db[1]
-  Site: params[12], states[16], states_db[1]
-        (params: soil pools[9] + lai_w0 + annual_runoff + site_id)
+  Tree: params[14], states[11]
+        (params: mutable physiology + intermediates + renewal)
+        (states: IS_ALIVE/DIAM/HEIGHT/CANOPY_HT + litter/demand + SPECIES_ID/ENV_STRESS)
+  Gap:  params[2],  states[16]
+  Site: params[21], states[7]
+        (params: soil pools[9] + lai_w0 + annual_runoff + site_id + output fields[9])
+        (states: climate fields read by Gap P2)
 """
 
 import sys
@@ -63,120 +64,57 @@ from gap.step_functions.gap.gap_nconsumed_aggregate_step import gap_nconsumed_ag
 from gap.step_functions.site.site_nbalance_step import site_nbalance_step
 from gap.step_functions.site.site_seed_dispersal_step import site_seed_dispersal_step
 
-# Import constants
+# Import constants — all index enums and sizes from single source of truth
 from gap.constants import (
     Cfg, NUM_SPECIES_TRAITS, NUM_SITE_CONFIGS,
     DISPERSAL_CUTOFF_FACTOR, EARTH_RADIUS_KM,
+    TreeP, TreeS, TREE_PARAMS_SIZE,
+    GapP, GapS, GAP_STATES_SIZE,
+    SiteP, SiteS, SITE_PARAMS_SIZE,
 )
 
 CURRENT_DIR = Path(__file__).resolve().parent
 
 # ============================================================
-# Index constants (breed-specific interpretation)
-# Each breed interprets its arrays starting from index 0
+# Plain integer aliases for output collection (run_one_site.py imports these)
+# These MUST match the IntEnum values in gap/constants.py
 # ============================================================
 
-# --- Tree breed ---
-# params[17]: species_id + mutable physiology + intermediates + renewal state
-TREE_P_SPECIES_ID = 0       # Indexes into globals for species traits
-TREE_P_AGE = 1
-TREE_P_BIOMC = 2
-TREE_P_BIOMN = 3
-TREE_P_LEAF_BM = 4
-TREE_P_X = 5
-TREE_P_Y = 6
-TREE_P_LIGHT_AVAIL = 7
-TREE_P_FC_DEGDAY = 8
-TREE_P_FC_DROUGHT = 9
-TREE_P_FC_FLOOD = 10
-TREE_P_ENV_STRESS = 11      # Composite env stress (no nutrient), P3 -> P7
-TREE_P_DIAM_MAX_CALC = 12   # Max diameter increment for current size, P3 -> P7
-TREE_P_FORSKA_SHADE = 13    # Light response at canopy base (P3->P7 for self-pruning)
-TREE_P_SEEDBANK = 14        # Persistent seedbank (template-only)
-TREE_P_SEEDLING = 15        # Persistent seedling pool (template-only)
-TREE_P_SEEDLING_WEIGHT = 16 # Non-buffered seedling weight for same-tick species selection
+# --- Tree params (self-read only) ---
+TREE_P_AGE = int(TreeP.AGE)
+TREE_P_BIOMC = int(TreeP.BIOMC)
+TREE_P_BIOMN = int(TreeP.BIOMN)
+TREE_P_LEAF_BM = int(TreeP.LEAF_BM)
 
-TREE_PARAMS_SIZE = 17
+# --- Tree states (neighbor-visible) ---
+TREE_S_IS_ALIVE = int(TreeS.IS_ALIVE)
+TREE_S_DIAM = int(TreeS.DIAM)
+TREE_S_HEIGHT = int(TreeS.HEIGHT)
+TREE_S_CANOPY_HT = int(TreeS.CANOPY_HT)
+TREE_S_SPECIES_ID = int(TreeS.SPECIES_ID)
 
-# states[5]: litter output (public, Gap reads at P0)
-TREE_S_LITTER_C = 0      # Above-ground litter carbon
-TREE_S_LITTER_N = 1      # Above-ground litter nitrogen
-TREE_S_N_DEMAND = 2
-TREE_S_LITTER_C_BG = 3   # Below-ground litter carbon (roots)
-TREE_S_LITTER_N_BG = 4   # Below-ground litter nitrogen (roots)
+# --- Site params (self-read only, includes output fields) ---
+SITE_P_A0_C = int(SiteP.A0_C)
+SITE_P_A0_N = int(SiteP.A0_N)
+SITE_P_A_C = int(SiteP.A_C)
+SITE_P_A_N = int(SiteP.A_N)
+SITE_P_BL_C = int(SiteP.BL_C)
+SITE_P_BL_N = int(SiteP.BL_N)
+SITE_P_ANNUAL_RAIN = int(SiteP.ANNUAL_RAIN)
+SITE_P_GROW_DAYS = int(SiteP.GROW_DAYS)
+SITE_P_POT_EVAP = int(SiteP.POT_EVAP)
+SITE_P_ACT_EVAP = int(SiteP.ACT_EVAP)
+SITE_P_SOIL_RESP = int(SiteP.SOIL_RESP)
+SITE_P_C_INTO_A0 = int(SiteP.C_INTO_A0)
+SITE_P_N_INTO_A0 = int(SiteP.N_INTO_A0)
+SITE_P_NET_N_INTO_A0 = int(SiteP.NET_N_INTO_A0)
 
-# states_db[5]: structure (public, Trees read at P0 for light competition) + renewal weight
-TREE_DB_IS_ALIVE = 0
-TREE_DB_DIAM = 1
-TREE_DB_HEIGHT = 2
-TREE_DB_CANOPY_HT = 3
-TREE_DB_SEEDLING_WEIGHT = 4  # seedling * regrowth (written by templates at P5, read by free slots at P7)
-
-# --- Gap breed ---
-# params[2]: internal only
-GAP_P_GAP_ID = 0
-GAP_P_TOTAL_N_DEMAND = 1
-
-# states[17]: climate + nutrients + litter_pool + recruitment + seedling_weight + fire + wind + n_demand + bg_litter + dry_days_base + recovery_years
-# CUM_DEC_LAI, CUM_CON_LAI, AVAIL_SPEC moved to breed-local arrays
-GAP_S_DEG_DAYS = 0
-GAP_S_DRY_DAYS = 1
-GAP_S_AVAIL_N = 2
-GAP_S_N_SUPPLY_RATIO = 3
-GAP_S_LITTER_ACCUM_C = 4
-GAP_S_LITTER_ACCUM_N = 5
-GAP_S_NUM_TO_RECRUIT = 6
-GAP_S_RECRUIT_RAND_SEED = 7
-GAP_S_FLOOD_DAYS = 8
-GAP_S_TOTAL_SEEDLING_WEIGHT = 9
-GAP_S_FIRE_INTENSITY = 10
-GAP_S_TOTAL_N_DEMAND = 11
-GAP_S_LITTER_ACCUM_C_BG = 12
-GAP_S_LITTER_ACCUM_N_BG = 13
-GAP_S_DRY_DAYS_BASE = 14
-GAP_S_WIND_INTENSITY = 15
-GAP_S_RECOVERY_YEARS = 16
-GAP_STATES_SIZE = 17
-
-GAP_DB_PLACEHOLDER = 0
-
-# --- Site breed ---
-# params[12]: soil pools + lai_w0 + annual_runoff + site_id (mutable state only)
-SITE_P_A0_C = 0
-SITE_P_A0_N = 1
-SITE_P_A_C = 2
-SITE_P_A_N = 3
-SITE_P_BL_C = 4
-SITE_P_BL_N = 5
-SITE_P_A0_W = 6
-SITE_P_A_W = 7
-SITE_P_BL_W = 8
-SITE_P_LAI_W0 = 9
-SITE_P_ANNUAL_RUNOFF = 10
-SITE_P_SITE_ID = 11
-
-SITE_PARAMS_SIZE = 12
-
-# states[16]: climate + available + flood_days + fire + n_supply_ratio + dry_days_base + wind + stochastic climate + soil outputs (public)
-SITE_S_DEG_DAYS = 0
-SITE_S_DRY_DAYS = 1
-SITE_S_AVAIL_N = 2
-SITE_S_FLOOD_DAYS = 3
-SITE_S_FIRE_INTENSITY = 4
-SITE_S_N_SUPPLY_RATIO = 5
-SITE_S_DRY_DAYS_BASE = 6
-SITE_S_WIND_INTENSITY = 7
-SITE_S_ANNUAL_RAIN = 8
-SITE_S_GROW_DAYS = 9
-SITE_S_POT_EVAP = 10
-SITE_S_ACT_EVAP = 11
-SITE_S_SOIL_RESP = 12
-SITE_S_C_INTO_A0 = 13
-SITE_S_N_INTO_A0 = 14
-SITE_S_NET_N_INTO_A0 = 15
-
-# states_db[1]: placeholder (not used)
-SITE_DB_PLACEHOLDER = 0
+# --- Site states (neighbor-visible) ---
+SITE_S_DEG_DAYS = int(SiteS.DEG_DAYS)
+SITE_S_DRY_DAYS = int(SiteS.DRY_DAYS)
+SITE_S_AVAIL_N = int(SiteS.AVAIL_N)
+SITE_S_FLOOD_DAYS = int(SiteS.FLOOD_DAYS)
+SITE_S_DRY_DAYS_BASE = int(SiteS.DRY_DAYS_BASE)
 
 
 class GAPModel(Model):
@@ -207,99 +145,96 @@ class GAPModel(Model):
         self._breeds_registered = False
 
     def _register_breeds(self, num_species):
-        """Register breeds with dynamic state sizes based on num_species.
+        """Register breeds with property arrays.
+
+        Property design:
+          params  = neighbor_visible=False  (self-read only)
+          states  = neighbor_visible=True   (neighbor-readable)
+          states_db removed — merged into states (no double-buffering needed)
 
         Must be called after load_globals() determines num_species.
-        Gap states: 167 (existing) + num_species (imported_seeds relay)
-        Site states: 16 (existing) + num_species (avail_spec) + num_species (imported_seeds)
         """
-        gap_states_size = GAP_STATES_SIZE  # 17 (was 167+num_species)
-        site_states_size = 16             # (was 16+2*num_species)
-
         # === Create Tree breed (breed_id = 0) ===
         self._tree_breed = Breed("Tree")
         self._tree_breed.register_property("params", [0.0] * TREE_PARAMS_SIZE, neighbor_visible=False)
-        self._tree_breed.register_property("states", [0.0] * 5, neighbor_visible=True)
-        self._tree_breed.register_property("states_db", [0.0] * 5, neighbor_visible=True)
+        self._tree_breed.register_property("states", [0.0] * 11, neighbor_visible=True)
         self._tree_breed.register_step_func(
             tree_potential_growth_step,
             CURRENT_DIR / "step_functions" / "tree" / "tree_potential_growth_step.py",
             priority=3,
-            no_double_buffer=["params", "states", "states_db"],
+            no_double_buffer=["params", "states"],
         )
         self._tree_breed.register_step_func(
             tree_template_renewal_step,
             CURRENT_DIR / "step_functions" / "tree" / "tree_template_renewal_step.py",
             priority=5,
-            no_double_buffer=["params", "states", "states_db"],
+            no_double_buffer=["params", "states"],
         )
         self._tree_breed.register_step_func(
             tree_actual_growth_step,
             CURRENT_DIR / "step_functions" / "tree" / "tree_actual_growth_step.py",
             priority=7,
-            no_double_buffer=["params", "states", "states_db"],
+            no_double_buffer=["params", "states"],
         )
         self.register_breed(breed=self._tree_breed)
 
         # === Create Gap breed (breed_id = 1) ===
         self._gap_breed = Breed("Gap")
         self._gap_breed.register_property("params", [0.0] * 2, neighbor_visible=False)
-        self._gap_breed.register_property("states", [0.0] * gap_states_size, neighbor_visible=True)
-        self._gap_breed.register_property("states_db", [0.0] * 1, neighbor_visible=True)
+        self._gap_breed.register_property("states", [0.0] * GAP_STATES_SIZE, neighbor_visible=True)
         self._gap_breed.register_step_func(
             gap_litter_aggregate_step,
             CURRENT_DIR / "step_functions" / "gap" / "gap_litter_aggregate_step.py",
             priority=0,
-            no_double_buffer=["params", "states", "states_db"],
+            no_double_buffer=["params", "states"],
         )
         self._gap_breed.register_step_func(
             gap_climate_relay_step,
             CURRENT_DIR / "step_functions" / "gap" / "gap_climate_relay_step.py",
             priority=2,
-            no_double_buffer=["params", "states", "states_db"],
+            no_double_buffer=["params", "states"],
         )
         self._gap_breed.register_step_func(
             gap_demand_aggregate_step,
             CURRENT_DIR / "step_functions" / "gap" / "gap_demand_aggregate_step.py",
             priority=4,
-            no_double_buffer=["params", "states", "states_db"],
+            no_double_buffer=["params", "states"],
         )
         self._gap_breed.register_step_func(
             gap_recruit_aggregate_step,
             CURRENT_DIR / "step_functions" / "gap" / "gap_recruit_aggregate_step.py",
             priority=6,
-            no_double_buffer=["params", "states", "states_db"],
+            no_double_buffer=["params", "states"],
         )
         self._gap_breed.register_step_func(
             gap_nconsumed_aggregate_step,
             CURRENT_DIR / "step_functions" / "gap" / "gap_nconsumed_aggregate_step.py",
             priority=8,
-            no_double_buffer=["params", "states", "states_db"],
+            no_double_buffer=["params", "states"],
         )
         self.register_breed(breed=self._gap_breed)
 
         # === Create Site breed (breed_id = 2) ===
         self._site_breed = Breed("Site")
         self._site_breed.register_property("params", [0.0] * SITE_PARAMS_SIZE, neighbor_visible=False)
-        self._site_breed.register_property("states", [0.0] * site_states_size, neighbor_visible=True)
-        self._site_breed.register_property("states_db", [0.0] * 1, neighbor_visible=True)
+        self._site_breed.register_property("states", [0.0] * 7, neighbor_visible=True)
         self._site_breed.register_step_func(
             site_soil_step,
             CURRENT_DIR / "step_functions" / "site" / "soil_step.py",
             priority=1,
-            no_double_buffer=["params", "states", "states_db"],
+            no_double_buffer=["params", "states"],
         )
         self._site_breed.register_step_func(
             site_nbalance_step,
             CURRENT_DIR / "step_functions" / "site" / "site_nbalance_step.py",
             priority=9,
-            no_double_buffer=["params", "states", "states_db"],
+            no_double_buffer=["params", "states"],
         )
         self._site_breed.register_step_func(
             site_seed_dispersal_step,
             CURRENT_DIR / "step_functions" / "site" / "site_seed_dispersal_step.py",
             priority=10,
-            no_double_buffer=["params", "states", "states_db"],
+            no_double_buffer=["params", "states"],
         )
         self.register_breed(breed=self._site_breed)
 
@@ -658,22 +593,22 @@ class GAPModel(Model):
         params[SITE_P_A_N] = float(site_row['soilA_n0'])
         params[SITE_P_BL_C] = float(site_row['sbase_c0'])
         params[SITE_P_BL_N] = float(site_row['sbase_n0'])
-        params[SITE_P_A0_W] = float(site_row['soilAO_w0'])
-        params[SITE_P_A_W] = float(site_row['soilA_w0']) * soil_rootdepth
-        params[SITE_P_BL_W] = float(site_row['sbase_w0'])
-        params[SITE_P_LAI_W0] = float(site_row['lai_w0'])
-        params[SITE_P_ANNUAL_RUNOFF] = 0.0
-        params[SITE_P_SITE_ID] = float(site_slot)  # Globals slot index
+        params[int(SiteP.A0_W)] = float(site_row['soilAO_w0'])
+        params[int(SiteP.A_W)] = float(site_row['soilA_w0']) * soil_rootdepth
+        params[int(SiteP.BL_W)] = float(site_row['sbase_w0'])
+        params[int(SiteP.LAI_W0)] = float(site_row['lai_w0'])
+        params[int(SiteP.ANNUAL_RUNOFF)] = 0.0
+        params[int(SiteP.SITE_ID)] = float(site_slot)  # Globals slot index
 
-        # === Build states (fixed 16 — species arrays moved to breed-local) ===
-        states = [0.0] * 16
+        # === Build states (7 neighbor-visible climate fields) ===
+        states = [0.0] * 7
         states[SITE_S_DEG_DAYS] = deg_days
         states[SITE_S_DRY_DAYS] = dry_days
         states[SITE_S_AVAIL_N] = 0.1
         states[SITE_S_FLOOD_DAYS] = 0.0
-        states[SITE_S_FIRE_INTENSITY] = 0.0
+        states[int(SiteS.FIRE_INTENSITY)] = 0.0
         states[SITE_S_DRY_DAYS_BASE] = 0.0
-        states[SITE_S_WIND_INTENSITY] = 0.0
+        states[int(SiteS.WIND_INTENSITY)] = 0.0
 
         # Create site agent
         site_agent_id = self.create_agent_of_breed(
@@ -681,7 +616,6 @@ class GAPModel(Model):
             rank=rank,
             params=params,
             states=states,
-            states_db=[0.0] * 1,
         )
         self.site_agents.append(site_agent_id)
 
@@ -723,21 +657,20 @@ class GAPModel(Model):
         dry_days = site.get('dry_days', 0.0)
 
         params = [0.0] * 2
-        params[GAP_P_GAP_ID] = float(gap_id)
-        params[GAP_P_TOTAL_N_DEMAND] = 0.0
+        params[int(GapP.SITE_ID)] = float(gap_id)
+        params[int(GapP.TOTAL_N_DEMAND)] = 0.0
 
         states = [0.0] * GAP_STATES_SIZE
-        states[GAP_S_DEG_DAYS] = deg_days
-        states[GAP_S_DRY_DAYS] = dry_days
-        states[GAP_S_AVAIL_N] = 0.1
-        states[GAP_S_N_SUPPLY_RATIO] = 1.0
+        states[int(GapS.DEG_DAYS)] = deg_days
+        states[int(GapS.DRY_DAYS)] = dry_days
+        states[int(GapS.AVAIL_N)] = 0.1
+        states[int(GapS.N_SUPPLY_RATIO)] = 1.0
 
         gap_agent_id = self.create_agent_of_breed(
             self._gap_breed,
             rank=rank,
             params=params,
             states=states,
-            states_db=[0.0] * 1,
         )
         self.gap_agents.append(gap_agent_id)
         site['gaps'].append(gap_agent_id)
@@ -843,37 +776,32 @@ class GAPModel(Model):
             biomN = 0.0
             leaf_bm = 0.0
 
-        # Build params[17] — species_id + mutable state only
+        # Build params[14] — self-read only mutable state
         params = [0.0] * TREE_PARAMS_SIZE
-        params[TREE_P_SPECIES_ID] = float(species_info['global_id'])
-        params[TREE_P_AGE] = age
-        params[TREE_P_BIOMC] = biomC
-        params[TREE_P_BIOMN] = biomN
-        params[TREE_P_LEAF_BM] = leaf_bm
-        params[TREE_P_X] = 0.0
-        params[TREE_P_Y] = 0.0
-        params[TREE_P_LIGHT_AVAIL] = 1.0
-        params[TREE_P_FC_DEGDAY] = 1.0
-        params[TREE_P_FC_DROUGHT] = 1.0
-        params[TREE_P_FC_FLOOD] = 1.0
+        params[int(TreeP.AGE)] = age
+        params[int(TreeP.BIOMC)] = biomC
+        params[int(TreeP.BIOMN)] = biomN
+        params[int(TreeP.LEAF_BM)] = leaf_bm
+        params[int(TreeP.X)] = 0.0
+        params[int(TreeP.Y)] = 0.0
+        params[int(TreeP.LIGHT_AVAIL)] = 1.0
+        params[int(TreeP.FC_DEGDAY)] = 1.0
+        params[int(TreeP.FC_DROUGHT)] = 1.0
+        params[int(TreeP.FC_FLOOD)] = 1.0
 
-        # Build states[5]
-        states = [0.0] * 5
-
-        # Build states_db[5]
-        states_db = [0.0] * 5
-        states_db[TREE_DB_IS_ALIVE] = float(is_alive)
-        states_db[TREE_DB_DIAM] = diam
-        states_db[TREE_DB_HEIGHT] = forska_ht
-        states_db[TREE_DB_CANOPY_HT] = STD_HT if is_alive > 0.5 else 0.0
-        states_db[TREE_DB_SEEDLING_WEIGHT] = 0.0
+        # Build states[11] — neighbor-visible (merged states + states_db)
+        states = [0.0] * 11
+        states[int(TreeS.IS_ALIVE)] = float(is_alive)
+        states[int(TreeS.DIAM)] = diam
+        states[int(TreeS.HEIGHT)] = forska_ht
+        states[int(TreeS.CANOPY_HT)] = STD_HT if is_alive > 0.5 else 0.0
+        states[int(TreeS.SPECIES_ID)] = float(species_info['global_id'])
 
         agent_id = self.create_agent_of_breed(
             self._tree_breed,
             rank=rank,
             params=params,
             states=states,
-            states_db=states_db,
         )
 
         self.tree_ids.append(agent_id)
@@ -901,23 +829,24 @@ class GAPModel(Model):
         num_species = len(self.unique_species)
 
         # gap_lai: (num_gaps, MAX_HEIGHT_BINS, 2) — dec LAI at [:,:,0], con LAI at [:,:,1]
-        # neighbor_visible=False: gaps and their trees are always on the same rank
+        # ghost_exchange=False: gaps and their trees are always on the same rank
         self.register_breed_local_array(
             "gap_lai", breed=self._gap_breed,
             shape_per_agent=(MAX_HEIGHT_BINS, 2),
-            neighbor_visible=False)
+            ghost_exchange=False)
 
         # gap_species: (num_gaps, num_species*2) — avail_spec at [0:N], imported_seeds relay at [N:2N]
         self.register_breed_local_array(
             "gap_species", breed=self._gap_breed,
             shape_per_agent=(num_species * 2,),
-            neighbor_visible=False)
+            ghost_exchange=False)
 
         # site_species: (num_sites, num_species*2) — site_avail_spec at [0:N], imported_seeds at [N:2N]
-        # neighbor_visible=True (default): sites on different ranks exchange dispersal data
+        # ghost_exchange=True: sites on different ranks exchange dispersal data
         self.register_breed_local_array(
             "site_species", breed=self._site_breed,
-            shape_per_agent=(num_species * 2,))
+            shape_per_agent=(num_species * 2,),
+            ghost_exchange=True)
 
     def partition_sites(self, site_ids, strategy='round_robin'):
         """Compute site → rank mapping. Call before initialize_site_with_gaps().
@@ -1030,8 +959,8 @@ class GAPModel(Model):
         }
 
         for tree_id in self.tree_ids:
-            states_db = self.get_agent_property_value(tree_id, "states_db")
-            alive = states_db[TREE_DB_IS_ALIVE] if isinstance(states_db, list) else states_db
+            tree_states = self.get_agent_property_value(tree_id, "states")
+            alive = tree_states[TREE_S_IS_ALIVE] if isinstance(tree_states, list) else tree_states
             if alive > 0.5:
                 stats["living_trees"] += 1
                 params = self.get_agent_property_value(tree_id, "params")
@@ -1054,22 +983,22 @@ class GAPModel(Model):
         not from tree params.
         """
         params_np = self.get_breed_data("Tree", "params")
-        states_db_np = self.get_breed_data("Tree", "states_db")
+        states_np = self.get_breed_data("Tree", "states")
         agent_ids_np = self.get_breed_agent_ids("Tree")
 
         # Non-root ranks: get_breed_data returns None in multi-worker mode
         if params_np is None:
             return None
 
-        alive_mask = states_db_np[:, TREE_DB_IS_ALIVE] > 0.5
+        alive_mask = states_np[:, TREE_S_IS_ALIVE] > 0.5
         alive_params = params_np[alive_mask]
-        alive_sdb = states_db_np[alive_mask]
+        alive_states = states_np[alive_mask]
         alive_ids = agent_ids_np[alive_mask].astype(np.int32)
 
         gap_ids = np.array([self.tree_to_gap[int(a)] for a in alive_ids], dtype=np.int32)
 
         # Look up species traits from model's species dict
-        species_ids = alive_params[:, TREE_P_SPECIES_ID].astype(np.int32)
+        species_ids = alive_states[:, TREE_S_SPECIES_ID].astype(np.int32)
         evergreen = np.array([
             self.species_by_id.get(int(sid), {}).get('evergreen', 0) > 0.5
             for sid in species_ids
@@ -1079,13 +1008,13 @@ class GAPModel(Model):
             'count': int(alive_mask.sum()),
             'gap_agent_id': gap_ids,
             'species_id': species_ids,
-            'diam': alive_sdb[:, TREE_DB_DIAM],
-            'height': alive_sdb[:, TREE_DB_HEIGHT],
+            'diam': alive_states[:, TREE_S_DIAM],
+            'height': alive_states[:, TREE_S_HEIGHT],
             'biomC': alive_params[:, TREE_P_BIOMC],
             'biomN': alive_params[:, TREE_P_BIOMN],
             'leaf_bm': alive_params[:, TREE_P_LEAF_BM],
             'age': alive_params[:, TREE_P_AGE],
-            'canopy_ht': alive_sdb[:, TREE_DB_CANOPY_HT],
+            'canopy_ht': alive_states[:, TREE_S_CANOPY_HT],
             'evergreen': evergreen,
         }
 

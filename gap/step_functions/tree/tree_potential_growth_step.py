@@ -7,7 +7,7 @@ the soil N cycle computes the same-tick n_supply_ratio.
 
 Execution Flow:
     1. LIVING TREES (is_alive > 0.5):
-       - Read species_id from params, look up species traits from species_traits
+       - Read species_id from states, look up species traits from species_traits
        - Read climate from Gap (deg_days, dry_days, etc.)
        - Calculate light availability from neighbor heights
        - Calculate env stress: fc_degday * fc_drought * fc_light * fc_flood (NO fc_nutrient)
@@ -18,16 +18,15 @@ Execution Flow:
     2. TEMPLATES + FREE SLOTS: no-op (n_demand = 0.0)
 
     3. OUTPUTS:
-       - params[ENV_STRESS]: env stress (living only)
+       - states[ENV_STRESS]: env stress (living only)
        - params[DIAM_MAX_CALC]: max diameter increment (living only)
        - params[FC_DEGDAY/DROUGHT/FLOOD/LIGHT_AVAIL]: individual factors (living only)
        - params[FORSKA_SHADE]: light response at canopy base (living only)
        - states[N_DEMAND]: nitrogen demand from potential growth (living only, 0 for others)
 
 Property scheme:
-- params[17]: species_id + mutable state + intermediates + renewal - private, no buffer
-- states[5]: n_demand output (for Gap to aggregate at P3) - public, no buffer
-- states_db[5]: structure (is_alive, diam, height, canopy_ht) + seedling_weight - public, double buffered
+- params[14]: mutable state + intermediates + renewal - private, no buffer
+- states[11]: structure, litter, n_demand/consumed, species_id, env_stress - public
 - species_traits[species_id][trait]: 2D species traits tensor
 """
 
@@ -35,7 +34,7 @@ import cupy as cp
 from cupyx import jit
 
 from gap.constants import (
-    Breed, Trait, TreeP, TreeS, TreeDB, GapS,
+    Breed, Trait, TreeP, TreeS, GapS,
     STD_HT, TC_KG, XT, PLOTSIZE,
     STEM_C_N, CON_LEAF_C_N, DEC_LEAF_C_N, CON_LEAF_B,
 )
@@ -51,7 +50,6 @@ def tree_potential_growth_step(
     locations,
     params_tensor,
     states_tensor,
-    states_db_tensor,
     gap_lai, gap_species, site_species,
     gap_lai_idx, gap_species_idx, site_species_idx,
 ):
@@ -59,19 +57,19 @@ def tree_potential_growth_step(
     Phase A (P2): Environmental stress + potential growth + N demand.
 
     Computes env_stress = fc_degday * fc_drought * fc_light * fc_flood (no nutrient).
-    Stores env_stress and diam_max in params for P5 to consume same-tick.
+    Stores env_stress in states and diam_max in params for P5 to consume same-tick.
     Species traits are read from species_traits tensor instead of params_tensor.
     """
     # ===== GET CURRENT STATE =====
-    is_alive = states_db_tensor[agent_index][TreeDB.IS_ALIVE]
+    is_alive = states_tensor[agent_index][TreeS.IS_ALIVE]
 
     # Initialize outputs
     n_demand = 0.0
 
     # ===== POTENTIAL GROWTH: Process living trees only =====
     if is_alive > 0.5:
-        # Get species ID from params, then look up traits from species_traits
-        species_id = params_tensor[agent_index][TreeP.SPECIES_ID]
+        # Get species ID from states, then look up traits from species_traits
+        species_id = states_tensor[agent_index][TreeS.SPECIES_ID]
 
         # Read species traits from species_traits tensor
         max_diam = species_traits[int(species_id)][Trait.MAX_DIAM]
@@ -90,10 +88,10 @@ def tree_potential_growth_step(
         leafdiam_a = species_traits[int(species_id)][Trait.LEAFDIAM_A]
         leafarea_c = species_traits[int(species_id)][Trait.LEAFAREA_C]
 
-        # Get current tree structure from states_db
-        diam = states_db_tensor[agent_index][TreeDB.DIAM]
-        height = states_db_tensor[agent_index][TreeDB.HEIGHT]
-        canopy_ht = states_db_tensor[agent_index][TreeDB.CANOPY_HT]
+        # Get current tree structure from states
+        diam = states_tensor[agent_index][TreeS.DIAM]
+        height = states_tensor[agent_index][TreeS.HEIGHT]
+        canopy_ht = states_tensor[agent_index][TreeS.CANOPY_HT]
 
         # Get internal physiology from params (mutable state)
         biomC = params_tensor[agent_index][TreeP.BIOMC]
@@ -355,7 +353,7 @@ def tree_potential_growth_step(
         params_tensor[agent_index][TreeP.FC_DEGDAY] = fc_degday
         params_tensor[agent_index][TreeP.FC_DROUGHT] = fc_drought
         params_tensor[agent_index][TreeP.FC_FLOOD] = fc_flood
-        params_tensor[agent_index][TreeP.ENV_STRESS] = env_stress
+        states_tensor[agent_index][TreeS.ENV_STRESS] = env_stress
         params_tensor[agent_index][TreeP.DIAM_MAX_CALC] = diam_max
         params_tensor[agent_index][TreeP.FORSKA_SHADE] = forska_shade
 

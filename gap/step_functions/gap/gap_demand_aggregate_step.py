@@ -18,7 +18,7 @@ import cupy as cp  # noqa: F401
 from cupyx import jit
 
 from gap.constants import (
-    Breed, TreeS, TreeDB, GapP, GapS,
+    Breed, TreeS, GapP, GapS,
     UNIT_CONV,
 )
 
@@ -33,7 +33,6 @@ def gap_demand_aggregate_step(
     locations,
     params_tensor,
     states_tensor,
-    states_db_tensor,
     gap_lai, gap_species, site_species,
     gap_lai_idx, gap_species_idx, site_species_idx,
 ):
@@ -53,7 +52,7 @@ def gap_demand_aggregate_step(
         neighbor_breed = int(breeds[neighbor_idx])
 
         if neighbor_breed == Breed.TREE:
-            tree_alive = states_db_tensor[neighbor_idx][TreeDB.IS_ALIVE]
+            tree_alive = states_tensor[neighbor_idx][TreeS.IS_ALIVE]
             if tree_alive > 0.5:
                 # Living tree: sum N demand
                 tree_n_demand = states_tensor[neighbor_idx][TreeS.N_DEMAND]
@@ -63,9 +62,6 @@ def gap_demand_aggregate_step(
 
     # Write to params (internal)
     params_tensor[agent_index][GapP.TOTAL_N_DEMAND] = total_n_dem
-
-    # Write to states (public)
-    states_tensor[agent_index][GapS.TOTAL_N_DEMAND] = total_n_dem
 
     # --- Compute per-gap N supply ratio (was P5 gap_sync_step) ---
     # GAPpy computes N_supply_demand per-plot (model.py:475-488):

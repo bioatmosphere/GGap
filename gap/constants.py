@@ -107,48 +107,42 @@ NUM_SITE_CONFIGS = 107
 
 
 # ============================================================
-# Tree params indices (params_tensor columns, private)
+# Tree params indices (params_tensor columns, private/self-read only)
 # ============================================================
 class TreeP(IntEnum):
-    SPECIES_ID = 0
-    AGE = 1
-    BIOMC = 2
-    BIOMN = 3
-    LEAF_BM = 4
-    X = 5
-    Y = 6
-    LIGHT_AVAIL = 7
-    FC_DEGDAY = 8
-    FC_DROUGHT = 9
-    FC_FLOOD = 10
-    ENV_STRESS = 11
-    DIAM_MAX_CALC = 12
-    FORSKA_SHADE = 13
-    SEEDBANK = 14
-    SEEDLING = 15
-    SEEDLING_WEIGHT = 16
+    AGE = 0
+    BIOMC = 1
+    BIOMN = 2
+    LEAF_BM = 3
+    X = 4
+    Y = 5
+    LIGHT_AVAIL = 6
+    FC_DEGDAY = 7
+    FC_DROUGHT = 8
+    FC_FLOOD = 9
+    DIAM_MAX_CALC = 10
+    FORSKA_SHADE = 11
+    SEEDBANK = 12
+    SEEDLING = 13
+
+TREE_PARAMS_SIZE = 14
 
 
 # ============================================================
-# Tree states indices (states_tensor columns, public)
+# Tree states indices (states_tensor columns, neighbor-visible)
 # ============================================================
 class TreeS(IntEnum):
-    LITTER_C = 0          # Above-ground litter carbon
-    LITTER_N = 1          # Above-ground litter nitrogen
-    N_DEMAND = 2
-    N_CONSUMED = 3        # Actual N consumed this tick
-    LITTER_N_BG = 4       # Below-ground litter nitrogen (roots)
-
-
-# ============================================================
-# Tree states_db indices (states_db_tensor columns, double buffered)
-# ============================================================
-class TreeDB(IntEnum):
-    IS_ALIVE = 0
-    DIAM = 1
-    HEIGHT = 2
-    CANOPY_HT = 3
-    SEEDLING_WEIGHT = 4
+    IS_ALIVE = 0          # 1.0=living, 0.0=dormant, -1.0=template
+    DIAM = 1              # Diameter at breast height (cm)
+    HEIGHT = 2            # Tree height (m)
+    CANOPY_HT = 3         # Crown base height (m)
+    SEEDLING_WEIGHT = 4   # Seedling weight for recruitment (read by Gap P0, Tree P7)
+    LITTER_C = 5          # Above-ground litter carbon
+    LITTER_N = 6          # Above-ground litter nitrogen
+    N_DEMAND = 7          # Nitrogen demand (read by Gap P4)
+    N_CONSUMED = 8        # Actual N consumed this tick (read by Gap P8)
+    SPECIES_ID = 9        # Index into species_traits tensor (read by Gap P0)
+    ENV_STRESS = 10       # Combined environmental stress / template regrowth (read by Gap P6)
 
 
 # ============================================================
@@ -174,14 +168,13 @@ class GapS(IntEnum):
     FLOOD_DAYS = 8
     TOTAL_SEEDLING_WEIGHT = 9
     FIRE_INTENSITY = 10
-    TOTAL_N_DEMAND = 11
-    TOTAL_LAI = 12
-    N_CONSUMED = 13
-    DRY_DAYS_BASE = 14
-    WIND_INTENSITY = 15
-    RECOVERY_YEARS = 16
-    # Total: 17 columns (was 167+num_species)
-    # CUM_DEC_LAI, CUM_CON_LAI, AVAIL_SPEC moved to breed-local arrays
+    TOTAL_LAI = 11
+    N_CONSUMED = 12
+    DRY_DAYS_BASE = 13
+    WIND_INTENSITY = 14
+    RECOVERY_YEARS = 15
+
+GAP_STATES_SIZE = 16
 
 
 # ============================================================
@@ -200,30 +193,32 @@ class SiteP(IntEnum):
     LAI_W0 = 9
     ANNUAL_RUNOFF = 10
     SITE_ID = 11
+    # Output-only fields (not neighbor-visible, only for CSV collection)
+    N_SUPPLY_RATIO = 12   # Dead: only written by unregistered site_nutrient_step
+    ANNUAL_RAIN = 13
+    GROW_DAYS = 14
+    POT_EVAP = 15
+    ACT_EVAP = 16
+    SOIL_RESP = 17
+    C_INTO_A0 = 18
+    N_INTO_A0 = 19
+    NET_N_INTO_A0 = 20
+
+SITE_PARAMS_SIZE = 21
 
 
 # ============================================================
-# Site states indices (states_tensor columns, public)
+# Site states indices (states_tensor columns, neighbor-visible)
+# All read by Gap P2 (gap_climate_relay_step)
 # ============================================================
 class SiteS(IntEnum):
     DEG_DAYS = 0
     DRY_DAYS = 1
-    AVAIL_N = 2
+    AVAIL_N = 2           # Also read by self at P9
     FLOOD_DAYS = 3
     FIRE_INTENSITY = 4
-    N_SUPPLY_RATIO = 5
-    DRY_DAYS_BASE = 6
-    WIND_INTENSITY = 7
-    ANNUAL_RAIN = 8
-    GROW_DAYS = 9
-    POT_EVAP = 10
-    ACT_EVAP = 11
-    SOIL_RESP = 12
-    C_INTO_A0 = 13
-    N_INTO_A0 = 14
-    NET_N_INTO_A0 = 15
-    # Total: 16 columns (was 16+2*num_species)
-    # SITE_AVAIL_SPEC and IMPORTED_SEEDS moved to breed-local arrays
+    DRY_DAYS_BASE = 5
+    WIND_INTENSITY = 6
 
 
 # ============================================================

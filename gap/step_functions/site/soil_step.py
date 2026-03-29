@@ -53,10 +53,9 @@ Soil Layers:
     A  (Humus):   Decomposed organic matter, N mineralization source
     Base:         Stable organic matter, slow turnover
 
-Property scheme (3 properties):
-- params[12]: soil pools (A0/A/BL C/N/W) + LAI_W0 + ANNUAL_RUNOFF + SITE_ID - private
-- states[16]: climate + avail_n + flood_days + fire/wind + stochastic climate + soil outputs - public
-- states_db[1]: placeholder (public, double buffered but unused)
+Property scheme (2 properties):
+- params[21]: soil pools (A0/A/BL C/N/W) + LAI_W0 + ANNUAL_RUNOFF + SITE_ID + output-only fields - private
+- states[7]: DEG_DAYS, DRY_DAYS, AVAIL_N, FLOOD_DAYS, FIRE_INTENSITY, DRY_DAYS_BASE, WIND_INTENSITY - public
 
 Site config (climate, std devs, soil properties) read from site_configs at:
   site_configs[site_id][offset]
@@ -89,7 +88,6 @@ def site_soil_step(
     locations,
     params_tensor,
     states_tensor,
-    states_db_tensor,
     gap_lai, gap_species, site_species,
     gap_lai_idx, gap_species_idx, site_species_idx,
 ):
@@ -115,8 +113,8 @@ def site_soil_step(
     - Fire/wind probabilities, base_h
 
     Writes to own:
-    - params: soil pools (A0/A/BL carbon, nitrogen, water)
-    - states: avail_n (for Gap to read)
+    - params: soil pools (A0/A/BL carbon, nitrogen, water), output-only fields (ANNUAL_RAIN, GROW_DAYS, etc.)
+    - states: DEG_DAYS, DRY_DAYS, AVAIL_N, FLOOD_DAYS, FIRE_INTENSITY, DRY_DAYS_BASE, WIND_INTENSITY
     """
     # ========== READ LITTER + LAI FROM GAP NEIGHBORS ==========
     total_litter_c = 0.0       # Above-ground -> A0 layer
@@ -1182,13 +1180,13 @@ def site_soil_step(
 
     states_tensor[agent_index][SiteS.WIND_INTENSITY] = wind_intensity
 
-    # Stochastic climate outputs (for CSV export)
-    states_tensor[agent_index][SiteS.ANNUAL_RAIN] = annual_prcp_cm
-    states_tensor[agent_index][SiteS.GROW_DAYS] = grow_days_5
-    states_tensor[agent_index][SiteS.POT_EVAP] = total_pet
-    states_tensor[agent_index][SiteS.ACT_EVAP] = total_aet
+    # Stochastic climate outputs (for CSV export, output-only in params)
+    params_tensor[agent_index][SiteP.ANNUAL_RAIN] = annual_prcp_cm
+    params_tensor[agent_index][SiteP.GROW_DAYS] = grow_days_5
+    params_tensor[agent_index][SiteP.POT_EVAP] = total_pet
+    params_tensor[agent_index][SiteP.ACT_EVAP] = total_aet
 
-    # Soil outputs (for CSV export)
-    states_tensor[agent_index][SiteS.SOIL_RESP] = total_resp
-    states_tensor[agent_index][SiteS.C_INTO_A0] = total_litter_c
-    states_tensor[agent_index][SiteS.N_INTO_A0] = total_litter_n
+    # Soil outputs (for CSV export, output-only in params)
+    params_tensor[agent_index][SiteP.SOIL_RESP] = total_resp
+    params_tensor[agent_index][SiteP.C_INTO_A0] = total_litter_c
+    params_tensor[agent_index][SiteP.N_INTO_A0] = total_litter_n

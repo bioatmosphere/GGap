@@ -32,7 +32,6 @@ def gap_climate_relay_step(
     locations,
     params_tensor,
     states_tensor,
-    states_db_tensor,
     gap_lai, gap_species, site_species,
     gap_lai_idx, gap_species_idx, site_species_idx,
 ):

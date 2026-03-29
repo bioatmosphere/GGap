@@ -15,7 +15,7 @@ import cupy as cp  # noqa: F401
 from cupyx import jit
 
 from gap.constants import (
-    Breed, TreeS, TreeDB, GapS,
+    Breed, TreeS, GapS,
 )
 
 
@@ -29,7 +29,6 @@ def gap_nconsumed_aggregate_step(
     locations,
     params_tensor,
     states_tensor,
-    states_db_tensor,
     gap_lai, gap_species, site_species,
     gap_lai_idx, gap_species_idx, site_species_idx,
 ):
@@ -48,7 +47,7 @@ def gap_nconsumed_aggregate_step(
         neighbor_breed = int(breeds[neighbor_idx])
 
         if neighbor_breed == Breed.TREE:
-            tree_alive = states_db_tensor[neighbor_idx][TreeDB.IS_ALIVE]
+            tree_alive = states_tensor[neighbor_idx][TreeS.IS_ALIVE]
             # Read from all non-template trees (alive + recently dead + newly recruited)
             # Templates (is_alive == -1) have n_consumed = 0, so reading is harmless
             if tree_alive > -0.5:

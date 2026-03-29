@@ -34,11 +34,11 @@ from gap.gap_model import (
     SITE_P_A0_C, SITE_P_A0_N,
     SITE_P_A_C, SITE_P_A_N,
     SITE_P_BL_C, SITE_P_BL_N,
+    SITE_P_ANNUAL_RAIN, SITE_P_GROW_DAYS, SITE_P_POT_EVAP, SITE_P_ACT_EVAP,
+    SITE_P_SOIL_RESP, SITE_P_C_INTO_A0, SITE_P_N_INTO_A0, SITE_P_NET_N_INTO_A0,
     SITE_S_AVAIL_N, SITE_S_DEG_DAYS, SITE_S_DRY_DAYS, SITE_S_DRY_DAYS_BASE, SITE_S_FLOOD_DAYS,
-    SITE_S_ANNUAL_RAIN, SITE_S_GROW_DAYS, SITE_S_POT_EVAP, SITE_S_ACT_EVAP,
-    SITE_S_SOIL_RESP, SITE_S_C_INTO_A0, SITE_S_N_INTO_A0, SITE_S_NET_N_INTO_A0,
-    TREE_P_SPECIES_ID, TREE_P_BIOMC, TREE_P_BIOMN, TREE_P_LEAF_BM, TREE_P_AGE,
-    TREE_DB_IS_ALIVE, TREE_DB_DIAM, TREE_DB_HEIGHT, TREE_DB_CANOPY_HT,
+    TREE_P_BIOMC, TREE_P_BIOMN, TREE_P_LEAF_BM, TREE_P_AGE,
+    TREE_S_IS_ALIVE, TREE_S_DIAM, TREE_S_HEIGHT, TREE_S_CANOPY_HT, TREE_S_SPECIES_ID,
 )
 from gap.output_utils import OutputWriter
 
@@ -57,7 +57,7 @@ def collect_per_site_data(model, sites):
     all_site_params = model.get_breed_data("Site", "params")
     all_site_states = model.get_breed_data("Site", "states")
     all_tree_params = model.get_breed_data("Tree", "params")
-    all_tree_sdb = model.get_breed_data("Tree", "states_db")
+    all_tree_states = model.get_breed_data("Tree", "states")
     all_tree_ids = model.get_breed_agent_ids("Tree")
 
     if all_site_params is None:
@@ -77,17 +77,17 @@ def collect_per_site_data(model, sites):
         ], dtype=bool)
 
         site_tree_params = all_tree_params[tree_mask]
-        site_tree_sdb = all_tree_sdb[tree_mask]
+        site_tree_states = all_tree_states[tree_mask]
         site_tree_ids = all_tree_ids[tree_mask]
 
         # Filter to living trees
-        alive_mask = site_tree_sdb[:, TREE_DB_IS_ALIVE] > 0.5
+        alive_mask = site_tree_states[:, TREE_S_IS_ALIVE] > 0.5
         alive_params = site_tree_params[alive_mask]
-        alive_sdb = site_tree_sdb[alive_mask]
+        alive_states = site_tree_states[alive_mask]
         alive_ids = site_tree_ids[alive_mask].astype(np.int32)
 
         gap_ids = np.array([model.tree_to_gap[int(a)] for a in alive_ids], dtype=np.int32)
-        species_ids = alive_params[:, TREE_P_SPECIES_ID].astype(np.int32)
+        species_ids = alive_states[:, TREE_S_SPECIES_ID].astype(np.int32)
         evergreen = np.array([
             model.species_by_id.get(int(sid), {}).get('evergreen', 0) > 0.5
             for sid in species_ids
@@ -97,13 +97,13 @@ def collect_per_site_data(model, sites):
             'count': int(alive_mask.sum()),
             'gap_agent_id': gap_ids,
             'species_id': species_ids,
-            'diam': alive_sdb[:, TREE_DB_DIAM],
-            'height': alive_sdb[:, TREE_DB_HEIGHT],
+            'diam': alive_states[:, TREE_S_DIAM],
+            'height': alive_states[:, TREE_S_HEIGHT],
             'biomC': alive_params[:, TREE_P_BIOMC],
             'biomN': alive_params[:, TREE_P_BIOMN],
             'leaf_bm': alive_params[:, TREE_P_LEAF_BM],
             'age': alive_params[:, TREE_P_AGE],
-            'canopy_ht': alive_sdb[:, TREE_DB_CANOPY_HT],
+            'canopy_ht': alive_states[:, TREE_S_CANOPY_HT],
             'evergreen': evergreen,
         }
 
@@ -295,10 +295,10 @@ def main():
 
                 w.write_site_data(
                     current_year,
-                    site_states[SITE_S_ANNUAL_RAIN],
-                    site_states[SITE_S_POT_EVAP],
-                    site_states[SITE_S_ACT_EVAP],
-                    site_states[SITE_S_GROW_DAYS],
+                    site_params[SITE_P_ANNUAL_RAIN],
+                    site_params[SITE_P_POT_EVAP],
+                    site_params[SITE_P_ACT_EVAP],
+                    site_params[SITE_P_GROW_DAYS],
                     site_states[SITE_S_DEG_DAYS],
                     site_states[SITE_S_DRY_DAYS],
                     site_states[SITE_S_DRY_DAYS_BASE],
@@ -310,10 +310,10 @@ def main():
                     site_params[SITE_P_A0_N], site_params[SITE_P_A_N],
                     site_params[SITE_P_BL_C], site_params[SITE_P_BL_N],
                     site_states[SITE_S_AVAIL_N],
-                    soilresp=site_states[SITE_S_SOIL_RESP],
-                    c_into_a0=site_states[SITE_S_C_INTO_A0],
-                    n_into_a0=site_states[SITE_S_N_INTO_A0],
-                    net_n_into_a0=site_states[SITE_S_NET_N_INTO_A0],
+                    soilresp=site_params[SITE_P_SOIL_RESP],
+                    c_into_a0=site_params[SITE_P_C_INTO_A0],
+                    n_into_a0=site_params[SITE_P_N_INTO_A0],
+                    net_n_into_a0=site_params[SITE_P_NET_N_INTO_A0],
                 )
                 w.write_species_data(current_year, tree_data, gap_agents)
                 w.write_genus_data(current_year, tree_data, gap_agents)

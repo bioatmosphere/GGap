@@ -36,7 +36,6 @@ def site_nbalance_step(
     locations,
     params_tensor,
     states_tensor,
-    states_db_tensor,
     gap_lai, gap_species, site_species,
     gap_lai_idx, gap_species_idx, site_species_idx,
 ):
@@ -111,5 +110,5 @@ def site_nbalance_step(
     params_tensor[agent_index][SiteP.BL_C] = sb_c0
     params_tensor[agent_index][SiteP.BL_N] = sb_n0
 
-    # Export net N leached for CSV output
-    states_tensor[agent_index][SiteS.NET_N_INTO_A0] = net_n_leach
+    # Export net N leached for CSV output (output-only in params)
+    params_tensor[agent_index][SiteP.NET_N_INTO_A0] = net_n_leach

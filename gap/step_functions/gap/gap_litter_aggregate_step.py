@@ -21,7 +21,7 @@ import cupy as cp  # noqa: F401
 from cupyx import jit
 
 from gap.constants import (
-    Breed, Trait, TreeP, TreeS, TreeDB, GapS,
+    Breed, Trait, TreeS, GapS,
     STD_HT, PLOTSIZE, MAX_HEIGHT_BINS,
 )
 
@@ -37,7 +37,6 @@ def gap_litter_aggregate_step(
     locations,
     params_tensor,
     states_tensor,
-    states_db_tensor,
     gap_lai, gap_species, site_species,
     gap_lai_idx, gap_species_idx, site_species_idx,
 ):
@@ -75,7 +74,7 @@ def gap_litter_aggregate_step(
         neighbor_breed = int(breeds[neighbor_idx])
 
         if neighbor_breed == Breed.TREE:
-            tree_alive = states_db_tensor[neighbor_idx][TreeDB.IS_ALIVE]
+            tree_alive = states_tensor[neighbor_idx][TreeS.IS_ALIVE]
 
             # Read litter from ALL trees (alive + recently dead)
             if tree_alive > -0.5:
@@ -86,12 +85,12 @@ def gap_litter_aggregate_step(
 
             if tree_alive > 0.5:
                 # === Living tree: compute LAI and bin by height layer ===
-                n_diam = states_db_tensor[neighbor_idx][TreeDB.DIAM]
-                n_height = states_db_tensor[neighbor_idx][TreeDB.HEIGHT]
-                n_canopy_ht = states_db_tensor[neighbor_idx][TreeDB.CANOPY_HT]
+                n_diam = states_tensor[neighbor_idx][TreeS.DIAM]
+                n_height = states_tensor[neighbor_idx][TreeS.HEIGHT]
+                n_canopy_ht = states_tensor[neighbor_idx][TreeS.CANOPY_HT]
 
                 # Read species traits from globals
-                n_species_id = int(params_tensor[neighbor_idx][TreeP.SPECIES_ID])
+                n_species_id = int(states_tensor[neighbor_idx][TreeS.SPECIES_ID])
                 n_leafdiam_a = species_traits[int(n_species_id)][Trait.LEAFDIAM_A]
                 n_evergreen = int(species_traits[int(n_species_id)][Trait.EVERGREEN])
                 n_max_diam = species_traits[int(n_species_id)][Trait.MAX_DIAM]
@@ -141,7 +140,7 @@ def gap_litter_aggregate_step(
 
             elif tree_alive < -0.5:
                 # Template: read seedling weight for proportional decrement
-                template_weight = states_db_tensor[neighbor_idx][TreeDB.SEEDLING_WEIGHT]
+                template_weight = states_tensor[neighbor_idx][TreeS.SEEDLING_WEIGHT]
                 total_seedling_weight = total_seedling_weight + template_weight
 
         i = i + 1

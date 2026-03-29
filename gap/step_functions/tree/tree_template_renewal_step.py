@@ -5,11 +5,11 @@ Computes per-species seedbank/seedling dynamics using current-tick climate.
 Runs AFTER gap_demand_aggregate_step (P4) computes per-gap N supply ratio,
 so templates read current-tick deg_days, dry_days, n_supply_ratio, etc.
 
-P6 (gap_recruit_aggregate_step) reads template regrowth from params
-(same tick, no double buffer) to compute growmax and num_to_recruit.
+P6 (gap_recruit_aggregate_step) reads template regrowth from states[ENV_STRESS]
+(same tick) to compute growmax and num_to_recruit.
 
-P7 (tree_actual_growth_step) free slots read seedling_weight from params
-(same tick, no double buffer) for species selection.
+P7 (tree_actual_growth_step) free slots read seedling_weight from states[SEEDLING_WEIGHT]
+(same tick) for species selection.
 
 Execution Flow:
     1. Read current-tick climate + disturbance + recovery_years from Gap (P2/P4)
@@ -19,21 +19,20 @@ Execution Flow:
     5. Seedbank/seedling pipeline (fire / wind / recovery / post-disturbance / normal)
     6. PLOTSIZE scaling + seedling decrement (D1/D2: matches GAPpy plotsize pattern)
     7. Annual survival: seedling = seedling * seedling_lg / PLOTSIZE (D5: always runs)
-    8. Write regrowth to params (P6 reads same tick for growmax)
-    9. Write seedling_weight to params (P7 free slots read same tick)
+    8. Write regrowth to states[ENV_STRESS] (P6 reads same tick for growmax)
+    9. Write seedling_weight to states[SEEDLING_WEIGHT] (P7 free slots read same tick)
 
 Property scheme:
-- params[17]: reads species_id, mutable seedbank/seedling; writes seedbank/seedling/regrowth/weight
+- params[14]: mutable seedbank/seedling
+- states[11]: reads is_alive, species_id, old seedling_weight; writes env_stress, seedling_weight
 - species traits read from species_traits[species_id][trait]
-- states[5]: not used by templates
-- states_db[5]: reads is_alive, reads old seedling_weight for decrement
 """
 
 import cupy as cp
 from cupyx import jit
 
 from gap.constants import (
-    Breed, Trait, TreeP, TreeDB, GapS,
+    Breed, Trait, TreeP, TreeS, GapS,
     XT, PLOTSIZE,
 )
 
@@ -48,18 +47,18 @@ def tree_template_renewal_step(
     locations,
     params_tensor,
     states_tensor,
-    states_db_tensor,
     gap_lai, gap_species, site_species, gap_lai_idx, gap_species_idx, site_species_idx,
 ):
     """
     Template renewal step (priority 5).
 
     Computes per-species seedbank/seedling dynamics using current-tick climate
-    (relayed by P2/P4). Writes regrowth to params for P6 growmax aggregation,
-    and seedling_weight to params for P7 free slot species selection.
+    (relayed by P2/P4). Writes regrowth to states[ENV_STRESS] for P6 growmax
+    aggregation, and seedling_weight to states[SEEDLING_WEIGHT] for P7 free
+    slot species selection.
     Only processes templates (is_alive < -0.5); living/free trees skip.
     """
-    is_alive = states_db_tensor[agent_index][TreeDB.IS_ALIVE]
+    is_alive = states_tensor[agent_index][TreeS.IS_ALIVE]
 
     if is_alive < -0.5:
         # --- 1. Read climate + disturbance + recruitment + LAI + avail_spec from Gap ---
@@ -104,8 +103,8 @@ def tree_template_renewal_step(
                 cum_con_lai = gap_lai[gap_lai_idx[neighbor_idx]][1][1]
             i = i + 1
 
-        # Read species_id from params, then look up traits from species_traits tensor
-        species_id = params_tensor[agent_index][TreeP.SPECIES_ID]
+        # Read species_id from states, then look up traits from species_traits tensor
+        species_id = states_tensor[agent_index][TreeS.SPECIES_ID]
 
         shade_tol = int(species_traits[int(species_id)][Trait.SHADE_TOL])
         deg_day_min = species_traits[int(species_id)][Trait.DEG_DAY_MIN]
@@ -363,7 +362,7 @@ def tree_template_renewal_step(
             # my_share ≈ num_recruits × (species_weight / total_weight) = recruits for this species.
             # With PLOTSIZE-scaled seedling, each recruit decrements ~1.0 (matches GAPpy model.py:941).
             if fire_intensity < 0.01 and wind_intensity < 0.01:
-                old_weight = states_db_tensor[agent_index][TreeDB.SEEDLING_WEIGHT]
+                old_weight = states_tensor[agent_index][TreeS.SEEDLING_WEIGHT]
                 if total_seedling_weight > 0.01 and num_to_recruit > 0.5:
                     my_share = num_to_recruit * old_weight / total_seedling_weight
                     seedling = seedling - my_share
@@ -380,6 +379,5 @@ def tree_template_renewal_step(
         # --- 8. Write outputs ---
         params_tensor[agent_index][TreeP.SEEDBANK] = seedbank
         params_tensor[agent_index][TreeP.SEEDLING] = seedling
-        params_tensor[agent_index][TreeP.ENV_STRESS] = regrowth         # P6 reads same tick
-        params_tensor[agent_index][TreeP.SEEDLING_WEIGHT] = weight      # P7 free slots read same tick
-        states_db_tensor[agent_index][TreeDB.SEEDLING_WEIGHT] = weight  # P0 reads next tick via read buffer
+        states_tensor[agent_index][TreeS.ENV_STRESS] = regrowth         # P6 reads same tick
+        states_tensor[agent_index][TreeS.SEEDLING_WEIGHT] = weight      # P7 free slots read same tick

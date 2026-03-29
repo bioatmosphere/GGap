@@ -28,14 +28,14 @@ except ImportError:
 from mpi4py import MPI
 from gap.gap_model import (
     GAPModel,
-    # Site params indices (soil pools are private)
+    # Site params indices (soil pools + output fields, all private)
     SITE_P_A0_C, SITE_P_A0_N,
     SITE_P_A_C, SITE_P_A_N,
     SITE_P_BL_C, SITE_P_BL_N,
-    # Site states indices (public: climate + avail_n + stochastic climate + soil outputs)
+    SITE_P_ANNUAL_RAIN, SITE_P_GROW_DAYS, SITE_P_POT_EVAP, SITE_P_ACT_EVAP,
+    SITE_P_SOIL_RESP, SITE_P_C_INTO_A0, SITE_P_N_INTO_A0, SITE_P_NET_N_INTO_A0,
+    # Site states indices (neighbor-visible climate only)
     SITE_S_AVAIL_N, SITE_S_DEG_DAYS, SITE_S_DRY_DAYS, SITE_S_DRY_DAYS_BASE, SITE_S_FLOOD_DAYS,
-    SITE_S_ANNUAL_RAIN, SITE_S_GROW_DAYS, SITE_S_POT_EVAP, SITE_S_ACT_EVAP,
-    SITE_S_SOIL_RESP, SITE_S_C_INTO_A0, SITE_S_N_INTO_A0, SITE_S_NET_N_INTO_A0,
 )
 from gap.output_utils import OutputWriter
 
@@ -253,17 +253,17 @@ def main():
         tree_data = model.collect_tree_data()
         t_collect_end = time.time()
 
-        # Read stochastic climate values computed by GPU kernel
-        annual_rain = site_states[SITE_S_ANNUAL_RAIN]
-        grow_days = site_states[SITE_S_GROW_DAYS]
+        # Read stochastic climate values computed by GPU kernel (now in params)
+        annual_rain = site_params[SITE_P_ANNUAL_RAIN]
+        grow_days = site_params[SITE_P_GROW_DAYS]
 
         if rank == 0:
             # Write CSV outputs
             writer.write_site_data(
                 current_year,
                 annual_rain,
-                site_states[SITE_S_POT_EVAP],
-                site_states[SITE_S_ACT_EVAP],
+                site_params[SITE_P_POT_EVAP],
+                site_params[SITE_P_ACT_EVAP],
                 grow_days,
                 site_states[SITE_S_DEG_DAYS],
                 site_states[SITE_S_DRY_DAYS],
@@ -276,10 +276,10 @@ def main():
                 site_params[SITE_P_A0_N], site_params[SITE_P_A_N],
                 site_params[SITE_P_BL_C], site_params[SITE_P_BL_N],
                 site_states[SITE_S_AVAIL_N],
-                soilresp=site_states[SITE_S_SOIL_RESP],
-                c_into_a0=site_states[SITE_S_C_INTO_A0],
-                n_into_a0=site_states[SITE_S_N_INTO_A0],
-                net_n_into_a0=site_states[SITE_S_NET_N_INTO_A0],
+                soilresp=site_params[SITE_P_SOIL_RESP],
+                c_into_a0=site_params[SITE_P_C_INTO_A0],
+                n_into_a0=site_params[SITE_P_N_INTO_A0],
+                net_n_into_a0=site_params[SITE_P_NET_N_INTO_A0],
             )
             writer.write_species_data(current_year, tree_data, model.gap_agents)
             writer.write_genus_data(current_year, tree_data, model.gap_agents)

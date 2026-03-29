@@ -21,7 +21,7 @@ from cupyx import jit
 from sagesim.math_utils import rand_uniform_philox
 
 from gap.constants import (
-    Breed, TreeP, TreeDB, GapS,
+    Breed, TreeS, GapS,
     PLOTSIZE,
 )
 
@@ -36,7 +36,6 @@ def gap_recruit_aggregate_step(
     locations,
     params_tensor,
     states_tensor,
-    states_db_tensor,
     gap_lai, gap_species, site_species,
     gap_lai_idx, gap_species_idx, site_species_idx,
 ):
@@ -58,7 +57,7 @@ def gap_recruit_aggregate_step(
         neighbor_breed = int(breeds[neighbor_idx])
 
         if neighbor_breed == Breed.TREE:
-            tree_alive = states_db_tensor[neighbor_idx][TreeDB.IS_ALIVE]
+            tree_alive = states_tensor[neighbor_idx][TreeS.IS_ALIVE]
             if tree_alive > 0.5:
                 living_tree_count = living_tree_count + 1.0
             elif tree_alive > -0.5:
@@ -66,7 +65,7 @@ def gap_recruit_aggregate_step(
                 free_slot_tree_count = free_slot_tree_count + 1.0
             else:
                 # Template (is_alive == -1): read regrowth for growmax
-                template_regrowth = params_tensor[neighbor_idx][TreeP.ENV_STRESS]
+                template_regrowth = states_tensor[neighbor_idx][TreeS.ENV_STRESS]
                 if template_regrowth > growmax:
                     growmax = template_regrowth
 
