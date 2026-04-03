@@ -1,5 +1,5 @@
 """
-Tree actual growth step function for GGap model (Priority 6).
+Tree actual growth step function for GGap model (Priority 7).
 Handles living tree growth + mortality + litter and free slot activation.
 
 Species traits are now read from species_traits tensor instead of params_tensor.
@@ -50,11 +50,14 @@ def tree_actual_growth_step(
     locations,
     params_tensor,
     states_tensor,
-    gap_lai, gap_species, site_species,
-    gap_lai_idx, gap_species_idx, site_species_idx,
+    gap_lai, gap_lai_idx,
+    gap_avail_spec, gap_avail_spec_idx,
+    gap_imported_seeds, gap_imported_seeds_idx,
+    site_avail_spec, site_avail_spec_idx,
+    site_imported_seeds, site_imported_seeds_idx,
 ):
     """
-    Phase C (P6): Nutrient response + final growth + mortality + litter + free slot activation.
+    Phase C (P7): Nutrient response + final growth + mortality + litter + free slot activation.
 
     Living trees: reads env_stress/diam_max from P2, n_supply_ratio from P4.
     Free slots: reads num_to_recruit from P6, seedling_weight from P5 templates.
@@ -428,41 +431,41 @@ def tree_actual_growth_step(
             slot_priority = rand_uniform_philox(tick, agent_index, int(recruit_rand_seed) * 97 + 3)
 
             if slot_priority < recruit_prob:
-                # D3 fix: CDF-based species selection (matches GAPpy model.py:917-938).
-                # Pass 1: sum total_weight across all templates
+                # Species selection matching GAPpy model.py:917-938
+                # Pass 1: sum total_weight across all templates (order irrelevant for sum)
                 total_weight = 0.0
                 i = 0
                 while i < len(neighbor_indices) and neighbor_indices[i] != -1:
                     neighbor_idx = int(neighbor_indices[i])
-                    neighbor_breed = int(breeds[neighbor_idx])
-                    if neighbor_breed == Breed.TREE:
-                        neighbor_alive = states_tensor[neighbor_idx][TreeS.IS_ALIVE]
-                        if neighbor_alive < -0.5:
-                            weight = states_tensor[neighbor_idx][TreeS.SEEDLING_WEIGHT]
-                            total_weight = total_weight + weight
+                    if int(breeds[neighbor_idx]) == Breed.TREE:
+                        if states_tensor[neighbor_idx][TreeS.IS_ALIVE] < -0.5:
+                            total_weight = total_weight + states_tensor[neighbor_idx][TreeS.SEEDLING_WEIGHT]
                     i = i + 1
 
-                # Pass 2: draw random target, cumulative scan to select species
-                # (matches GAPpy: normalize probs, build CDF, draw uniform)
+                # Pass 2: normalized CDF scan in species_id order (0..N-1)
+                # GAPpy: prob[i] /= probsum, CDF[i] = CDF[i-1] + prob[i], select where q0 < CDF
                 selected_neighbor_idx = -1
+                last_template_idx = -1
                 if total_weight > 1e-10:
-                    rand_target = rand_uniform_philox(tick, agent_index, int(recruit_rand_seed) * 97 + 4) * total_weight
-                    cum_weight = 0.0
-                    last_template_idx = -1
-                    i = 0
-                    while i < len(neighbor_indices) and neighbor_indices[i] != -1:
-                        neighbor_idx = int(neighbor_indices[i])
-                        neighbor_breed = int(breeds[neighbor_idx])
-                        if neighbor_breed == Breed.TREE:
-                            neighbor_alive = states_tensor[neighbor_idx][TreeS.IS_ALIVE]
-                            if neighbor_alive < -0.5:
-                                last_template_idx = neighbor_idx
-                                weight = states_tensor[neighbor_idx][TreeS.SEEDLING_WEIGHT]
-                                cum_weight = cum_weight + weight
-                                if cum_weight > rand_target and selected_neighbor_idx < 0:
-                                    selected_neighbor_idx = neighbor_idx
-                        i = i + 1
-                    # Fallback for floating-point overshoot (GAPpy reselection)
+                    q0 = rand_uniform_philox(tick, agent_index, int(recruit_rand_seed) * 97 + 4)
+                    cum_prob = 0.0
+                    sp = 0
+                    while sp < len(species_traits):
+                        # Find template for species sp among neighbors
+                        i = 0
+                        while i < len(neighbor_indices) and neighbor_indices[i] != -1:
+                            neighbor_idx = int(neighbor_indices[i])
+                            if int(breeds[neighbor_idx]) == Breed.TREE:
+                                if states_tensor[neighbor_idx][TreeS.IS_ALIVE] < -0.5:
+                                    last_template_idx = neighbor_idx
+                                    if int(states_tensor[neighbor_idx][TreeS.SPECIES_ID]) == sp:
+                                        weight = states_tensor[neighbor_idx][TreeS.SEEDLING_WEIGHT]
+                                        cum_prob = cum_prob + weight / total_weight
+                                        if cum_prob > q0 and selected_neighbor_idx < 0:
+                                            selected_neighbor_idx = neighbor_idx
+                            i = i + 1
+                        sp = sp + 1
+                    # Fallback (GAPpy reselection for floating-point overshoot)
                     if selected_neighbor_idx < 0 and last_template_idx >= 0:
                         selected_neighbor_idx = last_template_idx
 

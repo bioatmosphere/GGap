@@ -37,8 +37,11 @@ def gap_litter_aggregate_step(
     locations,
     params_tensor,
     states_tensor,
-    gap_lai, gap_species, site_species,
-    gap_lai_idx, gap_species_idx, site_species_idx,
+    gap_lai, gap_lai_idx,
+    gap_avail_spec, gap_avail_spec_idx,
+    gap_imported_seeds, gap_imported_seeds_idx,
+    site_avail_spec, site_avail_spec_idx,
+    site_imported_seeds, site_imported_seeds_idx,
 ):
     """
     Gap litter aggregate step (priority 0).
@@ -55,7 +58,7 @@ def gap_litter_aggregate_step(
 
     # Get breed-local array rows for this gap
     lai_row = gap_lai_idx[agent_index]
-    sp_row = gap_species_idx[agent_index]
+    sp_row = gap_avail_spec_idx[agent_index]
 
     # --- 1. Zero the LAI bins and avail_spec flags ---
     for k in range(MAX_HEIGHT_BINS):
@@ -63,7 +66,7 @@ def gap_litter_aggregate_step(
         gap_lai[lai_row][k][1] = 0.0
     sp = 0
     while sp < len(species_traits):
-        gap_species[sp_row][sp] = 0.0
+        gap_avail_spec[sp_row][sp] = 0.0
         sp = sp + 1
 
     # --- 2. Loop through Tree neighbors ---
@@ -136,7 +139,7 @@ def gap_litter_aggregate_step(
                 # Check avail_spec: mature tree of this species
                 if n_species_id >= 0 and n_species_id < len(species_traits):
                     if n_diam > n_max_diam * 0.05:
-                        gap_species[sp_row][n_species_id] = 1.0
+                        gap_avail_spec[sp_row][n_species_id] = 1.0
 
             elif tree_alive < -0.5:
                 # Template: read seedling weight for proportional decrement

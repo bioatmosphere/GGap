@@ -29,8 +29,11 @@ def gap_nconsumed_aggregate_step(
     locations,
     params_tensor,
     states_tensor,
-    gap_lai, gap_species, site_species,
-    gap_lai_idx, gap_species_idx, site_species_idx,
+    gap_lai, gap_lai_idx,
+    gap_avail_spec, gap_avail_spec_idx,
+    gap_imported_seeds, gap_imported_seeds_idx,
+    site_avail_spec, site_avail_spec_idx,
+    site_imported_seeds, site_imported_seeds_idx,
 ):
     """
     Gap N consumed aggregate step (priority 8).

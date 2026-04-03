@@ -194,17 +194,16 @@ class SiteP(IntEnum):
     ANNUAL_RUNOFF = 10
     SITE_ID = 11
     # Output-only fields (not neighbor-visible, only for CSV collection)
-    N_SUPPLY_RATIO = 12   # Dead: only written by unregistered site_nutrient_step
-    ANNUAL_RAIN = 13
-    GROW_DAYS = 14
-    POT_EVAP = 15
-    ACT_EVAP = 16
-    SOIL_RESP = 17
-    C_INTO_A0 = 18
-    N_INTO_A0 = 19
-    NET_N_INTO_A0 = 20
+    ANNUAL_RAIN = 12
+    GROW_DAYS = 13
+    POT_EVAP = 14
+    ACT_EVAP = 15
+    SOIL_RESP = 16
+    C_INTO_A0 = 17
+    N_INTO_A0 = 18
+    NET_N_INTO_A0 = 19
 
-SITE_PARAMS_SIZE = 21
+SITE_PARAMS_SIZE = 20
 
 
 # ============================================================
@@ -219,6 +218,7 @@ class SiteS(IntEnum):
     FIRE_INTENSITY = 4
     DRY_DAYS_BASE = 5
     WIND_INTENSITY = 6
+    SITE_ID = 7           # Global site slot — neighbor-visible for cross-rank dispersal
 
 
 # ============================================================

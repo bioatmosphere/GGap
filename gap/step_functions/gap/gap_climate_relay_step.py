@@ -32,8 +32,11 @@ def gap_climate_relay_step(
     locations,
     params_tensor,
     states_tensor,
-    gap_lai, gap_species, site_species,
-    gap_lai_idx, gap_species_idx, site_species_idx,
+    gap_lai, gap_lai_idx,
+    gap_avail_spec, gap_avail_spec_idx,
+    gap_imported_seeds, gap_imported_seeds_idx,
+    site_avail_spec, site_avail_spec_idx,
+    site_imported_seeds, site_imported_seeds_idx,
 ):
     """
     Gap climate relay step (priority 2).
@@ -83,13 +86,11 @@ def gap_climate_relay_step(
     elif site_wind_intensity > 0.01:
         states_tensor[agent_index][GapS.RECOVERY_YEARS] = 3.0
 
-    # Relay imported_seeds from site_species → gap_species (written at P10 previous tick)
-    # P5 templates read from gap_species for seedbank accumulation
+    # Relay imported_seeds from site_imported_seeds → gap_imported_seeds (written at P10 previous tick)
+    # P5 templates read from gap_imported_seeds for seedbank accumulation
     num_species = len(species_traits)
-    gsp_row = gap_species_idx[agent_index]
     if site_idx >= 0:
-        ssp_row = site_species_idx[site_idx]
         sp = 0
         while sp < num_species:
-            gap_species[gsp_row][num_species + sp] = site_species[ssp_row][num_species + sp]
+            gap_imported_seeds[gap_imported_seeds_idx[agent_index]][sp] = site_imported_seeds[site_imported_seeds_idx[site_idx]][sp]
             sp = sp + 1

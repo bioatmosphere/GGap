@@ -61,8 +61,7 @@ from gap.step_functions.tree.tree_template_renewal_step import tree_template_ren
 from gap.step_functions.gap.gap_recruit_aggregate_step import gap_recruit_aggregate_step
 from gap.step_functions.tree.tree_actual_growth_step import tree_actual_growth_step
 from gap.step_functions.gap.gap_nconsumed_aggregate_step import gap_nconsumed_aggregate_step
-from gap.step_functions.site.site_nbalance_step import site_nbalance_step
-from gap.step_functions.site.site_seed_dispersal_step import site_seed_dispersal_step
+from gap.step_functions.site.site_final_step import site_final_step
 
 # Import constants — all index enums and sizes from single source of truth
 from gap.constants import (
@@ -127,7 +126,7 @@ class GAPModel(Model):
 
     def __init__(self) -> None:
         space = NetworkSpace()
-        super().__init__(space)
+        super().__init__(space, agent_slack_factor=1.0, csr_slack_factor=1.0)
 
         # Species registry (deduplicated across sites)
         self.unique_species = {}
@@ -157,84 +156,67 @@ class GAPModel(Model):
         # === Create Tree breed (breed_id = 0) ===
         self._tree_breed = Breed("Tree")
         self._tree_breed.register_property("params", [0.0] * TREE_PARAMS_SIZE, neighbor_visible=False)
-        self._tree_breed.register_property("states", [0.0] * 11, neighbor_visible=True)
+        # neighbor_visible=False: all agents of a site are on the same worker (partition_sites invariant)
+        self._tree_breed.register_property("states", [0.0] * 11, neighbor_visible=False)
         self._tree_breed.register_step_func(
             tree_potential_growth_step,
             CURRENT_DIR / "step_functions" / "tree" / "tree_potential_growth_step.py",
-            priority=3,
-            no_double_buffer=["params", "states"],
+            priority=3, no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "site_imported_seeds"],
         )
         self._tree_breed.register_step_func(
             tree_template_renewal_step,
             CURRENT_DIR / "step_functions" / "tree" / "tree_template_renewal_step.py",
-            priority=5,
-            no_double_buffer=["params", "states"],
+            priority=5, no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "site_imported_seeds"],
         )
         self._tree_breed.register_step_func(
             tree_actual_growth_step,
             CURRENT_DIR / "step_functions" / "tree" / "tree_actual_growth_step.py",
-            priority=7,
-            no_double_buffer=["params", "states"],
+            priority=7, no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "site_imported_seeds"],
         )
         self.register_breed(breed=self._tree_breed)
 
         # === Create Gap breed (breed_id = 1) ===
         self._gap_breed = Breed("Gap")
         self._gap_breed.register_property("params", [0.0] * 2, neighbor_visible=False)
-        self._gap_breed.register_property("states", [0.0] * GAP_STATES_SIZE, neighbor_visible=True)
+        # neighbor_visible=False: all agents of a site are on the same worker
+        self._gap_breed.register_property("states", [0.0] * GAP_STATES_SIZE, neighbor_visible=False)
         self._gap_breed.register_step_func(
-            gap_litter_aggregate_step,
-            CURRENT_DIR / "step_functions" / "gap" / "gap_litter_aggregate_step.py",
-            priority=0,
-            no_double_buffer=["params", "states"],
+            gap_litter_aggregate_step, CURRENT_DIR / "step_functions" / "gap" / "gap_litter_aggregate_step.py",
+            priority=0, no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "site_imported_seeds"],
         )
         self._gap_breed.register_step_func(
-            gap_climate_relay_step,
-            CURRENT_DIR / "step_functions" / "gap" / "gap_climate_relay_step.py",
-            priority=2,
-            no_double_buffer=["params", "states"],
+            gap_climate_relay_step, CURRENT_DIR / "step_functions" / "gap" / "gap_climate_relay_step.py",
+            priority=2, no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "site_imported_seeds"],
         )
         self._gap_breed.register_step_func(
-            gap_demand_aggregate_step,
-            CURRENT_DIR / "step_functions" / "gap" / "gap_demand_aggregate_step.py",
-            priority=4,
-            no_double_buffer=["params", "states"],
+            gap_demand_aggregate_step, CURRENT_DIR / "step_functions" / "gap" / "gap_demand_aggregate_step.py",
+            priority=4, no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "site_imported_seeds"],
         )
         self._gap_breed.register_step_func(
-            gap_recruit_aggregate_step,
-            CURRENT_DIR / "step_functions" / "gap" / "gap_recruit_aggregate_step.py",
-            priority=6,
-            no_double_buffer=["params", "states"],
+            gap_recruit_aggregate_step, CURRENT_DIR / "step_functions" / "gap" / "gap_recruit_aggregate_step.py",
+            priority=6, no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "site_imported_seeds"],
         )
         self._gap_breed.register_step_func(
-            gap_nconsumed_aggregate_step,
-            CURRENT_DIR / "step_functions" / "gap" / "gap_nconsumed_aggregate_step.py",
-            priority=8,
-            no_double_buffer=["params", "states"],
+            gap_nconsumed_aggregate_step, CURRENT_DIR / "step_functions" / "gap" / "gap_nconsumed_aggregate_step.py",
+            priority=8, no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "site_imported_seeds"],
         )
         self.register_breed(breed=self._gap_breed)
 
         # === Create Site breed (breed_id = 2) ===
         self._site_breed = Breed("Site")
         self._site_breed.register_property("params", [0.0] * SITE_PARAMS_SIZE, neighbor_visible=False)
-        self._site_breed.register_property("states", [0.0] * 7, neighbor_visible=True)
+        self._site_breed.register_property("states", [0.0] * 8, neighbor_visible=True)
         self._site_breed.register_step_func(
             site_soil_step,
             CURRENT_DIR / "step_functions" / "site" / "soil_step.py",
             priority=1,
-            no_double_buffer=["params", "states"],
+            no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "site_imported_seeds"],
         )
         self._site_breed.register_step_func(
-            site_nbalance_step,
-            CURRENT_DIR / "step_functions" / "site" / "site_nbalance_step.py",
+            site_final_step,
+            CURRENT_DIR / "step_functions" / "site" / "site_final_step.py",
             priority=9,
-            no_double_buffer=["params", "states"],
-        )
-        self._site_breed.register_step_func(
-            site_seed_dispersal_step,
-            CURRENT_DIR / "step_functions" / "site" / "site_seed_dispersal_step.py",
-            priority=10,
-            no_double_buffer=["params", "states"],
+            no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "site_imported_seeds"],
         )
         self.register_breed(breed=self._site_breed)
 
@@ -600,8 +582,8 @@ class GAPModel(Model):
         params[int(SiteP.ANNUAL_RUNOFF)] = 0.0
         params[int(SiteP.SITE_ID)] = float(site_slot)  # Globals slot index
 
-        # === Build states (7 neighbor-visible climate fields) ===
-        states = [0.0] * 7
+        # === Build states (8 neighbor-visible fields: climate + SITE_ID) ===
+        states = [0.0] * 8
         states[SITE_S_DEG_DAYS] = deg_days
         states[SITE_S_DRY_DAYS] = dry_days
         states[SITE_S_AVAIL_N] = 0.1
@@ -609,6 +591,7 @@ class GAPModel(Model):
         states[int(SiteS.FIRE_INTENSITY)] = 0.0
         states[SITE_S_DRY_DAYS_BASE] = 0.0
         states[int(SiteS.WIND_INTENSITY)] = 0.0
+        states[int(SiteS.SITE_ID)] = float(site_slot)
 
         # Create site agent
         site_agent_id = self.create_agent_of_breed(
@@ -618,6 +601,7 @@ class GAPModel(Model):
             states=states,
         )
         self.site_agents.append(site_agent_id)
+        self.set_agent_logical_id(site_agent_id, site_slot)
 
         elevation = float(site_row.get('elevation', 0))
         fire_prob = float(site_row.get('fire_prob', 0)) / 1000.0
@@ -674,6 +658,9 @@ class GAPModel(Model):
         )
         self.gap_agents.append(gap_agent_id)
         site['gaps'].append(gap_agent_id)
+        site_slot = site.get('site_slot', 0)
+        gap_within_site = len(site['gaps']) - 1
+        self.set_agent_logical_id(gap_agent_id, site_slot * 10000 + gap_within_site)
 
         self.connect_agents(site_agent_id, gap_agent_id)
 
@@ -706,12 +693,20 @@ class GAPModel(Model):
         template_trees = []
         initial_alive_count = 0
 
+        # Stable logical ID base: site_slot * 10_000_000 + gap * 10_000 + tree_idx
+        site_slot = site.get('site_slot', 0)
+        gap_within_site = len(site['gaps']) - 1
+        logical_base = site_slot * 10000000 + gap_within_site * 10000
+        tree_counter = 0
+
         # Create template trees (one per species)
         for species_info in site_species:
             agent_id = self._create_tree_agent(
                 gap_agent_id, species_info, diam=0.0, age=0.0, is_alive=-1.0, rank=rank
             )
             template_trees.append(agent_id)
+            self.set_agent_logical_id(agent_id, logical_base + tree_counter)
+            tree_counter += 1
 
         # Create free tree slots
         free_slot_count = maxtrees
@@ -722,6 +717,8 @@ class GAPModel(Model):
                     gap_agent_id, placeholder_species, diam=0.0, age=0.0, is_alive=0.0, rank=rank
                 )
                 created_trees.append(agent_id)
+                self.set_agent_logical_id(agent_id, logical_base + tree_counter)
+                tree_counter += 1
 
         # Connect free slots → templates (directed, one-way)
         for free_slot_id in created_trees:
@@ -816,37 +813,46 @@ class GAPModel(Model):
         self.get_space().connect_agents(agent_0, agent_1, directed=directed)
 
     def register_breed_local_arrays(self):
-        """Register breed-local arrays for LAI, gap species, and site species.
+        """Register breed-local arrays for LAI, species, and dispersal.
 
         Must be called after all agents are created but before setup().
-        These arrays replace the variable-length portions that were previously
-        embedded in states_tensor (CUM_DEC_LAI, CUM_CON_LAI, AVAIL_SPEC,
-        SITE_AVAIL_SPEC, IMPORTED_SEEDS).
+        All neighbor_visible=False except site_avail_spec (cross-rank dispersal).
+        All in no_double_buffer except site_avail_spec (same-priority race at P10).
         """
         from gap.constants import MAX_HEIGHT_BINS
-        num_gaps = len(self.gap_agents)
-        num_sites = len(self.site_agents)
         num_species = len(self.unique_species)
 
-        # gap_lai: (num_gaps, MAX_HEIGHT_BINS, 2) — dec LAI at [:,:,0], con LAI at [:,:,1]
-        # ghost_exchange=False: gaps and their trees are always on the same rank
+        # gap_lai: per-gap LAI profile (dec/con per height bin)
         self.register_breed_local_array(
             "gap_lai", breed=self._gap_breed,
             shape_per_agent=(MAX_HEIGHT_BINS, 2),
-            ghost_exchange=False)
+            neighbor_visible=False)
 
-        # gap_species: (num_gaps, num_species*2) — avail_spec at [0:N], imported_seeds relay at [N:2N]
+        # gap_avail_spec: per-gap species availability flags
         self.register_breed_local_array(
-            "gap_species", breed=self._gap_breed,
-            shape_per_agent=(num_species * 2,),
-            ghost_exchange=False)
+            "gap_avail_spec", breed=self._gap_breed,
+            shape_per_agent=(num_species,),
+            neighbor_visible=False)
 
-        # site_species: (num_sites, num_species*2) — site_avail_spec at [0:N], imported_seeds at [N:2N]
-        # ghost_exchange=True: sites on different ranks exchange dispersal data
+        # gap_imported_seeds: per-gap imported seed relay (P2 copies from site)
         self.register_breed_local_array(
-            "site_species", breed=self._site_breed,
-            shape_per_agent=(num_species * 2,),
-            ghost_exchange=True)
+            "gap_imported_seeds", breed=self._gap_breed,
+            shape_per_agent=(num_species,),
+            neighbor_visible=False)
+
+        # site_avail_spec: site-averaged species availability (cross-rank, double-buffered)
+        # neighbor_visible=True: neighbor sites read for dispersal at P10
+        # NOT in no_double_buffer: P10 reads neighbor's + writes own at same priority
+        self.register_breed_local_array(
+            "site_avail_spec", breed=self._site_breed,
+            shape_per_agent=(num_species,),
+            neighbor_visible=True)
+
+        # site_imported_seeds: imported seeds from dispersal (local read at P2)
+        self.register_breed_local_array(
+            "site_imported_seeds", breed=self._site_breed,
+            shape_per_agent=(num_species,),
+            neighbor_visible=False)
 
     def partition_sites(self, site_ids, strategy='round_robin'):
         """Compute site → rank mapping. Call before initialize_site_with_gaps().

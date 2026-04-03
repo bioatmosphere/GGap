@@ -88,8 +88,11 @@ def site_soil_step(
     locations,
     params_tensor,
     states_tensor,
-    gap_lai, gap_species, site_species,
-    gap_lai_idx, gap_species_idx, site_species_idx,
+    gap_lai, gap_lai_idx,
+    gap_avail_spec, gap_avail_spec_idx,
+    gap_imported_seeds, gap_imported_seeds_idx,
+    site_avail_spec, site_avail_spec_idx,
+    site_imported_seeds, site_imported_seeds_idx,
 ):
     """
     Soil biogeochemistry step function (priority 1).
@@ -161,7 +164,7 @@ def site_soil_step(
     lai_w0 = params_tensor[agent_index][SiteP.LAI_W0]
 
     # ========== READ SITE CONFIG ==========
-    site_id = int(site_species_idx[agent_index])
+    site_id = int(params_tensor[agent_index][SiteP.SITE_ID])
 
     # Read site properties from site_configs
     sa_fc = site_configs[int(site_id)][Cfg.FIELD_CAP]
@@ -170,7 +173,7 @@ def site_soil_step(
     sigma = site_configs[int(site_id)][Cfg.SIGMA]
     latitude = site_configs[int(site_id)][Cfg.LATITUDE]
 
-    # N balance moved to site_nbalance_step (P9) -- runs AFTER P7 growth,
+    # N balance is in site_final_step (P9) -- runs AFTER P7 growth,
     # so it uses same-tick avail_N and n_consumed (no 1-tick delay).
 
     # ========== DYNAMIC LAI FROM TREE CANOPY (GAPpy canopy():282-362) ==========
@@ -278,6 +281,7 @@ def site_soil_step(
     # Month 0 (January)
     tp = rand_normal_bounded(tick, agent_index, 100, -1.0, 1.0)
     pp = rand_normal_bounded(tick, agent_index, 101, -0.5, 0.5)
+    #
     tmin_0 = tmin_0 + tp * tmin_std_0
     tmax_0 = tmax_0 + tp * tmax_std_0
     if tmax_0 < tmin_0:
@@ -766,35 +770,22 @@ def site_soil_step(
 
         # === Calculate PET: Hargreaves method (GAPpy climate.py:85-112) ===
         julia = day + 1  # 1-based Julian day
-
-        # Extraterrestrial radiation (GAPpy ex_rad function)
-        # Note: dr (distance ratio) omitted; not used in erad formula (GAPpy climate.py:100)
         dairta = H_AS * cp.sin(H_B * float(julia) + H_PHASE)
         yxd_pet = -cp.tan(lat_rad) * cp.tan(dairta)
-
-        # Clamp for acos
         if yxd_pet >= 1.0:
             yxd_pet = 1.0
         if yxd_pet <= -1.0:
             yxd_pet = -1.0
-
-        # Polynomial approximation for acos (accurate to ~0.01 radians)
-        # acos(x) = PI/2 - asin(x), asin(x) ~ x + x^3/6 + 3x^5/40
         omega = 0.0
         if yxd_pet >= 1.0:
             omega = 0.0
         elif yxd_pet <= -1.0:
             omega = PI
         else:
-            x2_pet = yxd_pet * yxd_pet
-            asin_pet = yxd_pet * (1.0 + x2_pet * (0.16666667 + x2_pet * 0.075))
-            omega = 1.5707963 - asin_pet  # PI/2 - asin = acos
-
+            omega = cp.arccos(yxd_pet)
         erad = H_AMP * cp.cos(lat_rad) * cp.cos(dairta) * (cp.sin(omega) - omega * cp.cos(omega))
         if erad < 0.0:
             erad = 0.0
-
-        # Hargreaves PET (GAPpy climate.py:107-112)
         pot_ev_day = 0.0
         if day_temp > 0.0:
             tdiff = day_tmax - day_tmin
@@ -802,8 +793,14 @@ def site_soil_step(
                 tdiff = 0.0
             pot_ev_day = H_COEFF * (tdiff ** 0.5) * (day_temp + H_ADDON) * erad
 
-        # === SOIL WATER BALANCE (from UVAFME soil.py:soil_water) ===
-        # GAPpy: freeze is always 0.0 (local variable never updated, dead code)
+        # === SOIL WATER + DECOMP DISABLED FOR BISECT ===
+        act_ev_day = pot_ev_day
+        total_pet = total_pet + pot_ev_day
+        total_aet = total_aet + act_ev_day
+        total_resp = total_resp + 0.0
+        day = day + 1
+    # dead code below (keeps indentation valid for CuPy JIT):
+    if day > 99999:
         freeze = 0.0
 
         # Update water limits based on current A0 carbon

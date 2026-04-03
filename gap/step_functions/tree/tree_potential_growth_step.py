@@ -1,5 +1,5 @@
 """
-Tree potential growth step function for GGap model (Priority 2).
+Tree potential growth step function for GGap model (Priority 3).
 Phase A: computes environmental stress and potential growth for LIVING TREES only.
 
 The nutrient factor is applied later in tree_actual_growth_step (Priority 6) after
@@ -23,6 +23,8 @@ Execution Flow:
        - params[FC_DEGDAY/DROUGHT/FLOOD/LIGHT_AVAIL]: individual factors (living only)
        - params[FORSKA_SHADE]: light response at canopy base (living only)
        - states[N_DEMAND]: nitrogen demand from potential growth (living only, 0 for others)
+
+    Note: P4 (gap_demand_aggregate) reads N_DEMAND from trees written here.
 
 Property scheme:
 - params[14]: mutable state + intermediates + renewal - private, no buffer
@@ -50,11 +52,14 @@ def tree_potential_growth_step(
     locations,
     params_tensor,
     states_tensor,
-    gap_lai, gap_species, site_species,
-    gap_lai_idx, gap_species_idx, site_species_idx,
+    gap_lai, gap_lai_idx,
+    gap_avail_spec, gap_avail_spec_idx,
+    gap_imported_seeds, gap_imported_seeds_idx,
+    site_avail_spec, site_avail_spec_idx,
+    site_imported_seeds, site_imported_seeds_idx,
 ):
     """
-    Phase A (P2): Environmental stress + potential growth + N demand.
+    Phase A (P3): Environmental stress + potential growth + N demand.
 
     Computes env_stress = fc_degday * fc_drought * fc_light * fc_flood (no nutrient).
     Stores env_stress in states and diam_max in params for P5 to consume same-tick.

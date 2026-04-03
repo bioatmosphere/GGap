@@ -47,7 +47,11 @@ def tree_template_renewal_step(
     locations,
     params_tensor,
     states_tensor,
-    gap_lai, gap_species, site_species, gap_lai_idx, gap_species_idx, site_species_idx,
+    gap_lai, gap_lai_idx,
+    gap_avail_spec, gap_avail_spec_idx,
+    gap_imported_seeds, gap_imported_seeds_idx,
+    site_avail_spec, site_avail_spec_idx,
+    site_imported_seeds, site_imported_seeds_idx,
 ):
     """
     Template renewal step (priority 5).
@@ -269,9 +273,8 @@ def tree_template_renewal_step(
         imported_seeds = 0.0
         species_idx = int(species_id)
         if gap_idx >= 0 and species_idx >= 0 and species_idx < num_species:
-            avail_spec = gap_species[gap_species_idx[gap_idx]][species_idx]
-            # imported_seeds relayed from Site at P2 (written at P10 previous tick)
-            imported_seeds = gap_species[gap_species_idx[gap_idx]][num_species + species_idx]
+            avail_spec = gap_avail_spec[gap_avail_spec_idx[gap_idx]][species_idx]
+            imported_seeds = gap_imported_seeds[gap_imported_seeds_idx[gap_idx]][species_idx]
 
         # --- 5. Seedbank/seedling pipeline ---
         # Branches: fire / wind / recovery(>1) / post-disturbance(==1) / normal / frozen
