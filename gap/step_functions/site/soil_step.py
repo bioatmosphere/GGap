@@ -793,14 +793,8 @@ def site_soil_step(
                 tdiff = 0.0
             pot_ev_day = H_COEFF * (tdiff ** 0.5) * (day_temp + H_ADDON) * erad
 
-        # === SOIL WATER + DECOMP DISABLED FOR BISECT ===
-        act_ev_day = pot_ev_day
-        total_pet = total_pet + pot_ev_day
-        total_aet = total_aet + act_ev_day
-        total_resp = total_resp + 0.0
-        day = day + 1
-    # dead code below (keeps indentation valid for CuPy JIT):
-    if day > 99999:
+        # === SOIL WATER BALANCE (from UVAFME soil.py:soil_water) ===
+        # GAPpy: freeze is always 0.0 (local variable never updated, dead code)
         freeze = 0.0
 
         # Update water limits based on current A0 carbon
