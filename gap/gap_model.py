@@ -895,6 +895,644 @@ class GAPModel(Model):
             self.initialize_trees(site=site, maxtrees=maxtrees, rank=rank)
         return site
 
+    def compute_total_agents(self, site_ids, num_gaps, maxtrees,
+                             data_dir="input_data", prefix="UVAFME2012"):
+        """Compute total agent count and build site-to-agent-range mapping.
+
+        This method calculates how many agents will be created across all sites
+        and assigns deterministic agent ID ranges to each site.
+
+        Agent hierarchy per site:
+        - 1 site agent
+        - num_gaps gap agents
+        - num_gaps * (num_species + maxtrees) tree agents
+
+        :param site_ids: List of site IDs to initialize
+        :param num_gaps: Number of gaps per site
+        :param maxtrees: Max tree slots per gap
+        :param data_dir: Directory containing CSV files
+        :param prefix: File prefix for CSV files
+        :return: (total_agents, site_ranges) where site_ranges is dict:
+                 site_id -> {
+                     'site_agent_id': int,
+                     'gap_start': int,
+                     'gap_end': int,
+                     'tree_start': int,
+                     'tree_end': int,
+                     'num_species': int,
+                     'rank': int
+                 }
+        """
+        # Load rangelist to get species per site
+        base_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            data_dir
+        )
+        range_file = os.path.join(base_path, f"{prefix}_rangelist.csv")
+
+        # Read rangelist once to count species per site
+        site_species_count = {}
+        with open(range_file, 'r') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if not row.get('site', '').strip():
+                    continue
+                site_id = int(row['site'])
+                if site_id not in site_ids:
+                    continue
+                species_present = set()
+                for col, val in row.items():
+                    if col not in ('site', 'latitude', 'longitude'):
+                        if val == '1':
+                            species_present.add(col)
+                # Filter to species in unique_species dict
+                species_count = len([sp_code for sp_code in species_present
+                                    if sp_code in self.unique_species])
+                site_species_count[site_id] = species_count
+
+        # Compute agent counts and ranges
+        site_ranges = {}
+        current_agent_id = 0
+
+        for site_id in sorted(site_ids):
+            num_species = site_species_count.get(site_id, 0)
+            if num_species == 0:
+                print(f"Warning: Site {site_id} has no species, skipping in agent count")
+                continue
+
+            # Site agent
+            site_agent_id = current_agent_id
+            current_agent_id += 1
+
+            # Gap agents
+            gap_start = current_agent_id
+            gap_end = current_agent_id + num_gaps
+            current_agent_id = gap_end
+
+            # Tree agents (templates + free slots per gap)
+            trees_per_gap = num_species + maxtrees
+            total_trees = num_gaps * trees_per_gap
+            tree_start = current_agent_id
+            tree_end = current_agent_id + total_trees
+            current_agent_id = tree_end
+
+            # Get rank from partition
+            rank = self._site_partition.get(site_id, 0)
+
+            site_ranges[site_id] = {
+                'site_agent_id': site_agent_id,
+                'gap_start': gap_start,
+                'gap_end': gap_end,
+                'tree_start': tree_start,
+                'tree_end': tree_end,
+                'num_species': num_species,
+                'rank': rank
+            }
+
+        total_agents = current_agent_id
+        return total_agents, site_ranges
+
+    def build_agent_id_to_rank_array(self, total_agents, site_ranges):
+        """Build global agent_id -> rank mapping array.
+
+        All agents of a site (site, gaps, trees) are assigned to the same rank
+        based on site-based partitioning.
+
+        :param total_agents: Total number of agents across all sites
+        :param site_ranges: Dict from compute_total_agents()
+        :return: numpy array of shape (total_agents,) with rank assignments
+        """
+        agent_id_to_rank = np.zeros(total_agents, dtype=np.int32)
+
+        for site_id, ranges in site_ranges.items():
+            rank = ranges['rank']
+            site_agent_id = ranges['site_agent_id']
+            gap_start = ranges['gap_start']
+            gap_end = ranges['gap_end']
+            tree_start = ranges['tree_start']
+            tree_end = ranges['tree_end']
+
+            # Assign site agent
+            agent_id_to_rank[site_agent_id] = rank
+
+            # Assign gap agents
+            agent_id_to_rank[gap_start:gap_end] = rank
+
+            # Assign tree agents
+            agent_id_to_rank[tree_start:tree_end] = rank
+
+        return agent_id_to_rank
+
+    def initialize_sites_preallocate(self, site_ids, num_gaps, maxtrees,
+                                      data_dir="input_data", prefix="UVAFME2012"):
+        """Initialize multiple sites using preallocate+populate pattern.
+
+        Uses SuperNeuroABM-style approach: pre-allocate all agent metadata globally,
+        then populate only local agents using direct index writes.
+
+        NOTE: This method calls populate_agent_at_index() for each agent individually,
+        which adds function call overhead. See initialize_sites_bulk() for a faster
+        approach using create_agents_bulk() with numpy arrays.
+
+        :param site_ids: List of site IDs to initialize
+        :param num_gaps: Number of gaps per site
+        :param maxtrees: Max tree slots per gap
+        :param data_dir: Directory containing CSV files
+        :param prefix: File prefix for CSV files
+        :return: dict mapping site_id -> site_agent_id
+        """
+        from mpi4py import MPI
+        comm = MPI.COMM_WORLD
+        rank = comm.Get_rank()
+
+        # Phase 1: Compute total agents and build global partition
+        total_agents, site_ranges = self.compute_total_agents(
+            site_ids, num_gaps, maxtrees, data_dir, prefix
+        )
+
+        # Phase 2: Build agent_id -> rank mapping
+        agent_id_to_rank = self.build_agent_id_to_rank_array(total_agents, site_ranges)
+
+        # Phase 3: Pre-allocate all agent metadata globally
+        self._agent_factory.preallocate_agent_metadata(total_agents, agent_id_to_rank)
+        self.get_space().preallocate_location_containers(total_agents)
+
+        # Get local index mapping for this rank
+        rank_to_local = self._agent_factory._rank2agentid2agentidx[rank]
+
+        # Load rangelist to get species data
+        base_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            data_dir
+        )
+        range_file = os.path.join(base_path, f"{prefix}_rangelist.csv")
+
+        site_species_dict = {}
+        with open(range_file, 'r') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if not row.get('site', '').strip():
+                    continue
+                site_id = int(row['site'])
+                if site_id not in site_ids:
+                    continue
+                species_present = set()
+                for col, val in row.items():
+                    if col not in ('site', 'latitude', 'longitude'):
+                        if val == '1':
+                            species_present.add(col)
+                site_species = sorted(
+                    [self.unique_species[sp_code] for sp_code in species_present
+                     if sp_code in self.unique_species],
+                    key=lambda sp: sp['global_id']
+                )
+                site_species_dict[site_id] = site_species
+
+        # Phase 4: Populate only local agents using direct index writes
+        site_agents = {}
+        connections_to_make = []  # Store connections to apply after all agents created
+
+        for site_id in sorted(site_ids):
+            if site_id not in site_ranges:
+                continue  # Site has no species, was skipped
+
+            ranges = site_ranges[site_id]
+            if ranges['rank'] != rank:
+                continue  # Skip sites not on this rank
+
+            # Get site data
+            site_params, site_states, site_info = self._build_site_params_states(
+                site_id, data_dir, prefix
+            )
+            site_species = site_species_dict.get(site_id, [])
+
+            deg_days = site_info['deg_days']
+            dry_days = site_info['dry_days']
+
+            # Populate site agent
+            site_agent_id = ranges['site_agent_id']
+            local_idx = rank_to_local[site_agent_id]
+            self._agent_factory.populate_agent_at_index(
+                site_agent_id, local_idx, self._site_breed,
+                params=site_params, states=site_states
+            )
+            self.site_agents.append(site_agent_id)
+            site_agents[site_id] = site_agent_id
+
+            # Build site_info with agent_id
+            site_info['site_agent_id'] = site_agent_id
+            site_info['rank'] = rank
+            site_info['species'] = site_species
+            site_info['gaps'] = []
+            self.sites.append(site_info)
+
+            # Populate gap agents
+            gap_ids = list(range(ranges['gap_start'], ranges['gap_end']))
+            for gap_idx, gap_agent_id in enumerate(gap_ids):
+                gap_params, gap_states = self._build_gap_params_states(
+                    gap_agent_id, deg_days, dry_days
+                )
+                local_idx = rank_to_local[gap_agent_id]
+                self._agent_factory.populate_agent_at_index(
+                    gap_agent_id, local_idx, self._gap_breed,
+                    params=gap_params, states=gap_states
+                )
+                self.gap_agents.append(gap_agent_id)
+                site_info['gaps'].append(gap_agent_id)
+
+                # Store connection: site -> gap
+                connections_to_make.append((site_agent_id, gap_agent_id, False))
+
+            # Populate tree agents
+            tree_idx = ranges['tree_start']
+            for gap_agent_id in gap_ids:
+                template_ids = []
+
+                # Template trees (one per species)
+                for species_info in site_species:
+                    params, states = self._build_tree_params_states(
+                        gap_agent_id, species_info, diam=0.0, age=0.0, is_alive=-1.0
+                    )
+                    local_idx = rank_to_local[tree_idx]
+                    self._agent_factory.populate_agent_at_index(
+                        tree_idx, local_idx, self._tree_breed,
+                        params=params, states=states
+                    )
+                    self.tree_ids.append(tree_idx)
+                    self.tree_to_gap[tree_idx] = gap_agent_id
+                    template_ids.append(tree_idx)
+
+                    # Store connection: gap -> tree
+                    connections_to_make.append((gap_agent_id, tree_idx, False))
+
+                    tree_idx += 1
+
+                # Free tree slots
+                placeholder_species = site_species[0]
+                free_slot_ids = []
+                for _ in range(maxtrees):
+                    params, states = self._build_tree_params_states(
+                        gap_agent_id, placeholder_species, diam=0.0, age=0.0, is_alive=0.0
+                    )
+                    local_idx = rank_to_local[tree_idx]
+                    self._agent_factory.populate_agent_at_index(
+                        tree_idx, local_idx, self._tree_breed,
+                        params=params, states=states
+                    )
+                    self.tree_ids.append(tree_idx)
+                    self.tree_to_gap[tree_idx] = gap_agent_id
+                    free_slot_ids.append(tree_idx)
+
+                    # Store connection: gap -> tree
+                    connections_to_make.append((gap_agent_id, tree_idx, False))
+
+                    tree_idx += 1
+
+                # Store connections: free_slot -> templates (directed)
+                for free_slot_id in free_slot_ids:
+                    for template_id in template_ids:
+                        connections_to_make.append((free_slot_id, template_id, True))
+
+        # Phase 5: Apply all connections after agents are created
+        for agent_0, agent_1, directed in connections_to_make:
+            self.connect_agents(agent_0, agent_1, directed=directed)
+
+        return site_agents
+
+    def initialize_sites_bulk(self, site_ids, num_gaps, maxtrees,
+                               data_dir="input_data", prefix="UVAFME2012"):
+        """Initialize multiple sites using bulk agent creation with numpy arrays.
+
+        Creates agents in batches using create_agents_bulk() which takes numpy arrays
+        and uses list.extend() for efficient property tensor updates. This avoids
+        per-agent function call overhead.
+
+        :param site_ids: List of site IDs to initialize
+        :param num_gaps: Number of gaps per site
+        :param maxtrees: Max tree slots per gap
+        :param data_dir: Directory containing CSV files
+        :param prefix: File prefix for CSV files
+        :return: dict mapping site_id -> site_agent_id
+        """
+        from mpi4py import MPI
+        comm = MPI.COMM_WORLD
+        rank = comm.Get_rank()
+
+        site_agents = {}
+
+        # Load rangelist to get species per site
+        base_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            data_dir
+        )
+        range_file = os.path.join(base_path, f"{prefix}_rangelist.csv")
+
+        # Read rangelist once
+        site_species_dict = {}
+        with open(range_file, 'r') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if not row.get('site', '').strip():
+                    continue
+                site_id = int(row['site'])
+                if site_id not in site_ids:
+                    continue
+                species_present = set()
+                for col, val in row.items():
+                    if col not in ('site', 'latitude', 'longitude'):
+                        if val == '1':
+                            species_present.add(col)
+                site_species = sorted(
+                    [self.unique_species[sp_code] for sp_code in species_present
+                     if sp_code in self.unique_species],
+                    key=lambda sp: sp['global_id']
+                )
+                site_species_dict[site_id] = site_species
+
+        # Process each site
+        for site_id in site_ids:
+            my_rank = self._site_partition.get(site_id, 0)
+            if my_rank != rank:
+                continue
+
+            # Get site data
+            site_params, site_states, site_info = self._build_site_params_states(
+                site_id, data_dir, prefix
+            )
+            site_species = site_species_dict.get(site_id, [])
+            if len(site_species) == 0:
+                print(f"Warning: Site {site_id} has no species, skipping")
+                continue
+
+            deg_days = site_info['deg_days']
+            dry_days = site_info['dry_days']
+
+            # Create site agent using bulk method
+            site_agent_ids = self._agent_factory.create_agents_bulk(
+                self._site_breed, rank, 1,
+                params=np.array([site_params]),
+                states=np.array([site_states])
+            )
+            site_agent_id = int(site_agent_ids[0])
+            self.get_space().add_agents_bulk(1)
+            self.site_agents.append(site_agent_id)
+            site_agents[site_id] = site_agent_id
+
+            # Build site_info with agent_id
+            site_info['site_agent_id'] = site_agent_id
+            site_info['rank'] = rank
+            site_info['species'] = site_species
+            site_info['gaps'] = []
+            self.sites.append(site_info)
+
+            # Build arrays for all gaps
+            gap_params_list = []
+            gap_states_list = []
+            for gap_idx in range(num_gaps):
+                gap_id = len(self.gap_agents) + gap_idx
+                gap_params, gap_states = self._build_gap_params_states(gap_id, deg_days, dry_days)
+                gap_params_list.append(gap_params)
+                gap_states_list.append(gap_states)
+
+            # Create all gap agents at once using bulk method
+            gap_agent_ids = self._agent_factory.create_agents_bulk(
+                self._gap_breed, rank, num_gaps,
+                params=np.array(gap_params_list),
+                states=np.array(gap_states_list)
+            )
+            self.get_space().add_agents_bulk(num_gaps)
+            self.gap_agents.extend(gap_agent_ids.tolist())
+            site_info['gaps'].extend(gap_agent_ids.tolist())
+
+            # Connect site to gaps
+            for gap_agent_id in gap_agent_ids:
+                self.connect_agents(site_agent_id, int(gap_agent_id))
+
+            # Build arrays for all trees in all gaps
+            trees_per_gap = len(site_species) + maxtrees
+            total_trees = num_gaps * trees_per_gap
+
+            tree_params_list = []
+            tree_states_list = []
+            gap_to_tree_mapping = []  # Track which gap each tree belongs to
+
+            for gap_idx, gap_agent_id in enumerate(gap_agent_ids):
+                # Template trees (one per species)
+                for species_info in site_species:
+                    params, states = self._build_tree_params_states(
+                        int(gap_agent_id), species_info, diam=0.0, age=0.0, is_alive=-1.0
+                    )
+                    tree_params_list.append(params)
+                    tree_states_list.append(states)
+                    gap_to_tree_mapping.append(int(gap_agent_id))
+
+                # Free tree slots
+                placeholder_species = site_species[0]
+                for _ in range(maxtrees):
+                    params, states = self._build_tree_params_states(
+                        int(gap_agent_id), placeholder_species, diam=0.0, age=0.0, is_alive=0.0
+                    )
+                    tree_params_list.append(params)
+                    tree_states_list.append(states)
+                    gap_to_tree_mapping.append(int(gap_agent_id))
+
+            # Create all tree agents at once using bulk method
+            tree_agent_ids = self._agent_factory.create_agents_bulk(
+                self._tree_breed, rank, total_trees,
+                params=np.array(tree_params_list),
+                states=np.array(tree_states_list)
+            )
+            self.get_space().add_agents_bulk(total_trees)
+            self.tree_ids.extend(tree_agent_ids.tolist())
+
+            # Update tree_to_gap mapping and connect trees
+            for tree_agent_id, gap_agent_id in zip(tree_agent_ids, gap_to_tree_mapping):
+                self.tree_to_gap[int(tree_agent_id)] = gap_agent_id
+                self.connect_agents(gap_agent_id, int(tree_agent_id))
+
+            # Connect free slots to templates (within each gap)
+            tree_idx = 0
+            for gap_idx in range(num_gaps):
+                num_species = len(site_species)
+                template_ids = tree_agent_ids[tree_idx:tree_idx + num_species]
+                tree_idx += num_species
+                free_slot_ids = tree_agent_ids[tree_idx:tree_idx + maxtrees]
+                tree_idx += maxtrees
+
+                for free_slot_id in free_slot_ids:
+                    for template_id in template_ids:
+                        self.connect_agents(int(free_slot_id), int(template_id), directed=True)
+
+        return site_agents
+
+    def _build_site_params_states(self, site_id, data_dir="input_data", prefix="UVAFME2012"):
+        """Extract params and states building logic from initialize_site().
+
+        Returns (params, states, site_info_dict) tuple.
+        """
+        # Get site slot from globals mapping
+        site_slot = self._site_id_to_slot.get(site_id)
+        if site_slot is None:
+            raise ValueError(f"Site {site_id} not found in globals. Call load_globals() first.")
+
+        site_row = self._site_rows[site_id]
+        climate_row = self._climate_rows.get(site_id)
+
+        if climate_row is None:
+            raise ValueError(f"Climate data for site {site_id} not found")
+
+        # Calculate degree days from site_configs tensor
+        BASE_TEMP = 5.0
+        days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        deg_days = 0.0
+        site_configs = self.get_global_property_value("site_configs")
+        for i in range(12):
+            tmin = site_configs[site_slot][int(Cfg.TMIN_BASE) + i]
+            tmax = site_configs[site_slot][int(Cfg.TMAX_BASE) + i]
+            tavg = (tmin + tmax) / 2.0
+            if tavg > BASE_TEMP:
+                deg_days += (tavg - BASE_TEMP) * days_per_month[i]
+
+        dry_days = 0.0
+
+        # Build params (mutable soil state)
+        soil_rootdepth = 0.8
+        params = [0.0] * SITE_PARAMS_SIZE
+        params[SITE_P_A0_C] = float(site_row['soilAO_c0'])
+        params[SITE_P_A0_N] = float(site_row['soilAO_n0'])
+        params[SITE_P_A_C] = float(site_row['soilA_c0'])
+        params[SITE_P_A_N] = float(site_row['soilA_n0'])
+        params[SITE_P_BL_C] = float(site_row['sbase_c0'])
+        params[SITE_P_BL_N] = float(site_row['sbase_n0'])
+        params[int(SiteP.A0_W)] = float(site_row['soilAO_w0'])
+        params[int(SiteP.A_W)] = float(site_row['soilA_w0']) * soil_rootdepth
+        params[int(SiteP.BL_W)] = float(site_row['sbase_w0'])
+        params[int(SiteP.LAI_W0)] = float(site_row['lai_w0'])
+        params[int(SiteP.ANNUAL_RUNOFF)] = 0.0
+        params[int(SiteP.SITE_ID)] = float(site_slot)
+
+        # Build states (neighbor-visible fields)
+        states = [0.0] * 8
+        states[SITE_S_DEG_DAYS] = deg_days
+        states[SITE_S_DRY_DAYS] = dry_days
+        states[SITE_S_AVAIL_N] = 0.1
+        states[SITE_S_FLOOD_DAYS] = 0.0
+        states[int(SiteS.FIRE_INTENSITY)] = 0.0
+        states[SITE_S_DRY_DAYS_BASE] = 0.0
+        states[int(SiteS.WIND_INTENSITY)] = 0.0
+        states[int(SiteS.SITE_ID)] = float(site_slot)
+
+        # Build site_info dict
+        elevation = float(site_row.get('elevation', 0))
+        fire_prob = float(site_row.get('fire_prob', 0)) / 1000.0
+        wind_prob = float(site_row.get('wind_prob', 0)) / 1000.0
+        soil_base_h = float(site_row.get('soil_base_h', 70.0))
+        region = site_row.get('region', '')
+
+        site_info = {
+            'site_id': site_id,
+            'site_slot': site_slot,
+            'site_name': site_row.get('name', f'Site_{site_id}'),
+            'latitude': float(site_row['latitude']),
+            'longitude': float(site_row['longitude']),
+            'elevation': elevation,
+            'slope': float(site_row['slope']),
+            'region': region,
+            'fire_prob': fire_prob,
+            'wind_prob': wind_prob,
+            'soil_base_h': soil_base_h,
+            'deg_days': deg_days,
+            'dry_days': dry_days,
+        }
+
+        return params, states, site_info
+
+    def _build_gap_params_states(self, gap_id, deg_days, dry_days):
+        """Extract params and states building logic from initialize_gap().
+
+        Returns (params, states) tuple.
+        """
+        params = [0.0] * 2
+        params[int(GapP.SITE_ID)] = float(gap_id)
+        params[int(GapP.TOTAL_N_DEMAND)] = 0.0
+
+        states = [0.0] * GAP_STATES_SIZE
+        states[int(GapS.DEG_DAYS)] = deg_days
+        states[int(GapS.DRY_DAYS)] = dry_days
+        states[int(GapS.AVAIL_N)] = 0.1
+        states[int(GapS.N_SUPPLY_RATIO)] = 1.0
+
+        return params, states
+
+    def _build_tree_params_states(self, gap_agent_id, species_info, diam, age, is_alive=1.0):
+        """Extract params and states building logic from _create_tree_agent().
+
+        Returns (params, states) tuple.
+        """
+        STD_HT = 1.3
+        TC_KG = 0.039269908
+
+        if is_alive > 0.5 and diam > 0:
+            delta_ht = species_info['max_ht'] - STD_HT
+            forska_ht = STD_HT + delta_ht * (
+                1.0 - (2.71828 ** (-(species_info['arfa_0'] * diam / delta_ht)))
+            )
+            wood_bulk_dens = species_info['wood_bulk_dens']
+            rootdepth = species_info.get('rootdepth', 0.8)
+            canopy_ht = STD_HT
+
+            if forska_ht > STD_HT:
+                bd = forska_ht / (forska_ht - STD_HT) * diam
+            else:
+                bd = diam
+
+            if forska_ht > canopy_ht and forska_ht > STD_HT:
+                dc = (forska_ht - canopy_ht) / (forska_ht - STD_HT) * diam
+            else:
+                dc = diam
+
+            stembc = TC_KG * wood_bulk_dens * 0.3 * bd * bd * forska_ht
+            crown_depth = forska_ht - canopy_ht
+            if crown_depth < 0.0:
+                crown_depth = 0.0
+            twigbc = TC_KG * wood_bulk_dens * 0.337 * dc * dc * crown_depth
+
+            root_c = 0.0
+            if forska_ht > 0.01:
+                root_c = stembc * rootdepth / forska_ht + twigbc * 0.5
+
+            biomC = stembc + twigbc + root_c
+            biomN = biomC / 450.0
+            leaf_bm = dc * dc * species_info['leafdiam_a'] * species_info['leafarea_c'] * 2.0 * 1000.0
+        else:
+            forska_ht = 0.0
+            biomC = 0.0
+            biomN = 0.0
+            leaf_bm = 0.0
+
+        # Build params
+        params = [0.0] * TREE_PARAMS_SIZE
+        params[int(TreeP.AGE)] = age
+        params[int(TreeP.BIOMC)] = biomC
+        params[int(TreeP.BIOMN)] = biomN
+        params[int(TreeP.LEAF_BM)] = leaf_bm
+        params[int(TreeP.X)] = 0.0
+        params[int(TreeP.Y)] = 0.0
+        params[int(TreeP.LIGHT_AVAIL)] = 1.0
+        params[int(TreeP.FC_DEGDAY)] = 1.0
+        params[int(TreeP.FC_DROUGHT)] = 1.0
+        params[int(TreeP.FC_FLOOD)] = 1.0
+
+        # Build states
+        states = [0.0] * 11
+        states[int(TreeS.IS_ALIVE)] = float(is_alive)
+        states[int(TreeS.DIAM)] = diam
+        states[int(TreeS.HEIGHT)] = forska_ht
+        states[int(TreeS.CANOPY_HT)] = STD_HT if is_alive > 0.5 else 0.0
+        states[int(TreeS.SPECIES_ID)] = float(species_info['global_id'])
+
+        return params, states
+
     def connect_sites(self):
         """Connect site agents for inter-site seed dispersal.
 
