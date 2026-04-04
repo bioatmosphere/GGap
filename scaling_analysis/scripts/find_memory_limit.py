@@ -63,12 +63,20 @@ def test_sites(num_sites, num_gaps=500, maxtrees=1000, neighbors_per_site=10):
         all_site_ids = sorted(model._site_id_to_slot.keys())
         site_ids = all_site_ids[:num_sites]
 
-        # Initialize sites using bulk method
+        # Partition sites (required before initialization)
+        model.partition_sites(site_ids, strategy='round_robin')
+
+        # Initialize sites (loop method - bulk doesn't save time)
         t_start = time.time()
-        print(f"  Bulk creating agents for {num_sites} sites...", flush=True)
-        site_agents = model.initialize_sites_bulk(site_ids, num_gaps, maxtrees, prefix='CONUS')
+        print(f"  Initializing {num_sites} sites...", flush=True)
+        site_agents = {}
+        for i, site_id in enumerate(site_ids):
+            if (i + 1) % 5 == 0 or i == 0:
+                print(f"    Site {i+1}/{num_sites} (ID: {site_id})...", flush=True)
+            site = model.initialize_site_with_gaps(site_id, num_gaps, maxtrees, prefix='CONUS')
+            site_agents[site_id] = site['site_agent_id']
         timings['site_init'] = time.time() - t_start
-        print(f"    Bulk creation completed in {timings['site_init']:.2f}s", flush=True)
+        print(f"    Initialized in {timings['site_init']:.2f}s", flush=True)
 
         # Random neighbors per site
         t_start = time.time()
