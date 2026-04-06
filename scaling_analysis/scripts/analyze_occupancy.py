@@ -2,17 +2,28 @@
 Analyze GPU occupancy tuning results and generate publication plots.
 
 Usage:
-    python analyze_occupancy.py ../results/exp0b_phase1_coarse_sweep.csv [--output-dir ../plots]
+    python analyze_occupancy.py ../results/exp0b_phase1_coarse_sweep.csv \\
+        [--output-dir ../plots] \\
+        [--gpu-monitor ../logs/gpu_monitor_12345.csv]
 """
 
 import argparse
 import pandas as pd
 import matplotlib.pyplot as plt
+import numpy as np
 import os
 
 
 def load_results(csv_path):
     """Load results from CSV."""
+    df = pd.read_csv(csv_path)
+    return df
+
+
+def load_gpu_monitor(csv_path):
+    """Load GPU monitoring data from CSV."""
+    if not csv_path or not os.path.exists(csv_path):
+        return None
     df = pd.read_csv(csv_path)
     return df
 
@@ -71,6 +82,51 @@ def plot_occupancy_performance(df, output_dir):
 
     plt.tight_layout()
     output_path = os.path.join(output_dir, 'occupancy_tuning.png')
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    print(f"✓ Saved plot: {output_path}")
+    plt.close()
+
+
+def plot_gpu_utilization(gpu_df, output_dir):
+    """Plot GPU utilization time series."""
+    if gpu_df is None or len(gpu_df) == 0:
+        print("⚠️  Skipping GPU utilization plot (no monitoring data)")
+        return
+
+    fig, axes = plt.subplots(2, 1, figsize=(14, 10))
+    fig.suptitle('GPU Utilization During Occupancy Tuning', fontsize=16, fontweight='bold')
+
+    # Plot 1: GPU utilization over time
+    ax = axes[0]
+    ax.plot(gpu_df['elapsed_sec'], gpu_df['gpu_util_pct'], linewidth=1.5, alpha=0.8)
+    ax.set_xlabel('Time (seconds)', fontsize=12)
+    ax.set_ylabel('GPU Utilization (%)', fontsize=12)
+    ax.set_title('GPU Utilization % Over Time', fontsize=13, fontweight='bold')
+    ax.grid(True, alpha=0.3)
+    ax.set_ylim(0, 105)
+
+    # Add mean line
+    mean_util = gpu_df['gpu_util_pct'].mean()
+    ax.axhline(y=mean_util, color='r', linestyle='--', linewidth=2,
+              label=f'Mean: {mean_util:.1f}%')
+    ax.legend()
+
+    # Plot 2: Memory utilization over time
+    ax = axes[1]
+    ax.plot(gpu_df['elapsed_sec'], gpu_df['mem_pct'], linewidth=1.5, alpha=0.8, color='orange')
+    ax.set_xlabel('Time (seconds)', fontsize=12)
+    ax.set_ylabel('Memory Utilization (%)', fontsize=12)
+    ax.set_title('GPU Memory Utilization % Over Time', fontsize=13, fontweight='bold')
+    ax.grid(True, alpha=0.3)
+
+    # Add mean line
+    mean_mem = gpu_df['mem_pct'].mean()
+    ax.axhline(y=mean_mem, color='r', linestyle='--', linewidth=2,
+              label=f'Mean: {mean_mem:.1f}%')
+    ax.legend()
+
+    plt.tight_layout()
+    output_path = os.path.join(output_dir, 'gpu_utilization_timeseries.png')
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     print(f"✓ Saved plot: {output_path}")
     plt.close()
@@ -165,6 +221,8 @@ def main():
     parser.add_argument('csv', type=str, help='Path to results CSV file')
     parser.add_argument('--output-dir', type=str, default='../plots',
                        help='Output directory for plots (default: ../plots)')
+    parser.add_argument('--gpu-monitor', type=str, default=None,
+                       help='Path to GPU monitoring CSV file (optional)')
 
     args = parser.parse_args()
 
@@ -174,13 +232,24 @@ def main():
     # Load results
     print(f"Loading results from: {args.csv}")
     df = load_results(args.csv)
-
     print(f"Loaded {len(df)} results")
+
+    # Load GPU monitoring data if available
+    gpu_df = None
+    if args.gpu_monitor:
+        print(f"Loading GPU monitoring data from: {args.gpu_monitor}")
+        gpu_df = load_gpu_monitor(args.gpu_monitor)
+        if gpu_df is not None:
+            print(f"Loaded {len(gpu_df)} GPU samples")
+            print(f"  Mean GPU utilization: {gpu_df['gpu_util_pct'].mean():.1f}%")
+            print(f"  Mean memory utilization: {gpu_df['mem_pct'].mean():.1f}%")
 
     # Generate plots
     print("\nGenerating plots...")
     plot_occupancy_performance(df, args.output_dir)
     plot_site_scaling(df, args.output_dir)
+    if gpu_df is not None:
+        plot_gpu_utilization(gpu_df, args.output_dir)
 
     # Print summary
     print_summary(df)

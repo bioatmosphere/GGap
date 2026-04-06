@@ -16,7 +16,7 @@ from site_final_step import *
 
 # Modified step functions with double buffering
 @jit.rawkernel(device='cuda')
-def gap_litter_aggregate_step_double_buffer(tick, agent_index, _seed, species_traits, site_configs, rangelists, site_distances, agent_ids, logical_ids, breeds, neighbor_offsets, neighbor_values, params_tensor, states_tensor, gap_lai, gap_lai_idx, gap_avail_spec, gap_avail_spec_idx, gap_imported_seeds, gap_imported_seeds_idx, gap_seedling_weights, gap_seedling_weights_idx, site_avail_spec, write_site_avail_spec, site_avail_spec_idx, site_imported_seeds, site_imported_seeds_idx):
+def gap_litter_aggregate_step_double_buffer(tick, agent_index, _seed, species_traits, site_configs, rangelists, site_distances, agent_ids, logical_ids, breeds, neighbor_offsets, neighbor_values, params_tensor, states_tensor, gap_lai, gap_lai_idx, gap_avail_spec, gap_avail_spec_idx, gap_imported_seeds, gap_imported_seeds_idx, site_avail_spec, write_site_avail_spec, site_avail_spec_idx, site_imported_seeds, site_imported_seeds_idx):
     """
     Gap litter aggregate step (priority 0).
 
@@ -87,12 +87,10 @@ def gap_litter_aggregate_step_double_buffer(tick, agent_index, _seed, species_tr
                 if n_species_id >= 0 and n_species_id < len(species_traits):
                     if n_diam > n_max_diam * 0.05:
                         gap_avail_spec[sp_row][n_species_id] = 1.0
+            elif tree_alive < -0.5:
+                template_weight = states_tensor[neighbor_idx][TreeS.SEEDLING_WEIGHT]
+                total_seedling_weight = total_seedling_weight + template_weight
         i = i + 1
-    sw_row = gap_seedling_weights_idx[agent_index]
-    sp = 0
-    while sp < len(species_traits):
-        total_seedling_weight = total_seedling_weight + gap_seedling_weights[sw_row][sp]
-        sp = sp + 1
     for k in range(49):
         layer = 48 - k
         gap_lai[lai_row][layer][0] = gap_lai[lai_row][layer][0] + gap_lai[lai_row][layer + 1][0]
@@ -104,7 +102,7 @@ def gap_litter_aggregate_step_double_buffer(tick, agent_index, _seed, species_tr
     states_tensor[agent_index][GapS.TOTAL_SEEDLING_WEIGHT] = total_seedling_weight
 
 @jit.rawkernel(device='cuda')
-def site_soil_step_double_buffer(tick, agent_index, _seed, species_traits, site_configs, rangelists, site_distances, agent_ids, logical_ids, breeds, neighbor_offsets, neighbor_values, params_tensor, states_tensor, gap_lai, gap_lai_idx, gap_avail_spec, gap_avail_spec_idx, gap_imported_seeds, gap_imported_seeds_idx, gap_seedling_weights, gap_seedling_weights_idx, site_avail_spec, write_site_avail_spec, site_avail_spec_idx, site_imported_seeds, site_imported_seeds_idx):
+def site_soil_step_double_buffer(tick, agent_index, _seed, species_traits, site_configs, rangelists, site_distances, agent_ids, logical_ids, breeds, neighbor_offsets, neighbor_values, params_tensor, states_tensor, gap_lai, gap_lai_idx, gap_avail_spec, gap_avail_spec_idx, gap_imported_seeds, gap_imported_seeds_idx, site_avail_spec, write_site_avail_spec, site_avail_spec_idx, site_imported_seeds, site_imported_seeds_idx):
     """
     Soil biogeochemistry step function (priority 1).
 
@@ -963,7 +961,7 @@ def site_soil_step_double_buffer(tick, agent_index, _seed, species_traits, site_
     params_tensor[agent_index][SiteP.N_INTO_A0] = total_litter_n
 
 @jit.rawkernel(device='cuda')
-def gap_climate_relay_step_double_buffer(tick, agent_index, _seed, species_traits, site_configs, rangelists, site_distances, agent_ids, logical_ids, breeds, neighbor_offsets, neighbor_values, params_tensor, states_tensor, gap_lai, gap_lai_idx, gap_avail_spec, gap_avail_spec_idx, gap_imported_seeds, gap_imported_seeds_idx, gap_seedling_weights, gap_seedling_weights_idx, site_avail_spec, write_site_avail_spec, site_avail_spec_idx, site_imported_seeds, site_imported_seeds_idx):
+def gap_climate_relay_step_double_buffer(tick, agent_index, _seed, species_traits, site_configs, rangelists, site_distances, agent_ids, logical_ids, breeds, neighbor_offsets, neighbor_values, params_tensor, states_tensor, gap_lai, gap_lai_idx, gap_avail_spec, gap_avail_spec_idx, gap_imported_seeds, gap_imported_seeds_idx, site_avail_spec, write_site_avail_spec, site_avail_spec_idx, site_imported_seeds, site_imported_seeds_idx):
     """
     Gap climate relay step (priority 2).
 
@@ -1011,7 +1009,7 @@ def gap_climate_relay_step_double_buffer(tick, agent_index, _seed, species_trait
             sp = sp + 1
 
 @jit.rawkernel(device='cuda')
-def tree_potential_growth_step_double_buffer(tick, agent_index, _seed, species_traits, site_configs, rangelists, site_distances, agent_ids, logical_ids, breeds, neighbor_offsets, neighbor_values, params_tensor, states_tensor, gap_lai, gap_lai_idx, gap_avail_spec, gap_avail_spec_idx, gap_imported_seeds, gap_imported_seeds_idx, gap_seedling_weights, gap_seedling_weights_idx, site_avail_spec, write_site_avail_spec, site_avail_spec_idx, site_imported_seeds, site_imported_seeds_idx):
+def tree_potential_growth_step_double_buffer(tick, agent_index, _seed, species_traits, site_configs, rangelists, site_distances, agent_ids, logical_ids, breeds, neighbor_offsets, neighbor_values, params_tensor, states_tensor, gap_lai, gap_lai_idx, gap_avail_spec, gap_avail_spec_idx, gap_imported_seeds, gap_imported_seeds_idx, site_avail_spec, write_site_avail_spec, site_avail_spec_idx, site_imported_seeds, site_imported_seeds_idx):
     """
     Phase A (P3): Environmental stress + potential growth + N demand.
 
@@ -1234,7 +1232,7 @@ def tree_potential_growth_step_double_buffer(tick, agent_index, _seed, species_t
     states_tensor[agent_index][TreeS.N_DEMAND] = n_demand
 
 @jit.rawkernel(device='cuda')
-def gap_demand_aggregate_step_double_buffer(tick, agent_index, _seed, species_traits, site_configs, rangelists, site_distances, agent_ids, logical_ids, breeds, neighbor_offsets, neighbor_values, params_tensor, states_tensor, gap_lai, gap_lai_idx, gap_avail_spec, gap_avail_spec_idx, gap_imported_seeds, gap_imported_seeds_idx, gap_seedling_weights, gap_seedling_weights_idx, site_avail_spec, write_site_avail_spec, site_avail_spec_idx, site_imported_seeds, site_imported_seeds_idx):
+def gap_demand_aggregate_step_double_buffer(tick, agent_index, _seed, species_traits, site_configs, rangelists, site_distances, agent_ids, logical_ids, breeds, neighbor_offsets, neighbor_values, params_tensor, states_tensor, gap_lai, gap_lai_idx, gap_avail_spec, gap_avail_spec_idx, gap_imported_seeds, gap_imported_seeds_idx, site_avail_spec, write_site_avail_spec, site_avail_spec_idx, site_imported_seeds, site_imported_seeds_idx):
     """
     Gap N demand aggregate + sync step (priority 4).
 
@@ -1268,7 +1266,7 @@ def gap_demand_aggregate_step_double_buffer(tick, agent_index, _seed, species_tr
     states_tensor[agent_index][GapS.N_CONSUMED] = 0.0
 
 @jit.rawkernel(device='cuda')
-def tree_template_renewal_step_double_buffer(tick, agent_index, _seed, species_traits, site_configs, rangelists, site_distances, agent_ids, logical_ids, breeds, neighbor_offsets, neighbor_values, params_tensor, states_tensor, gap_lai, gap_lai_idx, gap_avail_spec, gap_avail_spec_idx, gap_imported_seeds, gap_imported_seeds_idx, gap_seedling_weights, gap_seedling_weights_idx, site_avail_spec, write_site_avail_spec, site_avail_spec_idx, site_imported_seeds, site_imported_seeds_idx):
+def tree_template_renewal_step_double_buffer(tick, agent_index, _seed, species_traits, site_configs, rangelists, site_distances, agent_ids, logical_ids, breeds, neighbor_offsets, neighbor_values, params_tensor, states_tensor, gap_lai, gap_lai_idx, gap_avail_spec, gap_avail_spec_idx, gap_imported_seeds, gap_imported_seeds_idx, site_avail_spec, write_site_avail_spec, site_avail_spec_idx, site_imported_seeds, site_imported_seeds_idx):
     """
     Template renewal step (priority 5).
 
@@ -1507,7 +1505,7 @@ def tree_template_renewal_step_double_buffer(tick, agent_index, _seed, species_t
         if in_pipeline > 0:
             seedling = seedling * PLOTSIZE
             if fire_intensity < 0.01 and wind_intensity < 0.01:
-                old_weight = gap_seedling_weights[gap_seedling_weights_idx[gap_idx]][int(species_id)]
+                old_weight = states_tensor[agent_index][TreeS.SEEDLING_WEIGHT]
                 if total_seedling_weight > 0.01 and num_to_recruit > 0.5:
                     my_share = num_to_recruit * old_weight / total_seedling_weight
                     seedling = seedling - my_share
@@ -1517,10 +1515,10 @@ def tree_template_renewal_step_double_buffer(tick, agent_index, _seed, species_t
         params_tensor[agent_index][TreeP.SEEDBANK] = seedbank
         params_tensor[agent_index][TreeP.SEEDLING] = seedling
         states_tensor[agent_index][TreeS.ENV_STRESS] = regrowth
-        gap_seedling_weights[gap_seedling_weights_idx[gap_idx]][int(species_id)] = weight
+        states_tensor[agent_index][TreeS.SEEDLING_WEIGHT] = weight
 
 @jit.rawkernel(device='cuda')
-def gap_recruit_aggregate_step_double_buffer(tick, agent_index, _seed, species_traits, site_configs, rangelists, site_distances, agent_ids, logical_ids, breeds, neighbor_offsets, neighbor_values, params_tensor, states_tensor, gap_lai, gap_lai_idx, gap_avail_spec, gap_avail_spec_idx, gap_imported_seeds, gap_imported_seeds_idx, gap_seedling_weights, gap_seedling_weights_idx, site_avail_spec, write_site_avail_spec, site_avail_spec_idx, site_imported_seeds, site_imported_seeds_idx):
+def gap_recruit_aggregate_step_double_buffer(tick, agent_index, _seed, species_traits, site_configs, rangelists, site_distances, agent_ids, logical_ids, breeds, neighbor_offsets, neighbor_values, params_tensor, states_tensor, gap_lai, gap_lai_idx, gap_avail_spec, gap_avail_spec_idx, gap_imported_seeds, gap_imported_seeds_idx, site_avail_spec, write_site_avail_spec, site_avail_spec_idx, site_imported_seeds, site_imported_seeds_idx):
     """
     Gap recruitment aggregate step (priority 6).
 
@@ -1575,7 +1573,7 @@ def gap_recruit_aggregate_step_double_buffer(tick, agent_index, _seed, species_t
     states_tensor[agent_index][GapS.RECRUIT_RAND_SEED] = recruit_rand_seed
 
 @jit.rawkernel(device='cuda')
-def tree_actual_growth_step_double_buffer(tick, agent_index, _seed, species_traits, site_configs, rangelists, site_distances, agent_ids, logical_ids, breeds, neighbor_offsets, neighbor_values, params_tensor, states_tensor, gap_lai, gap_lai_idx, gap_avail_spec, gap_avail_spec_idx, gap_imported_seeds, gap_imported_seeds_idx, gap_seedling_weights, gap_seedling_weights_idx, site_avail_spec, write_site_avail_spec, site_avail_spec_idx, site_imported_seeds, site_imported_seeds_idx):
+def tree_actual_growth_step_double_buffer(tick, agent_index, _seed, species_traits, site_configs, rangelists, site_distances, agent_ids, logical_ids, breeds, neighbor_offsets, neighbor_values, params_tensor, states_tensor, gap_lai, gap_lai_idx, gap_avail_spec, gap_avail_spec_idx, gap_imported_seeds, gap_imported_seeds_idx, site_avail_spec, write_site_avail_spec, site_avail_spec_idx, site_imported_seeds, site_imported_seeds_idx):
     """
     Phase C (P7): Nutrient response + final growth + mortality + litter + free slot activation.
 
@@ -1804,45 +1802,51 @@ def tree_actual_growth_step_double_buffer(tick, agent_index, _seed, species_trai
     elif is_alive > -0.5:
         recruit_prob = 0.0
         recruit_rand_seed = 0.0
-        gap_idx = -1
         i = 0
         while i < neighbor_offsets[agent_index + 1] - neighbor_offsets[agent_index]:
             neighbor_idx = int(neighbor_values[neighbor_offsets[agent_index] + i])
             neighbor_breed = int(breeds[neighbor_idx])
             if neighbor_breed == Breed.GAP:
-                gap_idx = neighbor_idx
                 recruit_prob = states_tensor[neighbor_idx][GapS.NUM_TO_RECRUIT]
                 recruit_rand_seed = states_tensor[neighbor_idx][GapS.RECRUIT_RAND_SEED]
             i = i + 1
-        if recruit_prob > 0.0 and gap_idx >= 0:
+        if recruit_prob > 0.0:
             slot_priority = rand_uniform_philox(_seed, tick, logical_ids[agent_index], int(recruit_rand_seed) * 97 + 3)
             if slot_priority < recruit_prob:
-                num_species = len(species_traits)
-                sw_row = gap_seedling_weights_idx[gap_idx]
                 total_weight = 0.0
-                sp = 0
-                while sp < num_species:
-                    total_weight = total_weight + gap_seedling_weights[sw_row][sp]
-                    sp = sp + 1
-                selected_species = -1
+                i = 0
+                while i < neighbor_offsets[agent_index + 1] - neighbor_offsets[agent_index]:
+                    neighbor_idx = int(neighbor_values[neighbor_offsets[agent_index] + i])
+                    neighbor_breed = int(breeds[neighbor_idx])
+                    if neighbor_breed == Breed.TREE:
+                        neighbor_alive = states_tensor[neighbor_idx][TreeS.IS_ALIVE]
+                        if neighbor_alive < -0.5:
+                            weight = states_tensor[neighbor_idx][TreeS.SEEDLING_WEIGHT]
+                            total_weight = total_weight + weight
+                    i = i + 1
+                selected_neighbor_idx = -1
                 if total_weight > 1e-10:
                     rand_target = rand_uniform_philox(_seed, tick, logical_ids[agent_index], int(recruit_rand_seed) * 97 + 4) * total_weight
                     cum_weight = 0.0
-                    last_species = -1
-                    sp = 0
-                    while sp < num_species:
-                        w = gap_seedling_weights[sw_row][sp]
-                        if w > 0.0:
-                            last_species = sp
-                            cum_weight = cum_weight + w
-                            if cum_weight > rand_target and selected_species < 0:
-                                selected_species = sp
-                        sp = sp + 1
-                    if selected_species < 0 and last_species >= 0:
-                        selected_species = last_species
-                if selected_species >= 0:
-                    states_tensor[agent_index][TreeS.SPECIES_ID] = float(selected_species)
-                    sel_species_id = selected_species
+                    last_template_idx = -1
+                    i = 0
+                    while i < neighbor_offsets[agent_index + 1] - neighbor_offsets[agent_index]:
+                        neighbor_idx = int(neighbor_values[neighbor_offsets[agent_index] + i])
+                        neighbor_breed = int(breeds[neighbor_idx])
+                        if neighbor_breed == Breed.TREE:
+                            neighbor_alive = states_tensor[neighbor_idx][TreeS.IS_ALIVE]
+                            if neighbor_alive < -0.5:
+                                last_template_idx = neighbor_idx
+                                weight = states_tensor[neighbor_idx][TreeS.SEEDLING_WEIGHT]
+                                cum_weight = cum_weight + weight
+                                if cum_weight > rand_target and selected_neighbor_idx < 0:
+                                    selected_neighbor_idx = neighbor_idx
+                        i = i + 1
+                    if selected_neighbor_idx < 0 and last_template_idx >= 0:
+                        selected_neighbor_idx = last_template_idx
+                if selected_neighbor_idx >= 0:
+                    states_tensor[agent_index][TreeS.SPECIES_ID] = states_tensor[selected_neighbor_idx][TreeS.SPECIES_ID]
+                    sel_species_id = int(states_tensor[agent_index][TreeS.SPECIES_ID])
                     seedling_diam = 1.5 + rand_normal_bounded(_seed, tick, logical_ids[agent_index], int(recruit_rand_seed) * 97 + 5, -1.0, 1.0)
                     max_ht = species_traits[sel_species_id][Trait.MAX_HT]
                     arfa_0 = species_traits[sel_species_id][Trait.ARFA_0]
@@ -1895,7 +1899,7 @@ def tree_actual_growth_step_double_buffer(tick, agent_index, _seed, species_trai
     states_tensor[agent_index][TreeS.N_CONSUMED] = n_consumed
 
 @jit.rawkernel(device='cuda')
-def gap_nconsumed_aggregate_step_double_buffer(tick, agent_index, _seed, species_traits, site_configs, rangelists, site_distances, agent_ids, logical_ids, breeds, neighbor_offsets, neighbor_values, params_tensor, states_tensor, gap_lai, gap_lai_idx, gap_avail_spec, gap_avail_spec_idx, gap_imported_seeds, gap_imported_seeds_idx, gap_seedling_weights, gap_seedling_weights_idx, site_avail_spec, write_site_avail_spec, site_avail_spec_idx, site_imported_seeds, site_imported_seeds_idx):
+def gap_nconsumed_aggregate_step_double_buffer(tick, agent_index, _seed, species_traits, site_configs, rangelists, site_distances, agent_ids, logical_ids, breeds, neighbor_offsets, neighbor_values, params_tensor, states_tensor, gap_lai, gap_lai_idx, gap_avail_spec, gap_avail_spec_idx, gap_imported_seeds, gap_imported_seeds_idx, site_avail_spec, write_site_avail_spec, site_avail_spec_idx, site_imported_seeds, site_imported_seeds_idx):
     """
     Gap N consumed aggregate step (priority 8).
 
@@ -1916,7 +1920,7 @@ def gap_nconsumed_aggregate_step_double_buffer(tick, agent_index, _seed, species
     states_tensor[agent_index][GapS.N_CONSUMED] = total_n_consumed
 
 @jit.rawkernel(device='cuda')
-def site_final_step_double_buffer(tick, agent_index, _seed, species_traits, site_configs, rangelists, site_distances, agent_ids, logical_ids, breeds, neighbor_offsets, neighbor_values, params_tensor, states_tensor, gap_lai, gap_lai_idx, gap_avail_spec, gap_avail_spec_idx, gap_imported_seeds, gap_imported_seeds_idx, gap_seedling_weights, gap_seedling_weights_idx, site_avail_spec, write_site_avail_spec, site_avail_spec_idx, site_imported_seeds, site_imported_seeds_idx):
+def site_final_step_double_buffer(tick, agent_index, _seed, species_traits, site_configs, rangelists, site_distances, agent_ids, logical_ids, breeds, neighbor_offsets, neighbor_values, params_tensor, states_tensor, gap_lai, gap_lai_idx, gap_avail_spec, gap_avail_spec_idx, gap_imported_seeds, gap_imported_seeds_idx, site_avail_spec, write_site_avail_spec, site_avail_spec_idx, site_imported_seeds, site_imported_seeds_idx):
     """
     Site final step (priority 9).
 
@@ -2058,8 +2062,6 @@ gap_avail_spec,
 gap_avail_spec_idx,
 gap_imported_seeds,
 gap_imported_seeds_idx,
-gap_seedling_weights,
-gap_seedling_weights_idx,
 site_avail_spec,
 write_site_avail_spec,
 site_avail_spec_nrows,
@@ -2087,7 +2089,7 @@ site_imported_seeds_idx,
 					agent_ids,
 					logical_ids,
 					a0,neighbor_offsets,neighbor_values,a2,a3,
-					gap_lai,gap_lai_idx,gap_avail_spec,gap_avail_spec_idx,gap_imported_seeds,gap_imported_seeds_idx,gap_seedling_weights,gap_seedling_weights_idx,site_avail_spec,write_site_avail_spec,site_avail_spec_idx,site_imported_seeds,site_imported_seeds_idx,
+					gap_lai,gap_lai_idx,gap_avail_spec,gap_avail_spec_idx,gap_imported_seeds,gap_imported_seeds_idx,site_avail_spec,write_site_avail_spec,site_avail_spec_idx,site_imported_seeds,site_imported_seeds_idx,
 				)
 			agent_index = agent_index + total_threads
 
@@ -2114,7 +2116,7 @@ site_imported_seeds_idx,
 					agent_ids,
 					logical_ids,
 					a0,neighbor_offsets,neighbor_values,a2,a3,
-					gap_lai,gap_lai_idx,gap_avail_spec,gap_avail_spec_idx,gap_imported_seeds,gap_imported_seeds_idx,gap_seedling_weights,gap_seedling_weights_idx,site_avail_spec,write_site_avail_spec,site_avail_spec_idx,site_imported_seeds,site_imported_seeds_idx,
+					gap_lai,gap_lai_idx,gap_avail_spec,gap_avail_spec_idx,gap_imported_seeds,gap_imported_seeds_idx,site_avail_spec,write_site_avail_spec,site_avail_spec_idx,site_imported_seeds,site_imported_seeds_idx,
 				)
 			agent_index = agent_index + total_threads
 
@@ -2141,7 +2143,7 @@ site_imported_seeds_idx,
 					agent_ids,
 					logical_ids,
 					a0,neighbor_offsets,neighbor_values,a2,a3,
-					gap_lai,gap_lai_idx,gap_avail_spec,gap_avail_spec_idx,gap_imported_seeds,gap_imported_seeds_idx,gap_seedling_weights,gap_seedling_weights_idx,site_avail_spec,write_site_avail_spec,site_avail_spec_idx,site_imported_seeds,site_imported_seeds_idx,
+					gap_lai,gap_lai_idx,gap_avail_spec,gap_avail_spec_idx,gap_imported_seeds,gap_imported_seeds_idx,site_avail_spec,write_site_avail_spec,site_avail_spec_idx,site_imported_seeds,site_imported_seeds_idx,
 				)
 			agent_index = agent_index + total_threads
 
@@ -2168,7 +2170,7 @@ site_imported_seeds_idx,
 					agent_ids,
 					logical_ids,
 					a0,neighbor_offsets,neighbor_values,a2,a3,
-					gap_lai,gap_lai_idx,gap_avail_spec,gap_avail_spec_idx,gap_imported_seeds,gap_imported_seeds_idx,gap_seedling_weights,gap_seedling_weights_idx,site_avail_spec,write_site_avail_spec,site_avail_spec_idx,site_imported_seeds,site_imported_seeds_idx,
+					gap_lai,gap_lai_idx,gap_avail_spec,gap_avail_spec_idx,gap_imported_seeds,gap_imported_seeds_idx,site_avail_spec,write_site_avail_spec,site_avail_spec_idx,site_imported_seeds,site_imported_seeds_idx,
 				)
 			agent_index = agent_index + total_threads
 
@@ -2195,7 +2197,7 @@ site_imported_seeds_idx,
 					agent_ids,
 					logical_ids,
 					a0,neighbor_offsets,neighbor_values,a2,a3,
-					gap_lai,gap_lai_idx,gap_avail_spec,gap_avail_spec_idx,gap_imported_seeds,gap_imported_seeds_idx,gap_seedling_weights,gap_seedling_weights_idx,site_avail_spec,write_site_avail_spec,site_avail_spec_idx,site_imported_seeds,site_imported_seeds_idx,
+					gap_lai,gap_lai_idx,gap_avail_spec,gap_avail_spec_idx,gap_imported_seeds,gap_imported_seeds_idx,site_avail_spec,write_site_avail_spec,site_avail_spec_idx,site_imported_seeds,site_imported_seeds_idx,
 				)
 			agent_index = agent_index + total_threads
 
@@ -2222,7 +2224,7 @@ site_imported_seeds_idx,
 					agent_ids,
 					logical_ids,
 					a0,neighbor_offsets,neighbor_values,a2,a3,
-					gap_lai,gap_lai_idx,gap_avail_spec,gap_avail_spec_idx,gap_imported_seeds,gap_imported_seeds_idx,gap_seedling_weights,gap_seedling_weights_idx,site_avail_spec,write_site_avail_spec,site_avail_spec_idx,site_imported_seeds,site_imported_seeds_idx,
+					gap_lai,gap_lai_idx,gap_avail_spec,gap_avail_spec_idx,gap_imported_seeds,gap_imported_seeds_idx,site_avail_spec,write_site_avail_spec,site_avail_spec_idx,site_imported_seeds,site_imported_seeds_idx,
 				)
 			agent_index = agent_index + total_threads
 
@@ -2249,7 +2251,7 @@ site_imported_seeds_idx,
 					agent_ids,
 					logical_ids,
 					a0,neighbor_offsets,neighbor_values,a2,a3,
-					gap_lai,gap_lai_idx,gap_avail_spec,gap_avail_spec_idx,gap_imported_seeds,gap_imported_seeds_idx,gap_seedling_weights,gap_seedling_weights_idx,site_avail_spec,write_site_avail_spec,site_avail_spec_idx,site_imported_seeds,site_imported_seeds_idx,
+					gap_lai,gap_lai_idx,gap_avail_spec,gap_avail_spec_idx,gap_imported_seeds,gap_imported_seeds_idx,site_avail_spec,write_site_avail_spec,site_avail_spec_idx,site_imported_seeds,site_imported_seeds_idx,
 				)
 			agent_index = agent_index + total_threads
 
@@ -2276,7 +2278,7 @@ site_imported_seeds_idx,
 					agent_ids,
 					logical_ids,
 					a0,neighbor_offsets,neighbor_values,a2,a3,
-					gap_lai,gap_lai_idx,gap_avail_spec,gap_avail_spec_idx,gap_imported_seeds,gap_imported_seeds_idx,gap_seedling_weights,gap_seedling_weights_idx,site_avail_spec,write_site_avail_spec,site_avail_spec_idx,site_imported_seeds,site_imported_seeds_idx,
+					gap_lai,gap_lai_idx,gap_avail_spec,gap_avail_spec_idx,gap_imported_seeds,gap_imported_seeds_idx,site_avail_spec,write_site_avail_spec,site_avail_spec_idx,site_imported_seeds,site_imported_seeds_idx,
 				)
 			agent_index = agent_index + total_threads
 
@@ -2303,7 +2305,7 @@ site_imported_seeds_idx,
 					agent_ids,
 					logical_ids,
 					a0,neighbor_offsets,neighbor_values,a2,a3,
-					gap_lai,gap_lai_idx,gap_avail_spec,gap_avail_spec_idx,gap_imported_seeds,gap_imported_seeds_idx,gap_seedling_weights,gap_seedling_weights_idx,site_avail_spec,write_site_avail_spec,site_avail_spec_idx,site_imported_seeds,site_imported_seeds_idx,
+					gap_lai,gap_lai_idx,gap_avail_spec,gap_avail_spec_idx,gap_imported_seeds,gap_imported_seeds_idx,site_avail_spec,write_site_avail_spec,site_avail_spec_idx,site_imported_seeds,site_imported_seeds_idx,
 				)
 			agent_index = agent_index + total_threads
 
@@ -2330,7 +2332,7 @@ site_imported_seeds_idx,
 					agent_ids,
 					logical_ids,
 					a0,neighbor_offsets,neighbor_values,a2,a3,
-					gap_lai,gap_lai_idx,gap_avail_spec,gap_avail_spec_idx,gap_imported_seeds,gap_imported_seeds_idx,gap_seedling_weights,gap_seedling_weights_idx,site_avail_spec,write_site_avail_spec,site_avail_spec_idx,site_imported_seeds,site_imported_seeds_idx,
+					gap_lai,gap_lai_idx,gap_avail_spec,gap_avail_spec_idx,gap_imported_seeds,gap_imported_seeds_idx,site_avail_spec,write_site_avail_spec,site_avail_spec_idx,site_imported_seeds,site_imported_seeds_idx,
 				)
 			agent_index = agent_index + total_threads
 
@@ -2347,7 +2349,7 @@ site_imported_seeds_idx,
 
 		_bla_row = thread_id
 		while _bla_row < site_avail_spec_nrows:
-			for _bla_j in range(100):
+			for _bla_j in range(235):
 				site_avail_spec[_bla_row][_bla_j] = write_site_avail_spec[_bla_row][_bla_j]
 			_bla_row = _bla_row + total_threads
 

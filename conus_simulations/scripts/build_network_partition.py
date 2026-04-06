@@ -29,13 +29,31 @@ import sys
 import time
 from collections import defaultdict
 
-# Import METIS partitioning
-try:
-    import metis
-    HAS_METIS = True
-except ImportError:
-    HAS_METIS = False
-    print("ERROR: metis library not found. Install with: pip install metis")
+# Import METIS partitioning (Python library is buggy, skip it)
+HAS_METIS_PYTHON = False
+# try:
+#     import metis
+#     HAS_METIS_PYTHON = True
+# except ImportError:
+#     HAS_METIS_PYTHON = False
+
+# Import subprocess for calling METIS binary (fallback)
+import subprocess
+import tempfile
+
+def check_metis_binary():
+    """Check if gpmetis binary is available."""
+    try:
+        result = subprocess.run(['which', 'gpmetis'], capture_output=True, text=True)
+        return result.returncode == 0
+    except:
+        return False
+
+HAS_METIS_BINARY = check_metis_binary()
+
+if not HAS_METIS_PYTHON and not HAS_METIS_BINARY:
+    print("ERROR: Neither metis Python library nor gpmetis binary found")
+    print("  Load METIS module: module load metis/5.1.0")
     sys.exit(1)
 
 # Earth radius for haversine distance
@@ -252,34 +270,116 @@ def make_undirected_adjacency(directed_edges, all_site_ids):
     return {k: list(v) for k, v in adjacency.items()}
 
 
-def partition_graph_metis(adjacency, site_ids, num_parts):
+def write_metis_graph(adjacency, site_ids, filename):
     """
-    Partition undirected graph using METIS.
+    Write graph in METIS format.
 
-    Returns:
-        tuple: (partition_map, edge_cut)
-            partition_map: {site_id: partition_id}
-            edge_cut: number of edges cut by partitioning
+    METIS format:
+    Line 1: <num_vertices> <num_edges>
+    Line 2+: adjacency list for each vertex (1-indexed)
     """
-    # Create site_id → index mapping
+    num_vertices = len(site_ids)
+    num_edges = sum(len(neighbors) for neighbors in adjacency.values()) // 2
+
+    # Create site_id → 1-indexed mapping (METIS uses 1-indexed vertices)
+    site_to_idx = {site_id: idx + 1 for idx, site_id in enumerate(site_ids)}
+
+    with open(filename, 'w') as f:
+        # Header
+        f.write(f"{num_vertices} {num_edges}\n")
+
+        # Adjacency lists (1-indexed)
+        for site_id in site_ids:
+            neighbors = adjacency[site_id]
+            neighbor_indices = [site_to_idx[n] for n in neighbors]
+            f.write(" ".join(map(str, sorted(neighbor_indices))) + "\n")
+
+
+def partition_graph_metis_binary(adjacency, site_ids, num_parts):
+    """Partition using gpmetis binary."""
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.graph', delete=False) as f:
+        graph_file = f.name
+
+    write_metis_graph(adjacency, site_ids, graph_file)
+
+    try:
+        result = subprocess.run(
+            ['gpmetis', graph_file, str(num_parts)],
+            capture_output=True, text=True, timeout=300
+        )
+
+        if result.returncode != 0:
+            raise RuntimeError(f"gpmetis failed: {result.stderr}")
+
+        # Read partition file
+        partition_file = f"{graph_file}.part.{num_parts}"
+        partition_labels = []
+        with open(partition_file, 'r') as f:
+            for line in f:
+                partition_labels.append(int(line.strip()))
+
+        # Extract edge cut
+        edge_cut = 0
+        for line in result.stdout.split('\n'):
+            if 'Edgecut:' in line:
+                edge_cut = int(line.split('Edgecut:')[1].split(',')[0].strip())
+                break
+
+        # Clean up
+        os.unlink(graph_file)
+        os.unlink(partition_file)
+
+        # Build partition map
+        partition_map = {site_id: partition_labels[idx] for idx, site_id in enumerate(site_ids)}
+        return partition_map, edge_cut
+
+    except Exception as e:
+        if os.path.exists(graph_file):
+            os.unlink(graph_file)
+        partition_file = f"{graph_file}.part.{num_parts}"
+        if os.path.exists(partition_file):
+            os.unlink(partition_file)
+        raise
+
+
+def partition_graph_metis_python(adjacency, site_ids, num_parts):
+    """Partition using Python metis library."""
     site_to_idx = {site_id: idx for idx, site_id in enumerate(site_ids)}
-
-    # Convert to indexed adjacency list (METIS expects 0-indexed nodes)
     adjacency_indexed = [
         [site_to_idx[neighbor] for neighbor in adjacency[site_id]]
         for site_id in site_ids
     ]
 
-    # Run METIS partitioning
     edge_cut, partition_labels = metis.part_graph(adjacency_indexed, nparts=num_parts)
 
-    # Convert back to site_id mapping
     partition_map = {
         site_id: int(partition_labels[site_to_idx[site_id]])
         for site_id in site_ids
     }
-
     return partition_map, edge_cut
+
+
+def partition_graph_metis(adjacency, site_ids, num_parts):
+    """
+    Partition undirected graph using METIS (tries Python, falls back to binary).
+
+    Returns:
+        tuple: (partition_map, edge_cut)
+    """
+    # Try Python library first
+    if HAS_METIS_PYTHON:
+        try:
+            print(f"  Using Python metis library...")
+            return partition_graph_metis_python(adjacency, site_ids, num_parts)
+        except Exception as e:
+            print(f"  Python metis failed ({type(e).__name__}), trying binary...")
+
+    # Fall back to binary
+    if HAS_METIS_BINARY:
+        print(f"  Using gpmetis binary...")
+        return partition_graph_metis_binary(adjacency, site_ids, num_parts)
+
+    raise RuntimeError("No working METIS implementation available")
 
 
 def analyze_partition_quality(directed_edges, undirected_adjacency, partition_map, num_parts):
