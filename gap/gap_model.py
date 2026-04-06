@@ -807,6 +807,44 @@ class GAPModel(Model):
         """Connect two agents. Bidirectional by default, one-way if directed=True."""
         self.get_space().connect_agents(agent_0, agent_1, directed=directed)
 
+    def connect_torus_sites(self, width, height, site_agents_dict):
+        """Connect sites in torus topology (8-neighbor Moore with wraparound).
+
+        Args:
+            width: Grid width
+            height: Grid height
+            site_agents_dict: dict mapping site_id -> site_agent_id
+
+        Returns:
+            int: Total edge count
+        """
+        neighbors = [
+            (-1, -1), (-1, 0), (-1, 1),
+            (0, -1),           (0, 1),
+            (1, -1),  (1, 0),  (1, 1)
+        ]
+
+        edge_count = 0
+
+        for i in range(height):
+            for j in range(width):
+                site_id = i * width + j
+                site_agent = site_agents_dict[site_id]
+
+                for di, dj in neighbors:
+                    ni = (i + di) % height
+                    nj = (j + dj) % width
+                    neighbor_id = ni * width + nj
+                    neighbor_agent = site_agents_dict[neighbor_id]
+
+                    self.connect_agents(site_agent, neighbor_agent)
+                    edge_count += 1
+
+        if comm.Get_rank() == 0:
+            print(f"Connected sites: {edge_count} edges ({edge_count/(width*height):.1f} per site)")
+
+        return edge_count
+
     def register_breed_local_arrays(self):
         """Register breed-local arrays for LAI, species, and dispersal.
 
