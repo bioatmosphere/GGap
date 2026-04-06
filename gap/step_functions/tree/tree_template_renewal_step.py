@@ -50,6 +50,7 @@ def tree_template_renewal_step(
     gap_lai, gap_lai_idx,
     gap_avail_spec, gap_avail_spec_idx,
     gap_imported_seeds, gap_imported_seeds_idx,
+    gap_seedling_weights, gap_seedling_weights_idx,
     site_avail_spec, site_avail_spec_idx,
     site_imported_seeds, site_imported_seeds_idx,
 ):
@@ -365,7 +366,7 @@ def tree_template_renewal_step(
             # my_share ≈ num_recruits × (species_weight / total_weight) = recruits for this species.
             # With PLOTSIZE-scaled seedling, each recruit decrements ~1.0 (matches GAPpy model.py:941).
             if fire_intensity < 0.01 and wind_intensity < 0.01:
-                old_weight = states_tensor[agent_index][TreeS.SEEDLING_WEIGHT]
+                old_weight = gap_seedling_weights[gap_seedling_weights_idx[gap_idx]][int(species_id)]
                 if total_seedling_weight > 0.01 and num_to_recruit > 0.5:
                     my_share = num_to_recruit * old_weight / total_seedling_weight
                     seedling = seedling - my_share
@@ -383,4 +384,4 @@ def tree_template_renewal_step(
         params_tensor[agent_index][TreeP.SEEDBANK] = seedbank
         params_tensor[agent_index][TreeP.SEEDLING] = seedling
         states_tensor[agent_index][TreeS.ENV_STRESS] = regrowth         # P6 reads same tick
-        states_tensor[agent_index][TreeS.SEEDLING_WEIGHT] = weight      # P7 free slots read same tick
+        gap_seedling_weights[gap_seedling_weights_idx[gap_idx]][int(species_id)] = weight  # P7 free slots read same tick

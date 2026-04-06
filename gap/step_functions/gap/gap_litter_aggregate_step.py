@@ -40,6 +40,7 @@ def gap_litter_aggregate_step(
     gap_lai, gap_lai_idx,
     gap_avail_spec, gap_avail_spec_idx,
     gap_imported_seeds, gap_imported_seeds_idx,
+    gap_seedling_weights, gap_seedling_weights_idx,
     site_avail_spec, site_avail_spec_idx,
     site_imported_seeds, site_imported_seeds_idx,
 ):
@@ -141,12 +142,14 @@ def gap_litter_aggregate_step(
                     if n_diam > n_max_diam * 0.05:
                         gap_avail_spec[sp_row][n_species_id] = 1.0
 
-            elif tree_alive < -0.5:
-                # Template: read seedling weight for proportional decrement
-                template_weight = states_tensor[neighbor_idx][TreeS.SEEDLING_WEIGHT]
-                total_seedling_weight = total_seedling_weight + template_weight
-
         i = i + 1
+
+    # Sum seedling weights from breed-local array (written by templates at P5)
+    sw_row = gap_seedling_weights_idx[agent_index]
+    sp = 0
+    while sp < len(species_traits):
+        total_seedling_weight = total_seedling_weight + gap_seedling_weights[sw_row][sp]
+        sp = sp + 1
 
     # --- 3. Top-down cumulative prefix sum ---
     for k in range(49):

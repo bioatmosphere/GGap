@@ -161,17 +161,17 @@ class GAPModel(Model):
         self._tree_breed.register_step_func(
             tree_potential_growth_step,
             CURRENT_DIR / "step_functions" / "tree" / "tree_potential_growth_step.py",
-            priority=3, no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "site_imported_seeds"],
+            priority=3, no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "gap_seedling_weights", "site_imported_seeds"],
         )
         self._tree_breed.register_step_func(
             tree_template_renewal_step,
             CURRENT_DIR / "step_functions" / "tree" / "tree_template_renewal_step.py",
-            priority=5, no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "site_imported_seeds"],
+            priority=5, no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "gap_seedling_weights", "site_imported_seeds"],
         )
         self._tree_breed.register_step_func(
             tree_actual_growth_step,
             CURRENT_DIR / "step_functions" / "tree" / "tree_actual_growth_step.py",
-            priority=7, no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "site_imported_seeds"],
+            priority=7, no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "gap_seedling_weights", "site_imported_seeds"],
         )
         self.register_breed(breed=self._tree_breed)
 
@@ -182,23 +182,23 @@ class GAPModel(Model):
         self._gap_breed.register_property("states", [0.0] * GAP_STATES_SIZE, neighbor_visible=False)
         self._gap_breed.register_step_func(
             gap_litter_aggregate_step, CURRENT_DIR / "step_functions" / "gap" / "gap_litter_aggregate_step.py",
-            priority=0, no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "site_imported_seeds"],
+            priority=0, no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "gap_seedling_weights", "site_imported_seeds"],
         )
         self._gap_breed.register_step_func(
             gap_climate_relay_step, CURRENT_DIR / "step_functions" / "gap" / "gap_climate_relay_step.py",
-            priority=2, no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "site_imported_seeds"],
+            priority=2, no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "gap_seedling_weights", "site_imported_seeds"],
         )
         self._gap_breed.register_step_func(
             gap_demand_aggregate_step, CURRENT_DIR / "step_functions" / "gap" / "gap_demand_aggregate_step.py",
-            priority=4, no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "site_imported_seeds"],
+            priority=4, no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "gap_seedling_weights", "site_imported_seeds"],
         )
         self._gap_breed.register_step_func(
             gap_recruit_aggregate_step, CURRENT_DIR / "step_functions" / "gap" / "gap_recruit_aggregate_step.py",
-            priority=6, no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "site_imported_seeds"],
+            priority=6, no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "gap_seedling_weights", "site_imported_seeds"],
         )
         self._gap_breed.register_step_func(
             gap_nconsumed_aggregate_step, CURRENT_DIR / "step_functions" / "gap" / "gap_nconsumed_aggregate_step.py",
-            priority=8, no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "site_imported_seeds"],
+            priority=8, no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "gap_seedling_weights", "site_imported_seeds"],
         )
         self.register_breed(breed=self._gap_breed)
 
@@ -210,13 +210,13 @@ class GAPModel(Model):
             site_soil_step,
             CURRENT_DIR / "step_functions" / "site" / "soil_step.py",
             priority=1,
-            no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "site_imported_seeds"],
+            no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "gap_seedling_weights", "site_imported_seeds"],
         )
         self._site_breed.register_step_func(
             site_final_step,
             CURRENT_DIR / "step_functions" / "site" / "site_final_step.py",
             priority=9,
-            no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "site_imported_seeds"],
+            no_double_buffer=["params", "states", "gap_lai", "gap_avail_spec", "gap_imported_seeds", "gap_seedling_weights", "site_imported_seeds"],
         )
         self.register_breed(breed=self._site_breed)
 
@@ -720,11 +720,6 @@ class GAPModel(Model):
                 self.set_agent_logical_id(agent_id, logical_base + tree_counter)
                 tree_counter += 1
 
-        # Connect free slots → templates (directed, one-way)
-        for free_slot_id in created_trees:
-            for template_id in template_trees:
-                self.connect_agents(free_slot_id, template_id, directed=True)
-
         return created_trees, initial_alive_count
 
     def _create_tree_agent(self, gap_agent_id, species_info, diam, age, is_alive=1.0, rank=None):
@@ -837,6 +832,14 @@ class GAPModel(Model):
         # gap_imported_seeds: per-gap imported seed relay (P2 copies from site)
         self.register_breed_local_array(
             "gap_imported_seeds", breed=self._gap_breed,
+            shape_per_agent=(num_species,),
+            neighbor_visible=False)
+
+        # gap_seedling_weights: per-gap per-species seedling weight for recruitment
+        # Written by templates at P5, read by free slots at P7 and gap at P0.
+        # Replaces free→template connections (eliminates num_gaps*pool_size*num_species edges).
+        self.register_breed_local_array(
+            "gap_seedling_weights", breed=self._gap_breed,
             shape_per_agent=(num_species,),
             neighbor_visible=False)
 
