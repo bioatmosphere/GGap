@@ -53,6 +53,7 @@ def tree_actual_growth_step(
     gap_lai, gap_lai_idx,
     gap_avail_spec, gap_avail_spec_idx,
     gap_imported_seeds, gap_imported_seeds_idx,
+    gap_seedling_weights, gap_seedling_weights_idx,
     site_avail_spec, site_avail_spec_idx,
     site_imported_seeds, site_imported_seeds_idx,
 ):
@@ -406,13 +407,14 @@ def tree_actual_growth_step(
 
     # ===== DORMANT SLOT ACTIVATION =====
     # Free slots (is_alive == 0) check if Gap signals recruitment, select species
-    # from templates weighted by SEEDLING_WEIGHT, and activate as seedlings.
-    # By activating at P6, seedlings don't grow until next tick (matching GAPpy).
+    # from gap_seedling_weights breed-local array, and activate as seedlings.
+    # By activating at P7, seedlings don't grow until next tick (matching GAPpy).
     # Templates (is_alive == -1) are handled at P5 and skip this step.
     elif is_alive > -0.5:
         # Read recruitment info from Gap neighbor
         recruit_prob = 0.0
         recruit_rand_seed = 0.0
+        gap_idx = -1
 
         neighbor_indices = locations[agent_index]
         i = 0
@@ -420,6 +422,7 @@ def tree_actual_growth_step(
             neighbor_idx = int(neighbor_indices[i])
             neighbor_breed = int(breeds[neighbor_idx])
             if neighbor_breed == Breed.GAP:
+                gap_idx = neighbor_idx
                 recruit_prob = states_tensor[neighbor_idx][GapS.NUM_TO_RECRUIT]
                 recruit_rand_seed = states_tensor[neighbor_idx][GapS.RECRUIT_RAND_SEED]
             i = i + 1
@@ -427,54 +430,47 @@ def tree_actual_growth_step(
         # Determine if this free slot should be recruited
         # recruit_prob = nrenew / free_slots (from P6), so
         # expected activations = free_slots * recruit_prob = nrenew
-        if recruit_prob > 0.0:
+        if recruit_prob > 0.0 and gap_idx >= 0:
             slot_priority = rand_uniform_philox(tick, agent_index, int(recruit_rand_seed) * 97 + 3)
 
             if slot_priority < recruit_prob:
-                # D3 fix: CDF-based species selection (matches GAPpy model.py:917-938).
-                # Pass 1: sum total_weight across all templates
+                # CDF-based species selection from gap breed-local array
+                # (matches GAPpy model.py:917-938).
+                num_species = len(species_traits)
+                sw_row = gap_seedling_weights_idx[gap_idx]
+
+                # Pass 1: sum total_weight across all species
                 total_weight = 0.0
-                i = 0
-                while i < len(neighbor_indices) and neighbor_indices[i] != -1:
-                    neighbor_idx = int(neighbor_indices[i])
-                    neighbor_breed = int(breeds[neighbor_idx])
-                    if neighbor_breed == Breed.TREE:
-                        neighbor_alive = states_tensor[neighbor_idx][TreeS.IS_ALIVE]
-                        if neighbor_alive < -0.5:
-                            weight = states_tensor[neighbor_idx][TreeS.SEEDLING_WEIGHT]
-                            total_weight = total_weight + weight
-                    i = i + 1
+                sp = 0
+                while sp < num_species:
+                    total_weight = total_weight + gap_seedling_weights[sw_row][sp]
+                    sp = sp + 1
 
                 # Pass 2: draw random target, cumulative scan to select species
-                # (matches GAPpy: normalize probs, build CDF, draw uniform)
-                selected_neighbor_idx = -1
+                selected_species = -1
                 if total_weight > 1e-10:
                     rand_target = rand_uniform_philox(tick, agent_index, int(recruit_rand_seed) * 97 + 4) * total_weight
                     cum_weight = 0.0
-                    last_template_idx = -1
-                    i = 0
-                    while i < len(neighbor_indices) and neighbor_indices[i] != -1:
-                        neighbor_idx = int(neighbor_indices[i])
-                        neighbor_breed = int(breeds[neighbor_idx])
-                        if neighbor_breed == Breed.TREE:
-                            neighbor_alive = states_tensor[neighbor_idx][TreeS.IS_ALIVE]
-                            if neighbor_alive < -0.5:
-                                last_template_idx = neighbor_idx
-                                weight = states_tensor[neighbor_idx][TreeS.SEEDLING_WEIGHT]
-                                cum_weight = cum_weight + weight
-                                if cum_weight > rand_target and selected_neighbor_idx < 0:
-                                    selected_neighbor_idx = neighbor_idx
-                        i = i + 1
+                    last_species = -1
+                    sp = 0
+                    while sp < num_species:
+                        w = gap_seedling_weights[sw_row][sp]
+                        if w > 0.0:
+                            last_species = sp
+                            cum_weight = cum_weight + w
+                            if cum_weight > rand_target and selected_species < 0:
+                                selected_species = sp
+                        sp = sp + 1
                     # Fallback for floating-point overshoot (GAPpy reselection)
-                    if selected_neighbor_idx < 0 and last_template_idx >= 0:
-                        selected_neighbor_idx = last_template_idx
+                    if selected_species < 0 and last_species >= 0:
+                        selected_species = last_species
 
-                if selected_neighbor_idx >= 0:
-                    # Copy only SPECIES_ID from template (traits are in species_traits)
-                    states_tensor[agent_index][TreeS.SPECIES_ID] = states_tensor[selected_neighbor_idx][TreeS.SPECIES_ID]
+                if selected_species >= 0:
+                    # Set species_id directly (array index = species_id)
+                    states_tensor[agent_index][TreeS.SPECIES_ID] = float(selected_species)
 
                     # Look up species traits from species_traits tensor
-                    sel_species_id = int(states_tensor[agent_index][TreeS.SPECIES_ID])
+                    sel_species_id = selected_species
 
                     # Seedling diameter: N(1.5, 1) clamped [0.5, 2.5]
                     # Box-Muller normal, z in [-1, 1] -> diam in [0.5, 2.5]
