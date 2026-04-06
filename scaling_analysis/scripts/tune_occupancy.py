@@ -107,11 +107,14 @@ def test_configuration(num_sites, max_blocks_per_sm, num_ticks=20, num_gaps=500,
 
         # SET OCCUPANCY PARAMETER BEFORE SETUP
         model._max_blocks_per_sm = max_blocks_per_sm
+        model._verbose_timing = True  # Enable detailed timing output
 
         # GPU setup
+        print(f"[DIAGNOSTIC] Starting GPU setup...", flush=True)
         t_start = time.time()
         model.setup(use_gpu=True)
         setup_time = time.time() - t_start
+        print(f"[DIAGNOSTIC] GPU setup completed in {setup_time:.2f}s", flush=True)
 
         # Memory after setup
         if HAS_CUPY:
@@ -121,16 +124,37 @@ def test_configuration(num_sites, max_blocks_per_sm, num_ticks=20, num_gaps=500,
         else:
             mem_gb = 0.0
 
-        # Run ticks
-        tick_times = []
-        t_sim_start = time.time()
-        for tick in range(num_ticks):
-            t_tick = time.time()
-            model.simulate(ticks=1, sync_workers_every_n_ticks=1)
-            tick_time = time.time() - t_tick
-            tick_times.append(tick_time)
+        # Calculate actual kernel launch config
+        import math
+        num_agents = total_agents = num_sites * 500501
+        threadsperblock = 128
+        blockspergrid = int(math.ceil(num_agents / threadsperblock))
+        num_sms = 110
+        max_grid_blocks = max_blocks_per_sm * num_sms
+        effective_blocks = min(blockspergrid, max_grid_blocks)
 
+        print(f"[DIAGNOSTIC] Kernel launch config:", flush=True)
+        print(f"  Total agents: {num_agents:,}", flush=True)
+        print(f"  Blocks needed (blockspergrid): {blockspergrid:,}", flush=True)
+        print(f"  Max blocks allowed (max_grid_blocks): {max_grid_blocks:,}", flush=True)
+        print(f"  Effective blocks (min): {effective_blocks:,}", flush=True)
+        print(f"  Threads per block: {threadsperblock}", flush=True)
+        print(f"  Total threads: {effective_blocks * threadsperblock:,}", flush=True)
+        print(f"  Agents per thread: {num_agents / (effective_blocks * threadsperblock):.1f}", flush=True)
+        print(f"  Blocks per CU: {effective_blocks / num_sms:.1f}", flush=True)
+        print(f"[DIAGNOSTIC] Starting simulation with {num_ticks} ticks...", flush=True)
+        print(f"[DIAGNOSTIC] WARNING: If this hangs, it's a grid barrier deadlock!", flush=True)
+
+        # Run all ticks in one fused call (single-worker optimization)
+        t_sim_start = time.time()
+        model.simulate(ticks=num_ticks)
         total_sim_time = time.time() - t_sim_start
+        print(f"[DIAGNOSTIC] Simulation completed in {total_sim_time:.2f}s", flush=True)
+
+        # Get timing data from SAGESim
+        tick_times = []
+        if hasattr(model, '_tick_timings') and model._tick_timings:
+            tick_times = [t['total'] for t in model._tick_timings if 'total' in t]
 
         # Memory after simulation
         if HAS_CUPY:
@@ -139,10 +163,25 @@ def test_configuration(num_sites, max_blocks_per_sm, num_ticks=20, num_gaps=500,
 
         # Calculate metrics
         import numpy as np
-        mean_tick = np.mean(tick_times)
-        min_tick = np.min(tick_times)
-        max_tick = np.max(tick_times)
-        std_tick = np.std(tick_times)
+        mean_tick = np.mean(tick_times) if tick_times else total_sim_time
+        min_tick = np.min(tick_times) if tick_times else total_sim_time
+        max_tick = np.max(tick_times) if tick_times else total_sim_time
+        std_tick = np.std(tick_times) if tick_times else 0
+
+        # Extract timing breakdown from SAGESim
+        timing_breakdown = {}
+        if hasattr(model, '_tick_timings') and model._tick_timings:
+            # Average timings across all ticks (or just first tick for one-time costs)
+            timing_breakdown['agent_ids_gen'] = model._tick_timings[0].get('agent_ids_generation', 0)
+            timing_breakdown['gpu_config'] = model._tick_timings[0].get('gpu_config', 0)
+
+            # First tick data prep (includes buffer build)
+            timing_breakdown['data_prep_first'] = model._tick_timings[0].get('data_prep', 0)
+
+            # Average kernel execution across all ticks
+            gpu_compute_times = [t.get('gpu_compute', 0) for t in model._tick_timings]
+            timing_breakdown['gpu_compute_avg'] = np.mean(gpu_compute_times) if gpu_compute_times else 0
+            timing_breakdown['gpu_compute_total'] = np.sum(gpu_compute_times) if gpu_compute_times else 0
 
         # Total agents (1 site + num_gaps + num_gaps × (species + maxtrees))
         # For CONUS avg ~1 species: 1 + 500 + 500×(1+1000) = 500,501 per site
@@ -180,6 +219,7 @@ def test_configuration(num_sites, max_blocks_per_sm, num_ticks=20, num_gaps=500,
             'total_sim_time': total_sim_time,
             'throughput_tree_years_per_sec': throughput,
             'tick_times': tick_times,
+            'timing_breakdown': timing_breakdown,
             'success': True
         }
 
@@ -218,6 +258,26 @@ def print_result(result):
     print(f"  Init time:     {result['init_time']:.2f}s")
     print(f"  Setup time:    {result['setup_time']:.2f}s")
     print(f"  Simulation:    {result['total_sim_time']:.2f}s")
+
+    # Timing breakdown
+    if result.get('timing_breakdown'):
+        tb = result['timing_breakdown']
+        print()
+        print(f"Detailed Timing Breakdown:")
+        print(f"  Agent IDs generation:   {tb.get('agent_ids_gen', 0):.4f}s")
+        print(f"  GPU config (cached):    {tb.get('gpu_config', 0):.4f}s")
+        print(f"  Data prep (first tick): {tb.get('data_prep_first', 0):.4f}s")
+        print(f"  GPU compute (avg/tick): {tb.get('gpu_compute_avg', 0):.4f}s")
+        print(f"  GPU compute (total):    {tb.get('gpu_compute_total', 0):.4f}s")
+
+        # Calculate percentages
+        total = result['total_sim_time']
+        print()
+        print(f"Time Distribution:")
+        print(f"  Initialization overhead: {100*result['init_time']/total:.1f}%")
+        print(f"  GPU compute:            {100*tb.get('gpu_compute_total', 0)/total:.1f}%")
+        print(f"  Other overhead:         {100*(total - result['init_time'] - tb.get('gpu_compute_total', 0))/total:.1f}%")
+
     print("="*70)
 
 
