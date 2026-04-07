@@ -1,55 +1,45 @@
 #!/bin/bash
 #SBATCH -A lrn088
-#SBATCH -J test_weak_scaling
+#SBATCH -J test_wsb
 #SBATCH -N 1
 #SBATCH -t 02:00:00
 #SBATCH -q debug
-#SBATCH -o ../logs/test_weak_scaling_%j.out
-#SBATCH -e ../logs/test_weak_scaling_%j.err
+#SBATCH -o ../logs/test_wsb_%j.out
+#SBATCH -e ../logs/test_wsb_%j.err
 
 unset SLURM_EXPORT_ENV
 
-# Weak Scaling Test - Single Node (1-8 GPUs)
-# Tests: 1, 2, 4, 8 GPUs with 8 sites per GPU (minimum for proper weak scaling)
+# Weak Scaling B Test - Single Node (1-8 GPUs)
+# 100 sites/GPU, grid_height=10, block=10x10/rank
+# Cross-rank edges per rank = 60, cross-rank fraction = 7.5%
 
 echo "================================"
-echo "Weak Scaling Test - Single Node"
+echo "Weak Scaling B Test - Single Node"
 echo "================================"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Start time: $(date)"
 echo "Node: $(hostname)"
 echo ""
 
-# Load Frontier modules
 module load PrgEnv-gnu/8.6.0
 module load rocm/6.4.1
 module load craype-accel-amd-gfx90a
-
-# Activate conda environment
 source activate /lustre/orion/proj-shared/lrn088/objective3/envs/sagesim_env
-
-# Enable GPU-aware MPI
 export MPICH_GPU_SUPPORT_ENABLED=1
+export SAGESIM_NUM_SMS=110
 
-# Go to scripts directory
 cd /lustre/orion/lrn088/proj-shared/objective3/xxz/GGap/scaling_analysis/scripts
+mkdir -p ../results ../logs
 
-# Create results directory
-mkdir -p ../results
-mkdir -p ../logs
-
-# Configuration
-# 1D slab decomposition: grid_height=4, each rank owns 4x1 column
-# Cross-rank edges per rank = 24 (constant for 2+ GPUs)
-SITES_PER_GPU=4
-GRID_HEIGHT=4
-NUM_GAPS=500
-MAXTREES=1000
+SITES_PER_GPU=100
+GRID_HEIGHT=10
+NUM_GAPS=200
+MAXTREES=500
 TICKS=20
 MAX_BLOCKS_PER_SM=8
 
 echo "Configuration:"
-echo "  Sites per GPU: $SITES_PER_GPU (1D slab: ${GRID_HEIGHT}x1 block/rank)"
+echo "  Sites per GPU: $SITES_PER_GPU (1D slab: ${GRID_HEIGHT}x10 block/rank)"
 echo "  Grid height: $GRID_HEIGHT"
 echo "  Gaps per site: $NUM_GAPS"
 echo "  Trees per gap: $MAXTREES"
@@ -57,14 +47,9 @@ echo "  Ticks: $TICKS"
 echo "  max_blocks_per_sm: $MAX_BLOCKS_PER_SM"
 echo ""
 
-# Set AMD GPU workaround (110 CUs for MI250X)
-export SAGESIM_NUM_SMS=110
-
-# Single CSV file for all GPU counts (rows appended per run)
-CSV_FILE="../results/test_weak_scaling.csv"
+CSV_FILE="../results/test_weak_scaling_b.csv"
 rm -f $CSV_FILE
 
-# Run tests for 1, 2, 4, 8 GPUs
 for NGPUS in 1 2 4 8; do
     echo "================================"
     echo "Test: $NGPUS GPU(s)"

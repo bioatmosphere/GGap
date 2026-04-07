@@ -47,7 +47,7 @@ for NNODES in 16 32 64; do
         --cpus-per-task=7 \
         --gpus-per-node=8 \
         --gpu-bind=closest \
-        python -u test_weak_scaling_single_node.py \
+        python -u weak_scaling.py \
             --sites-per-gpu $SITES_PER_GPU \
             --grid-height $GRID_HEIGHT \
             --num-gaps $NUM_GAPS \

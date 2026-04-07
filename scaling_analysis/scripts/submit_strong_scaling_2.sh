@@ -1,16 +1,20 @@
 #!/bin/bash
 #SBATCH -A lrn088
-#SBATCH -J ws_16
-#SBATCH -N 16
+#SBATCH -J ss_2
+#SBATCH -N 2
 #SBATCH -t 02:00:00
-#SBATCH -p batch
-#SBATCH -o ../logs/ws_16_%j.out
-#SBATCH -e ../logs/ws_16_%j.err
+#SBATCH -q debug
+#SBATCH -o ../logs/ss_2_%j.out
+#SBATCH -e ../logs/ss_2_%j.err
 
 unset SLURM_EXPORT_ENV
 
+# Strong Scaling: 2 Nodes (16 GPUs)
+# Fixed 2048 sites, grid_height=4, width=512
+# 128 sites/GPU
+
 echo "========================================"
-echo "Weak Scaling: 16 Nodes (128 GPUs)"
+echo "Strong Scaling: 2 Nodes (16 GPUs)"
 echo "========================================"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Start: $(date)"
@@ -26,27 +30,37 @@ export SAGESIM_NUM_SMS=110
 cd /lustre/orion/lrn088/proj-shared/objective3/xxz/GGap/scaling_analysis/scripts
 mkdir -p ../results ../logs
 
-SITES_PER_GPU=10
-GRID_HEIGHT=5
+TOTAL_SITES=2048
+GRID_HEIGHT=4
 NUM_GAPS=500
 MAXTREES=1000
 TICKS=1000
 MAX_BLOCKS_PER_SM=8
 
-CSV_FILE="../results/weak_scaling.csv"
+echo "Configuration:"
+echo "  Total sites: $TOTAL_SITES (fixed)"
+echo "  Grid: ${GRID_HEIGHT}x$((TOTAL_SITES / GRID_HEIGHT))"
+echo "  Gaps/site: $NUM_GAPS, Trees/gap: $MAXTREES"
+echo "  Ticks: $TICKS"
+echo "  Sites/GPU: $((TOTAL_SITES / 16))"
+echo ""
 
-NNODES=16
-NGPUS=$((NNODES * 8))
+CSV_FILE="../results/strong_scaling.csv"
+
+NNODES=2
+NGPUS=16
+SPG=$((TOTAL_SITES / NGPUS))
+
 echo "========================================"
-echo "Test: $NNODES node(s), $NGPUS GPUs, $((NGPUS * SITES_PER_GPU)) sites"
+echo "Test: $NNODES nodes, $NGPUS GPUs, $SPG sites/GPU"
 echo "Start: $(date)"
 
 srun -N $NNODES -n $NGPUS \
     --cpus-per-task=7 \
     --gpus-per-node=8 \
     --gpu-bind=closest \
-    python -u weak_scaling.py \
-        --sites-per-gpu $SITES_PER_GPU \
+    python -u strong_scaling.py \
+        --total-sites $TOTAL_SITES \
         --grid-height $GRID_HEIGHT \
         --num-gaps $NUM_GAPS \
         --maxtrees $MAXTREES \
