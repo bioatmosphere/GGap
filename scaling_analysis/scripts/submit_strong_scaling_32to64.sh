@@ -1,19 +1,20 @@
 #!/bin/bash
 #SBATCH -A lrn088
-#SBATCH -J ss_test
-#SBATCH -N 16
+#SBATCH -J ss_32to64
+#SBATCH -N 64
 #SBATCH -t 02:00:00
-#SBATCH -q debug
-#SBATCH -o ../logs/ss_test_%j.out
-#SBATCH -e ../logs/ss_test_%j.err
+#SBATCH -p batch
+#SBATCH -o ../logs/ss_32to64_%j.out
+#SBATCH -e ../logs/ss_32to64_%j.err
 
 unset SLURM_EXPORT_ENV
 
-# Strong Scaling Test: Fixed 512 sites, 1-16 nodes (8-128 GPUs)
-# Quick test with 20 ticks before full 1000-tick run
+# Strong Scaling: 32-64 Nodes (256-512 GPUs)
+# Fixed 2048 sites, grid_height=4, width=512
+# 8-4 sites/GPU (lightest workload, highest cross-rank %)
 
 echo "========================================"
-echo "Strong Scaling Test (20 ticks)"
+echo "Strong Scaling: 32-64 Nodes (256-512 GPUs)"
 echo "========================================"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Start: $(date)"
@@ -31,21 +32,21 @@ mkdir -p ../results ../logs
 
 TOTAL_SITES=2048
 GRID_HEIGHT=4
-NUM_GAPS=100
-MAXTREES=500
-TICKS=20
+NUM_GAPS=500
+MAXTREES=1000
+TICKS=1000
 MAX_BLOCKS_PER_SM=8
 
 echo "Configuration:"
 echo "  Total sites: $TOTAL_SITES (fixed)"
 echo "  Grid: ${GRID_HEIGHT}x$((TOTAL_SITES / GRID_HEIGHT))"
 echo "  Gaps/site: $NUM_GAPS, Trees/gap: $MAXTREES"
-echo "  Ticks: $TICKS (test run)"
+echo "  Ticks: $TICKS"
 echo ""
 
-CSV_FILE="../results/strong_scaling_test.csv"
+CSV_FILE="../results/strong_scaling.csv"
 
-for NNODES in 8 16; do
+for NNODES in 32 64; do
     NGPUS=$((NNODES * 8))
     SPG=$((TOTAL_SITES / NGPUS))
 

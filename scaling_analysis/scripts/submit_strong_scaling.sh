@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -A lrn088
 #SBATCH -J strong_scaling
-#SBATCH -N 32
+#SBATCH -N 64
 #SBATCH -t 02:00:00
 #SBATCH -p batch
 #SBATCH -o ../logs/strong_scaling_%j.out
@@ -9,11 +9,11 @@
 
 unset SLURM_EXPORT_ENV
 
-# Strong Scaling: Fixed 1024 sites, 1-32 nodes (8-256 GPUs)
-# grid_height=4, width=256, cross-rank=24/rank
+# Strong Scaling: Fixed 2048 sites, 1-64 nodes (8-512 GPUs)
+# grid_height=4, width=512
 
 echo "========================================"
-echo "Strong Scaling: 1024 sites fixed"
+echo "Strong Scaling: 2048 sites fixed"
 echo "========================================"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Start: $(date)"
@@ -29,7 +29,7 @@ export SAGESIM_NUM_SMS=110
 cd /lustre/orion/lrn088/proj-shared/objective3/xxz/GGap/scaling_analysis/scripts
 mkdir -p ../results ../logs
 
-TOTAL_SITES=1024
+TOTAL_SITES=2048
 GRID_HEIGHT=4
 NUM_GAPS=500
 MAXTREES=1000
@@ -45,7 +45,7 @@ echo ""
 
 CSV_FILE="../results/strong_scaling.csv"
 
-for NNODES in 1 2 4 8 16 32; do
+for NNODES in 1 2 4 8 16 32 64; do
     NGPUS=$((NNODES * 8))
     SPG=$((TOTAL_SITES / NGPUS))
 
@@ -57,7 +57,7 @@ for NNODES in 1 2 4 8 16 32; do
         --cpus-per-task=7 \
         --gpus-per-node=8 \
         --gpu-bind=closest \
-        python -u test_strong_scaling.py \
+        python -u strong_scaling.py \
             --total-sites $TOTAL_SITES \
             --grid-height $GRID_HEIGHT \
             --num-gaps $NUM_GAPS \

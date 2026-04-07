@@ -1,19 +1,19 @@
 #!/bin/bash
 #SBATCH -A lrn088
-#SBATCH -J ss_test
+#SBATCH -J ws_1to16
 #SBATCH -N 16
 #SBATCH -t 02:00:00
-#SBATCH -q debug
-#SBATCH -o ../logs/ss_test_%j.out
-#SBATCH -e ../logs/ss_test_%j.err
+#SBATCH -p batch
+#SBATCH -o ../logs/ws_1to16_%j.out
+#SBATCH -e ../logs/ws_1to16_%j.err
 
 unset SLURM_EXPORT_ENV
 
-# Strong Scaling Test: Fixed 512 sites, 1-16 nodes (8-128 GPUs)
-# Quick test with 20 ticks before full 1000-tick run
+# Weak Scaling A: 1-16 Nodes (8-128 GPUs)
+# 10 sites/GPU, grid_height=5, block=5x2/rank
 
 echo "========================================"
-echo "Strong Scaling Test (20 ticks)"
+echo "Weak Scaling A: 1-16 Nodes (8-128 GPUs)"
 echo "========================================"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Start: $(date)"
@@ -29,36 +29,27 @@ export SAGESIM_NUM_SMS=110
 cd /lustre/orion/lrn088/proj-shared/objective3/xxz/GGap/scaling_analysis/scripts
 mkdir -p ../results ../logs
 
-TOTAL_SITES=2048
-GRID_HEIGHT=4
-NUM_GAPS=100
-MAXTREES=500
-TICKS=20
+SITES_PER_GPU=10
+GRID_HEIGHT=5
+NUM_GAPS=500
+MAXTREES=1000
+TICKS=1000
 MAX_BLOCKS_PER_SM=8
 
-echo "Configuration:"
-echo "  Total sites: $TOTAL_SITES (fixed)"
-echo "  Grid: ${GRID_HEIGHT}x$((TOTAL_SITES / GRID_HEIGHT))"
-echo "  Gaps/site: $NUM_GAPS, Trees/gap: $MAXTREES"
-echo "  Ticks: $TICKS (test run)"
-echo ""
+CSV_FILE="../results/weak_scaling.csv"
 
-CSV_FILE="../results/strong_scaling_test.csv"
-
-for NNODES in 8 16; do
+for NNODES in 1 2 4 8 16; do
     NGPUS=$((NNODES * 8))
-    SPG=$((TOTAL_SITES / NGPUS))
-
     echo "========================================"
-    echo "Test: $NNODES node(s), $NGPUS GPUs, $SPG sites/GPU"
+    echo "Test: $NNODES node(s), $NGPUS GPUs, $((NGPUS * SITES_PER_GPU)) sites"
     echo "Start: $(date)"
 
     srun -N $NNODES -n $NGPUS \
         --cpus-per-task=7 \
         --gpus-per-node=8 \
         --gpu-bind=closest \
-        python -u strong_scaling.py \
-            --total-sites $TOTAL_SITES \
+        python -u weak_scaling.py \
+            --sites-per-gpu $SITES_PER_GPU \
             --grid-height $GRID_HEIGHT \
             --num-gaps $NUM_GAPS \
             --maxtrees $MAXTREES \

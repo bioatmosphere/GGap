@@ -61,7 +61,7 @@ Scaling evidence for the claim: *GGap achieves weak scaling to thousands of GPUs
 
 **NOT needed:** pat_run (too heavyweight), HPCToolkit (overkill), Score-P (trace-based unnecessary), ROCm Systems Profiler (system-wide not kernel-specific)
 
-**Usage:** Single-site bottleneck analysis (Exp 5 only). Use SAGESim `_verbose_timing` for weak scaling tests (Exp 2).
+**Usage:** Use SAGESim `_verbose_timing` for comprehensive timing in weak scaling tests (Exp 2).
 
 ## System Facts
 
@@ -262,27 +262,6 @@ Measure: total wall-clock for 500 years, time/tick, memory/GPU, forest compositi
 
 ---
 
-## Experiment 5: Per-Priority Profiling
-
-Identify bottleneck priorities (expect P1 soil ~40%, P3/P7 tree growth ~35%).
-
-**Tool:** rocprofv3 (AMD MI250X native profiler)
-
-```bash
-# 1 GPU, 1 site, with rocprofv3
-srun -N1 -n1 --gpus-per-node=1 --gpu-bind=closest \
-    rocprof --stats \
-    python gap/weak_scaling_conus.py \
-        --prefix CONUS --sites-per-gpu 1 \
-        --num_gaps 500 --maxtrees 1000 --years 10 \
-        --csv results/profile_1site.csv
-```
-
-**Output:** `rocprof_*.csv` with per-kernel timing → map kernels to GGap priorities (P0-P9)
-
-**Analysis:** Identify which priority dominates (expected: P1 soil with 365-day loop ~60-80% of tick time)
-
----
 
 ## Implementation: Scripts to Build
 
@@ -509,7 +488,6 @@ Reads JSON timing files, generates publication plots:
    - `scaling_jobs/test_memory.sh`
    - `scaling_jobs/submit_weak_scaling.sh` - Dynamic batch generation
    - `scaling_jobs/run_conus_demo.sbatch`
-   - `scaling_jobs/profile_single_site.sh` - rocprofv3 wrapper
 
 **Total Effort:** 20-28 hours
 
@@ -522,18 +500,21 @@ Reads JSON timing files, generates publication plots:
 ### Execution Workflow
 
 1. **Exp 0:** `sbatch scaling_jobs/test_memory.sh` → determines S_max
-2. **Exp 0b:** `sbatch scaling_jobs/tune_occupancy.sh` → finds optimal max_blocks_per_sm (verify memory!)
-3. **Exp 5:** `sbatch scaling_jobs/profile_single_site.sh` → rocprofv3 bottleneck analysis
-4. **Exp 2:** `./scaling_jobs/submit_weak_scaling.sh <N>` for N ∈ {1, 2, 5, 10, 20} (use optimal blocks/SM)
+2. **Exp 0b:** `sbatch scaling_analysis/scripts/tune_occupancy.sh` → finds optimal max_blocks_per_sm=8 ✓ COMPLETED
+3. **Exp 2 (Test):** `sbatch scaling_analysis/scripts/submit_test_weak_scaling.sh` → quick 1-8 GPU validation with synthetic torus
+4. **Exp 2 (Full):** `./scaling_jobs/submit_weak_scaling.sh <N>` for N ∈ {1, 2, 5, 10, 20} (use max_blocks_per_sm=8)
 5. **Exp 4:** `sbatch scaling_jobs/run_conus_demo.sbatch` → full CONUS 1,424 sites
 6. **Analysis:** `python gap/combine_weak_scaling_results.py && python gap/analyze_weak_scaling.py`
+
+**Note:** Experiment 5 (profiling) was removed. SAGESim's `_verbose_timing` flag provides comprehensive per-tick timing breakdown sufficient for weak scaling analysis.
 
 ## Verification Checklist
 
 - [ ] Memory test completes, S_max determined
+- [x] Occupancy tuning complete: max_blocks_per_sm=8 optimal
+- [ ] Torus test completes: weak scaling efficiency >95% at 1-8 GPUs
 - [ ] Spatial partitioning reduces edge cuts >10x vs round-robin
 - [ ] Determinism: 1-GPU vs 8-GPU same 8 sites with same seed → identical output
 - [ ] Timing sanity: ~0.5-1.0s/tick for 1 site, 500 gaps x 1000 trees
 - [ ] Weak scaling efficiency >95% at 8 GPUs (intra-node), >85% at 64 GPUs (8 nodes)
 - [ ] CONUS demo completes 500 years without crash
-- [ ] rocprofv3 identifies P1 (soil) as bottleneck (~60-80% of tick time)

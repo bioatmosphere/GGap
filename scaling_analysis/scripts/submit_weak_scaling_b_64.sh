@@ -1,16 +1,19 @@
 #!/bin/bash
 #SBATCH -A lrn088
-#SBATCH -J ws_16
-#SBATCH -N 16
+#SBATCH -J wsb_64
+#SBATCH -N 64
 #SBATCH -t 02:00:00
 #SBATCH -p batch
-#SBATCH -o ../logs/ws_16_%j.out
-#SBATCH -e ../logs/ws_16_%j.err
+#SBATCH -o ../logs/wsb_64_%j.out
+#SBATCH -e ../logs/wsb_64_%j.err
 
 unset SLURM_EXPORT_ENV
 
+# Weak Scaling B: 64 Nodes (512 GPUs)
+# 100 sites/GPU, grid_height=10
+
 echo "========================================"
-echo "Weak Scaling: 16 Nodes (128 GPUs)"
+echo "Weak Scaling B: 64 Nodes (512 GPUs)"
 echo "========================================"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Start: $(date)"
@@ -26,16 +29,16 @@ export SAGESIM_NUM_SMS=110
 cd /lustre/orion/lrn088/proj-shared/objective3/xxz/GGap/scaling_analysis/scripts
 mkdir -p ../results ../logs
 
-SITES_PER_GPU=10
-GRID_HEIGHT=5
-NUM_GAPS=500
-MAXTREES=1000
+SITES_PER_GPU=100
+GRID_HEIGHT=10
+NUM_GAPS=200
+MAXTREES=500
 TICKS=1000
 MAX_BLOCKS_PER_SM=8
 
-CSV_FILE="../results/weak_scaling.csv"
+CSV_FILE="../results/weak_scaling_b.csv"
 
-NNODES=16
+NNODES=64
 NGPUS=$((NNODES * 8))
 echo "========================================"
 echo "Test: $NNODES node(s), $NGPUS GPUs, $((NGPUS * SITES_PER_GPU)) sites"

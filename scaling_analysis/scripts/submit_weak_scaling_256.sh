@@ -1,16 +1,18 @@
 #!/bin/bash
 #SBATCH -A lrn088
-#SBATCH -J ws_16
-#SBATCH -N 16
+#SBATCH -J ws_256
+#SBATCH -N 256
 #SBATCH -t 02:00:00
 #SBATCH -p batch
-#SBATCH -o ../logs/ws_16_%j.out
-#SBATCH -e ../logs/ws_16_%j.err
+#SBATCH -o ../logs/ws_256_%j.out
+#SBATCH -e ../logs/ws_256_%j.err
 
 unset SLURM_EXPORT_ENV
 
+# Weak Scaling A: 256 Nodes (2048 GPUs)
+
 echo "========================================"
-echo "Weak Scaling: 16 Nodes (128 GPUs)"
+echo "Weak Scaling A: 256 Nodes (2048 GPUs)"
 echo "========================================"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Start: $(date)"
@@ -35,7 +37,7 @@ MAX_BLOCKS_PER_SM=8
 
 CSV_FILE="../results/weak_scaling.csv"
 
-NNODES=16
+NNODES=256
 NGPUS=$((NNODES * 8))
 echo "========================================"
 echo "Test: $NNODES node(s), $NGPUS GPUs, $((NGPUS * SITES_PER_GPU)) sites"
