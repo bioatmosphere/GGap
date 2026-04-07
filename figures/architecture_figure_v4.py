@@ -123,18 +123,18 @@ def main():
                 ha="center", va="top", fontsize=8, fontweight="bold",
                 color=C["mpi"], zorder=3)
 
-    # Site circles with "S"
-    sr = 0.080
-    s0_raw = [(0.28, 0.36), (0.70, 0.40), (0.34, 0.14),
-              (1.02, 0.28), (1.24, 0.12)]
+    # Site circles (labeled "S" inside)
+    sr = 0.078
+    s0_raw = [(0.28, 0.28), (0.70, 0.30), (0.34, 0.10),
+              (1.02, 0.22), (1.24, 0.09)]
     s0 = [(gpu_xs[0] + x, gpu_y + y) for x, y in s0_raw]
-    # GPU 1 sites: leave room on the right for the "S = Site..." note
-    s1_raw = [(0.18, 0.38), (0.42, 0.16), (0.58, 0.38),
-              (0.26, 0.12)]
+    s1_raw = [(0.24, 0.30), (0.68, 0.32), (0.46, 0.12),
+              (1.04, 0.26), (1.24, 0.10)]
     s1 = [(gpu_xs[1] + x, gpu_y + y) for x, y in s1_raw]
-    s2_raw = [(0.36, 0.34), (1.00, 0.30), (0.58, 0.12), (1.18, 0.10)]
+    s2_raw = [(0.36, 0.26), (1.00, 0.22), (0.58, 0.08), (1.18, 0.08)]
     s2 = [(gpu_xs[2] + x, gpu_y + y) for x, y in s2_raw]
 
+    # Plain site circles with "S" label
     for sites in [s0, s1, s2]:
         for sx, sy in sites:
             ax.add_patch(plt.Circle((sx, sy), sr, fc=C["site"] + "15",
@@ -142,21 +142,23 @@ def main():
             ax.text(sx, sy, "S", ha="center", va="center",
                     fontsize=8, fontweight="bold", color=C["site"], zorder=5)
 
-    # Intra-GPU edges
+    edge_color = C["mpi"] + "70"
+
+    # Intra-GPU edges — only connect nearby sites within each GPU
     for edges, sites in [
         ([(0, 1), (0, 2), (1, 3), (2, 3), (3, 4)], s0),
-        ([(0, 1), (0, 2), (2, 3)], s1),
+        ([(0, 1), (0, 2), (2, 3), (3, 4)], s1),
         ([(0, 1), (0, 2), (1, 3), (2, 3)], s2),
     ]:
         for i, j in edges:
             ax.plot([sites[i][0], sites[j][0]], [sites[i][1], sites[j][1]],
-                    color=C["site"] + "40", lw=0.4, zorder=3)
+                    color=edge_color, lw=0.55, zorder=3)
 
-    # Cross-GPU edges
-    for sa, ia, sb, ib in [(s0, 1, s1, 0), (s0, 3, s1, 3),
-                            (s1, 2, s2, 0), (s1, 2, s2, 2)]:
+    # Cross-GPU edges — only right-edge of GPU_i to left-edge of GPU_{i+1}
+    for sa, ia, sb, ib in [(s0, 3, s1, 0), (s0, 4, s1, 2),
+                            (s1, 3, s2, 0), (s1, 4, s2, 2)]:
         ax.plot([sa[ia][0], sb[ib][0]], [sa[ia][1], sb[ib][1]],
-                color=C["site"] + "40", lw=0.4, zorder=3)
+                color=edge_color, lw=0.55, zorder=3)
 
     # MPI labels
     for i in range(2):
@@ -164,13 +166,20 @@ def main():
         ax.text(mx, gpu_y + gpu_h / 2, "MPI", ha="center", va="center",
                 fontsize=8, fontweight="bold", color=C["mpi"])
 
-    # "S = Site" explanation inline, inside GPU 1 box (right side)
-    note_x = gpu_xs[1] + 0.85
-    note_y = gpu_y + gpu_h / 2
-    ax.text(note_x, note_y,
-            "S = 1 site's\nentire ensemble",
-            ha="left", va="center", fontsize=8, fontstyle="italic",
-            color=C["site"] + "CC", linespacing=1.15)
+    # Callout OUTSIDE Level 2 box (left side), pointing into one GPU's site
+    callout_target = s0[0]  # top-left site of GPU 0
+    ax.annotate("site data\ncolocated",
+                xy=(callout_target[0] - sr * 0.6,
+                    callout_target[1]),
+                xytext=(L - 0.02, callout_target[1]),
+                ha="left", va="center",
+                fontsize=8, fontstyle="italic", fontweight="bold",
+                color=C["site"] + "DD",
+                arrowprops=dict(arrowstyle="->", color=C["site"] + "80",
+                                lw=0.6),
+                linespacing=1.1, zorder=7,
+                annotation_clip=False)
+
 
     # ==================================================================
     # "zoom into one GPU" arrow (Level 2 → Level 1)
