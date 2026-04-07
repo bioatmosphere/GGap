@@ -17,7 +17,7 @@ from matplotlib.patches import FancyBboxPatch
 import numpy as np
 
 FIG_W = 7.16
-FIG_H = 5.5
+FIG_H = 4.5
 
 C = dict(
     site="#C53030", gap="#C05621", tree="#2F855A",
@@ -55,7 +55,7 @@ def main():
     # LEFT PANEL (a)
     # ==================================================================
     ax.text((L + LR) / 2, FIG_H - 0.02, "Two-Level Parallelism",
-            ha="center", va="top", fontsize=9, fontweight="bold", color=C["text"])
+            ha="center", va="top", fontsize=8, fontweight="bold", color=C["text"])
 
     # ─────────────────────────────────────────
     # HPC label at top with angled lines down to Level 2 box
@@ -63,7 +63,7 @@ def main():
     hpc_label_y = FIG_H - 0.20
     hpc_cx = LEFT_CX
     ax.text(hpc_cx, hpc_label_y, "Exascale HPC System (e.g., Frontier)",
-            ha="center", va="center", fontsize=7, fontweight="bold",
+            ha="center", va="center", fontsize=8, fontweight="bold",
             color=C["hpc"],
             bbox=dict(boxstyle="round,pad=0.10", fc=C["hpc"] + "08",
                       ec=C["hpc"] + "40", lw=0.6))
@@ -71,19 +71,19 @@ def main():
     # Level 2 box (moved down to give HPC label space)
     l2_box_x = L
     l2_box_w = LR - L
-    l2_box_h = 2.05
-    l2_box_y = hpc_label_y - 0.20 - l2_box_h
+    l2_box_h = 1.55
+    l2_box_y = hpc_label_y - 0.18 - l2_box_h
 
     rbox(ax, l2_box_x, l2_box_y, l2_box_w, l2_box_h,
          C["mpi"] + "30", fc=C["mpi"] + "04", lw=0.5, rad=0.015, zo=0)
     ax.text(l2_box_x + l2_box_w / 2, l2_box_y + l2_box_h - 0.02,
             "Level 2: Inter-GPU Parallelism (MPI, 1 rank/GPU)",
-            ha="center", va="top", fontsize=7, fontweight="bold",
+            ha="center", va="top", fontsize=8, fontweight="bold",
             color=C["mpi"], zorder=1)
 
     # 3 GPU boxes inside
-    gpu_w = 1.20
-    gpu_h = 1.05
+    gpu_w = 1.10
+    gpu_h = 0.80
     gpu_gap_space = 0.18
     total_gpus_w = 3 * gpu_w + 2 * gpu_gap_space
     gx_start = LEFT_CX - total_gpus_w / 2
@@ -115,18 +115,18 @@ def main():
         rbox(ax, gx, gpu_y, gpu_w, gpu_h, C["mpi"], fc=C["gpu_bg"],
              lw=0.6, rad=0.015, zo=2)
         ax.text(gx + gpu_w / 2, gpu_y + gpu_h - 0.02, lab,
-                ha="center", va="top", fontsize=6, fontweight="bold",
+                ha="center", va="top", fontsize=8, fontweight="bold",
                 color=C["mpi"], zorder=3)
 
     # Site circles with "S"
-    sr = 0.10
-    s0_raw = [(0.28, 0.72), (0.58, 0.78), (0.32, 0.30),
-              (0.80, 0.58), (0.92, 0.24)]
+    sr = 0.085
+    s0_raw = [(0.24, 0.54), (0.52, 0.60), (0.28, 0.22),
+              (0.74, 0.44), (0.86, 0.18)]
     s0 = [(gpu_xs[0] + x, gpu_y + y) for x, y in s0_raw]
-    s1_raw = [(0.22, 0.76), (0.70, 0.82), (0.42, 0.36),
-              (0.96, 0.34), (0.26, 0.16)]
+    s1_raw = [(0.20, 0.58), (0.66, 0.62), (0.38, 0.28),
+              (0.90, 0.26), (0.24, 0.12)]
     s1 = [(gpu_xs[1] + x, gpu_y + y) for x, y in s1_raw]
-    s2_raw = [(0.34, 0.66), (0.78, 0.60), (0.48, 0.24), (0.90, 0.20)]
+    s2_raw = [(0.30, 0.50), (0.72, 0.46), (0.44, 0.18), (0.82, 0.14)]
     s2 = [(gpu_xs[2] + x, gpu_y + y) for x, y in s2_raw]
 
     for sites in [s0, s1, s2]:
@@ -134,7 +134,7 @@ def main():
             ax.add_patch(plt.Circle((sx, sy), sr, fc=C["site"] + "15",
                                     ec=C["site"], lw=0.45, zorder=4))
             ax.text(sx, sy, "S", ha="center", va="center",
-                    fontsize=6, fontweight="bold", color=C["site"], zorder=5)
+                    fontsize=8, fontweight="bold", color=C["site"], zorder=5)
 
     # Intra-GPU edges
     for edges, sites in [
@@ -156,13 +156,13 @@ def main():
     for i in range(2):
         mx = (gpu_xs[i] + gpu_w + gpu_xs[i + 1]) / 2
         ax.text(mx, gpu_y + gpu_h / 2, "MPI", ha="center", va="center",
-                fontsize=6, fontweight="bold", color=C["mpi"])
+                fontsize=8, fontweight="bold", color=C["mpi"])
 
     # Colocation note inside Level 2 box (just above bottom edge)
     coloc_y = l2_box_y + 0.025
     ax.text(l2_box_x + l2_box_w / 2, coloc_y,
-            "Each \u25cb = 1 site (site agent + 500 gaps + 500K trees, all colocated on the same GPU)",
-            ha="center", va="bottom", fontsize=6, fontstyle="italic",
+            "Each S = one site's entire ensemble",
+            ha="center", va="bottom", fontsize=8, fontstyle="italic",
             color=C["site"] + "CC")
 
     ey = l2_box_y - 0.03  # placeholder for arrow positioning
@@ -175,13 +175,13 @@ def main():
     # Level 1 box
     l1_box_x = L
     l1_box_w = LR - L
-    l1_box_h = 2.05
+    l1_box_h = 1.70
     l1_box_y = 0.04
     rbox(ax, l1_box_x, l1_box_y, l1_box_w, l1_box_h,
          C["thread"] + "30", fc=C["thread"] + "04", lw=0.5, rad=0.015, zo=0)
     ax.text(l1_box_x + l1_box_w / 2, l1_box_y + l1_box_h - 0.02,
             "Level 1: Intra-GPU Parallelism (Threads)",
-            ha="center", va="top", fontsize=7, fontweight="bold",
+            ha="center", va="top", fontsize=8, fontweight="bold",
             color=C["thread"], zorder=1)
 
     # Arrow from GPU 1 down to Level 1 box (short, between the two boxes)
@@ -192,12 +192,12 @@ def main():
                                 lw=0.8, ls="--"), zorder=2)
     ax.text(gpu1_cx + 0.10, (arr_start + arr_end) / 2,
             "zoom into one GPU", ha="left", va="center",
-            fontsize=6, fontstyle="italic", fontweight="bold",
+            fontsize=8, fontstyle="italic", fontweight="bold",
             color=C["mpi"])
 
     # === HORIZONTAL agent bar (well below the title) ===
-    bar_h = 0.18
-    bar_y = l1_box_y + l1_box_h - 0.50
+    bar_h = 0.15
+    bar_y = l1_box_y + l1_box_h - 0.44
     bar_left = gx_start
     bar_total_w = total_gpus_w
 
@@ -220,13 +220,13 @@ def main():
         # Always label
         if w >= site_w:
             ax.text(bx + w / 2, bar_y + bar_h / 2, label,
-                    ha="center", va="center", fontsize=6, fontweight="bold",
+                    ha="center", va="center", fontsize=8, fontweight="bold",
                     color=color, zorder=4)
         bx += w
 
     ax.text(bar_left + bar_total_w / 2, bar_y + bar_h + 0.025,
-            "All agents on one GPU  (N\u209b sites \u00d7 500 gaps/site \u00d7 1000 trees/gap)",
-            ha="center", va="bottom", fontsize=6, fontweight="bold",
+            "N\u209b sites \u00d7 500 gaps \u00d7 1000 trees per GPU",
+            ha="center", va="bottom", fontsize=8, fontweight="bold",
             color=C["thread"])
 
     # ──────────────────────────────────────────────────
@@ -236,8 +236,8 @@ def main():
     n_cu = 3
     cu_w_box = gpu_w
     cu_gap_x = gpu_gap_space
-    cu_y_top = bar_y - 0.30
-    cu_h_box = 0.78
+    cu_y_top = bar_y - 0.28
+    cu_h_box = 0.62
     cu_y_bot = cu_y_top - cu_h_box
     # Center the CU row, same as GPU row
     cu_total_w = 3 * cu_w_box + 2 * cu_gap_x
@@ -250,11 +250,11 @@ def main():
         rbox(ax, cx, cu_y_bot, cu_w_box, cu_h_box,
              C["cu"], fc=C["cu"] + "08", lw=0.6, rad=0.01, zo=3)
         ax.text(cx + 0.03, cu_y_top - 0.02, clab,
-                ha="left", va="top", fontsize=6, fontweight="bold",
+                ha="left", va="top", fontsize=8, fontweight="bold",
                 color=C["cu"], zorder=5)
         # "8 blocks/CU" label inside CU box, top-right corner
         ax.text(cx + cu_w_box - 0.03, cu_y_top - 0.02,
-                "8 blocks", ha="right", va="top", fontsize=6,
+                "8 blocks", ha="right", va="top", fontsize=8,
                 fontstyle="italic", color=C["cu"] + "AA", zorder=5)
 
         # 2 rows × 4 cols = 8 blocks
@@ -278,22 +278,21 @@ def main():
                      C["thread"] + "70", fc=C["thread"] + "10",
                      lw=0.3, rad=0.003, zo=4)
 
-                # Inside the FIRST block of CU 1 (middle, top-left block), draw thread cells
-                if ci == 1 and r == 0 and c == 0:
-                    n_thr_cols = 2
-                    n_thr_rows = 4
-                    tm = 0.005
-                    t_avail_w = blk_w - 2 * tm
-                    t_avail_h = blk_h - 2 * tm
-                    t_cw = (t_avail_w - (n_thr_cols - 1) * 0.001) / n_thr_cols
-                    t_ch = (t_avail_h - (n_thr_rows - 1) * 0.001) / n_thr_rows
-                    for tr in range(n_thr_rows):
-                        for tc in range(n_thr_cols):
-                            tx = bxx + tm + tc * (t_cw + 0.001)
-                            ty = byy + tm + (n_thr_rows - 1 - tr) * (t_ch + 0.001)
-                            rbox(ax, tx, ty, t_cw, t_ch,
-                                 C["thread"], fc=C["thread"] + "30",
-                                 lw=0.15, rad=0.001, zo=5)
+                # Draw 4x4 thread grid inside EVERY block of EVERY CU
+                n_thr_cols = 4
+                n_thr_rows = 4
+                tm = 0.003
+                t_avail_w = blk_w - 2 * tm
+                t_avail_h = blk_h - 2 * tm
+                t_cw = (t_avail_w - (n_thr_cols - 1) * 0.0008) / n_thr_cols
+                t_ch = (t_avail_h - (n_thr_rows - 1) * 0.0008) / n_thr_rows
+                for tr in range(n_thr_rows):
+                    for tc in range(n_thr_cols):
+                        tx = bxx + tm + tc * (t_cw + 0.0008)
+                        ty = byy + tm + (n_thr_rows - 1 - tr) * (t_ch + 0.0008)
+                        rbox(ax, tx, ty, t_cw, t_ch,
+                             C["thread"], fc=C["thread"] + "30",
+                             lw=0.1, rad=0.0005, zo=5)
 
     # Ellipsis between CU 1 and CU 109
     ell_cu_x = (cu_xs[1] + cu_w_box + cu_xs[2]) / 2
@@ -301,15 +300,6 @@ def main():
             ha="center", va="center", fontsize=14,
             color=C["cu"] + "70", zorder=4)
 
-    # Annotation pointing into the leftmost block of CU 1 (middle CU)
-    blk1_cx = cu_xs[1] + 0.04 + ((cu_w_box - 0.08) / 4) / 2
-    blk1_cy = cu_y_bot + 0.04 + (cu_h_box - 0.14) / 4
-    ax.annotate("128 threads/block",
-                xy=(blk1_cx + 0.05, blk1_cy + 0.06),
-                xytext=(blk1_cx + 0.30, blk1_cy + 0.18),
-                fontsize=6, fontstyle="italic", color=C["thread"],
-                arrowprops=dict(arrowstyle="-", color=C["thread"] + "70",
-                                lw=0.35), zorder=6)
 
     # === Vertical arrows from agent bar to each CU (6 per CU = 18 total) ===
     arrow_top = bar_y - 0.005
@@ -327,7 +317,7 @@ def main():
     # "1 agent = 1 thread" label centered between bar and CU row
     label_y = (arrow_top + arrow_bot) / 2
     ax.text(bar_left + bar_total_w / 2, label_y, "1 agent = 1 thread",
-            ha="center", va="center", fontsize=6, fontweight="bold",
+            ha="center", va="center", fontsize=8, fontweight="bold",
             color=C["thread"],
             bbox=dict(boxstyle="round,pad=0.15", fc="white",
                       ec=C["thread"] + "60", lw=0.4))
@@ -335,7 +325,7 @@ def main():
     # Total summary at bottom
     ax.text(bar_left + bar_total_w / 2, cu_y_bot - 0.10,
             "110 CUs \u00d7 8 blocks/CU \u00d7 128 threads/block = 112,640 concurrent threads",
-            ha="center", va="top", fontsize=6, fontweight="bold",
+            ha="center", va="top", fontsize=8, fontweight="bold",
             color=C["thread"])
 
     # ==================================================================
@@ -352,13 +342,13 @@ def main():
 
     ax.text((rp_l + rp_r) / 2, FIG_H - 0.02,
             "Fused Kernel per Tick",
-            ha="center", va="top", fontsize=9, fontweight="bold",
+            ha="center", va="top", fontsize=8, fontweight="bold",
             color=C["text"])
 
     # Tick header
     tick_y = FIG_H - 0.32
     ax.text(rp_l + 0.06, tick_y, "Tick T",
-            ha="left", va="center", fontsize=7, fontweight="bold",
+            ha="left", va="center", fontsize=8, fontweight="bold",
             color=C["text"],
             bbox=dict(boxstyle="round,pad=0.12", fc=C["barrier"] + "15",
                       ec=C["barrier"] + "60", lw=0.5))
@@ -372,23 +362,22 @@ def main():
     # "1 kernel launch" badge on the left side of the pipe box
     ax.text(rp_l - 0.02, (pipe_t + pipe_b) / 2,
             "1 kernel launch",
-            ha="center", va="center", fontsize=6, fontweight="bold",
+            ha="center", va="center", fontsize=8, fontweight="bold",
             color=C["barrier"], rotation=90,
             bbox=dict(boxstyle="round,pad=0.10", fc="white",
                       ec=C["barrier"] + "60", lw=0.4))
 
     priorities = [
-        ("P0",  "Gap",  "Aggregate litter & LAI"),
-        ("P1",  "Site", "Soil biogeochem (365d)"),
-        ("P2",  "Gap",  "Relay climate to gaps"),
-        ("P3",  "Tree", "Env. response, pot. growth"),
-        ("P4",  "Gap",  "Aggregate N demand"),
-        ("P5",  "Tree", "Seedbank, renewal"),
-        ("P6",  "Gap",  "Density-based recruit"),
-        ("P7",  "Tree", "N-limited growth, mort."),
-        ("P8",  "Gap",  "Aggregate N consumed"),
-        ("P9",  "Site", "Soil N balance, leaching"),
-        ("P10", "Site", "Seed dispersal (MPI)"),
+        ("P0", "Gap",  "Aggregate litter & LAI"),
+        ("P1", "Site", "Soil biogeochem (365d)"),
+        ("P2", "Gap",  "Relay climate to gaps"),
+        ("P3", "Tree", "Env. response, pot. growth"),
+        ("P4", "Gap",  "Aggregate N demand"),
+        ("P5", "Tree", "Seedbank, renewal"),
+        ("P6", "Gap",  "Density-based recruit"),
+        ("P7", "Tree", "N-limited growth, mort."),
+        ("P8", "Gap",  "Aggregate N consumed"),
+        ("P9", "Site", "N balance + seed dispersal"),
     ]
     bc = {"Gap": C["gap"], "Tree": C["tree"], "Site": C["site"]}
 
@@ -404,10 +393,10 @@ def main():
         rbox(ax, px, ry - badge_h / 2, badge_w, badge_h, color, fc=color,
              lw=0, rad=0.012, zo=4)
         ax.text(px + badge_w / 2, ry, pnum, ha="center", va="center",
-                fontsize=6, fontweight="bold", color="white", zorder=5)
+                fontsize=8, fontweight="bold", color="white", zorder=5)
         dx = px + badge_w + 0.06
         ax.text(dx, ry, desc, ha="left", va="center",
-                fontsize=6, color=C["text"] + "CC", zorder=4)
+                fontsize=8, color=C["text"] + "CC", zorder=4)
         if i < n - 1:
             # Down arrow from this priority badge to the next priority badge
             arrow_top_y = ry - badge_h / 2 - 0.008
@@ -437,13 +426,13 @@ def main():
     # "Tick T+1" label on the curve
     ax.text(return_x + 0.20, (return_top_y + return_bot_y) / 2,
             "Tick\nT+1", ha="left", va="center",
-            fontsize=6, fontweight="bold", color=C["barrier"],
+            fontsize=8, fontweight="bold", color=C["barrier"],
             linespacing=1.1)
 
     # Bottom annotation
     ax.text(rp_l + pipe_w / 2, pipe_b - 0.04,
             "\u2193 = grid barrier (on-device, no CPU sync)",
-            ha="center", va="top", fontsize=6, fontstyle="italic",
+            ha="center", va="top", fontsize=8, fontstyle="italic",
             color=C["barrier"])
 
     # ==================================================================
