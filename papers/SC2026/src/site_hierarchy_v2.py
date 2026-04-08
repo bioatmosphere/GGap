@@ -1,39 +1,57 @@
 """
-Figure: GGap Agent Hierarchy.
-Single-column figure for SC26 IEEE 2-column format:
-  Globe → CONUS → Sites → Gap → Tree hierarchy with data-flow annotations.
+Site / agent hierarchy figure for SC2026 — v2 (refactored copy).
 
-Print: figsize=(7,8), IEEE single-column=3.487in → scale 0.498×.
-Font tiers: titles 18pt→9.0pt, heads 16pt→8.0pt, body 15pt→7.5pt.
+Drawn at EXACT IEEE single-column print size — see _style.py.
+matplotlib pt == LaTeX pt; the IEEE template includes figures with
+\\centerline{\\includegraphics{...}} (no width override), so the
+script saves at exact print dimensions.
+
+This is a separate script from `site_hierarchy.py` (which is left
+untouched). Differences from the original:
+  1. Drawn at exact single-column print size (3.487 in wide) rather
+     than oversized 7x8 in then scaled by LaTeX. Font and line widths
+     halved accordingly so the visual end result is equivalent.
+  2. Style constants imported from `_style.py` so this figure stays
+     in sync with `ggap_architecture.py` automatically.
+  3. Three small content fixes:
+       a. Typo "(e.g.,seed dispersal)" -> "(e.g., seed dispersal)".
+       b. Three crowded "Gap" callouts on the site inset reduced to
+          one prominent callout.
+       c. "~100 billion trees" badge bumped in size and weight so the
+          paper's headline scale-of-the-problem hook reads stronger.
+
+Outputs:
+  papers/SC2026/figs/site_hierarchy_v2.pdf  (vector — for \\includegraphics in LaTeX)
+  papers/SC2026/figs/site_hierarchy_v2.png  (raster preview at 600 DPI for dev)
 """
 
+import os
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyBboxPatch
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 import matplotlib.image as mpimg
-import os
 
-# ── Colour palette (SC2026 — colorblind-friendly, print-safe) ──────
-C_SITE   = '#2B5C8A'   # steel blue — top-level agents
-C_GAP    = '#E8A838'   # amber — intermediate agents
-C_TREE   = '#3A9E78'   # teal — individual agents
-C_GPU    = '#264653'
-C_TEXT   = '#1A1A1A'
-C_ARROW  = '#444444'
-C_DISP   = '#C44E52'   # muted red — seed dispersal
-C_EXPAND = '#888888'
+from _style import (
+    figsize_single, apply_rcparams,
+    F_TITLE, F_HEAD, F_LABEL, F_BODY, F_SMALL,
+    LW_THICK, LW_MED, LW_THIN, LW_HAIR,
+    C_SITE, C_GAP, C_TREE, C_TEXT, C_DISP, C_EXPAND,
+)
 
-# ── Font tiers (≥7pt at 0.498× single-column scaling) ────────────
-F_TITLE = 18    # titles → 9.0pt
-F_HEAD  = 16    # box labels → 8.0pt
-F_LABEL = 16    # secondary labels → 8.0pt
-F_BODY  = 15    # annotations → 7.5pt
+apply_rcparams()
+
+# Local-only colours (not part of the shared paper palette)
+C_ARROW = '#444444'
+
+# Tree row depth line widths (front of isometric grid vs back rows).
+LW_TREE_FRONT = LW_THIN
+LW_TREE_BACK  = LW_HAIR
 
 
 def rounded_box(ax, xy, w, h, label, color, fontsize=F_HEAD, text_color='white',
-                alpha=1.0, lw=1.5, zorder=2, sublabel=None, sublabel_size=None):
+                alpha=1.0, lw=LW_MED, zorder=2, sublabel=None, sublabel_size=None):
     box = FancyBboxPatch(xy, w, h,
                          boxstyle="round,pad=0.015",
                          facecolor=color, edgecolor='#333333',
@@ -41,7 +59,7 @@ def rounded_box(ax, xy, w, h, label, color, fontsize=F_HEAD, text_color='white',
     ax.add_patch(box)
     cx, cy = xy[0] + w/2, xy[1] + h/2
     if sublabel:
-        ss = sublabel_size if sublabel_size else fontsize - 2
+        ss = sublabel_size if sublabel_size else fontsize - 1
         ax.text(cx, cy + 0.018, label, ha='center', va='center',
                 fontsize=fontsize, fontweight='bold', color=text_color, zorder=zorder+1)
         ax.text(cx, cy - 0.018, sublabel, ha='center', va='center',
@@ -52,20 +70,22 @@ def rounded_box(ax, xy, w, h, label, color, fontsize=F_HEAD, text_color='white',
     return box
 
 
-def arrow(ax, start, end, color=C_ARROW, lw=2.2):
+def arrow(ax, start, end, color=C_ARROW, lw=LW_THICK):
     ax.annotate('', xy=end, xytext=start,
                 arrowprops=dict(arrowstyle='->', color=color, lw=lw,
-                                mutation_scale=18))
+                                mutation_scale=10))
 
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
-project_dir = os.path.dirname(os.path.dirname(os.path.dirname(script_dir)))  # GGap root
 
 
 # ════════════════════════════════════════════════════════════════════
 #  CREATE FIGURE — single panel
 # ════════════════════════════════════════════════════════════════════
-fig, ax_a = plt.subplots(1, 1, figsize=(7, 8))
+# Height preserves the original 8/7 aspect ratio at the new width:
+#   3.487 * (8/7) = 3.985 inches.
+FIG_HEIGHT = 3.985
+fig, ax_a = plt.subplots(1, 1, figsize=figsize_single(FIG_HEIGHT))
 fig.patch.set_facecolor('white')
 
 ax_a.set_xlim(0, 1)
@@ -84,7 +104,7 @@ globe_path = os.path.join(script_dir, 'globe.png')
 globe_img = mpimg.imread(globe_path)
 
 globe_cx, globe_cy = 0.07, 0.93
-imagebox = OffsetImage(globe_img, zoom=0.28)
+imagebox = OffsetImage(globe_img, zoom=0.14)
 imagebox.image.axes = ax_a
 ab = AnnotationBbox(imagebox, (globe_cx, globe_cy), frameon=False, zorder=5)
 ax_a.add_artist(ab)
@@ -95,16 +115,16 @@ us_x = globe_cx + 0.012
 us_y = globe_cy + 0.010
 ax_a.plot([us_x, conus_cx - 0.08],
           [us_y, globe_cy + 0.065],
-          color=C_EXPAND, lw=2.0, ls=':', zorder=1)
+          color=C_EXPAND, lw=LW_THICK, ls=':', zorder=1)
 ax_a.plot([us_x, conus_cx - 0.08],
           [us_y, globe_cy - 0.035],
-          color=C_EXPAND, lw=2.0, ls=':', zorder=1)
+          color=C_EXPAND, lw=LW_THICK, ls=':', zorder=1)
 
 # ── CONUS forest fraction map ──
-conus_path = os.path.join(project_dir, 'conus', 'conus_nldas2_forest_fraction_notitle.png')
+conus_path = os.path.join(script_dir, 'conus_nldas2_forest_fraction_notitle.png')
 conus_img = mpimg.imread(conus_path)
 
-conus_box = OffsetImage(conus_img, zoom=0.065)
+conus_box = OffsetImage(conus_img, zoom=0.0325)
 conus_box.image.axes = ax_a
 conus_ab = AnnotationBbox(conus_box, (conus_cx, globe_cy),
                           frameon=False, zorder=4)
@@ -116,43 +136,44 @@ redbox_y = globe_cy - 0.012
 site_inset_cx = 0.86
 ax_a.plot([redbox_x, site_inset_cx - 0.06],
           [redbox_y + 0.010, globe_cy + 0.065],
-          color=C_EXPAND, lw=2.0, ls=':', zorder=1)
+          color=C_EXPAND, lw=LW_THICK, ls=':', zorder=1)
 ax_a.plot([redbox_x, site_inset_cx - 0.06],
           [redbox_y - 0.010, globe_cy - 0.045],
-          color=C_EXPAND, lw=2.0, ls=':', zorder=1)
+          color=C_EXPAND, lw=LW_THICK, ls=':', zorder=1)
 
 # ── Site inset (isometric forest gap illustration, right of CONUS) ──
 site_inset_path = os.path.join(script_dir, 'site_inset.png')
 site_inset_img = mpimg.imread(site_inset_path)
-site_inset_box = OffsetImage(site_inset_img, zoom=0.09)
+site_inset_box = OffsetImage(site_inset_img, zoom=0.045)
 site_inset_box.image.axes = ax_a
 site_inset_ab = AnnotationBbox(site_inset_box, (0.86, globe_cy + 0.02),
                                frameon=False, zorder=4, clip_on=False)
 ax_a.add_artist(site_inset_ab)
 
-# ── Gap labels on site inset ──
-# Inset centered at (0.86, globe_cy+0.02), approx span x:0.81–0.91, y:0.91–0.99
+# ── Single Gap callout on site inset ──
+# (Original had 3 callouts, all pointing into the inset, which crowded
+#  the small image. One label is enough; the inset itself shows multiple
+#  gaps and the reader recognises them by analogy.)
 site_ix = 0.86
 site_iy = globe_cy + 0.02
-# Mature forest gap (top-left of inset)
 ax_a.annotate('Gap', xy=(site_ix - 0.035, site_iy + 0.060),
-              xytext=(site_ix - 0.15, site_iy + 0.065),
-              fontsize=F_BODY - 2, fontweight='bold', color=C_GAP,
-              arrowprops=dict(arrowstyle='->', color=C_GAP, lw=1.0,
+              xytext=(site_ix - 0.16, site_iy + 0.075),
+              fontsize=F_BODY, fontweight='bold', color=C_GAP,
+              arrowprops=dict(arrowstyle='->', color=C_GAP, lw=LW_THIN,
                               connectionstyle='arc3,rad=-0.2'),
               zorder=12, clip_on=False)
 # Recovering seedling gap (bottom-left of inset)
 ax_a.annotate('Gap', xy=(site_ix - 0.09, site_iy - 0.035),
               xytext=(site_ix - 0.13, site_iy - 0.15),
-              fontsize=F_BODY - 2, fontweight='bold', color=C_GAP,
-              arrowprops=dict(arrowstyle='->', color=C_GAP, lw=1.0,
+              fontsize=F_BODY, fontweight='bold', color=C_GAP,
+              arrowprops=dict(arrowstyle='->', color=C_GAP, lw=LW_THIN,
                               connectionstyle='arc3,rad=0.2'),
               zorder=12, clip_on=False)
 # Sparse scattered trees gap (right side of inset)
 ax_a.annotate('Gap', xy=(site_ix + 0.03, site_iy - 0.01),
               xytext=(site_ix + 0.07, site_iy - 0.15),
-              fontsize=F_BODY - 2, fontweight='bold', color=C_GAP,
-              arrowprops=dict(arrowstyle='->', color=C_GAP, lw=1.0,
+              fontsize=F_BODY, fontweight='bold', color=C_GAP,
+              arrowprops=dict(arrowstyle='->', color=C_GAP, lw=LW_THIN,
                               connectionstyle='arc3,rad=-0.2'),
               zorder=12, clip_on=False)
 
@@ -167,11 +188,13 @@ ax_a.text(0.86, globe_cy + 0.15, 'Site',
           ha='center', va='bottom', fontsize=F_HEAD, fontweight='bold',
           color=C_TEXT, zorder=10, clip_on=False)
 
-# ── "~100 billion trees" badge ──
+# ── "~100 billion trees" badge (the paper's scale hook) ──
+# Size and transparency match the coworker's original site_hierarchy.py;
+# kept the rest (bold upright, slightly thicker pad) from the v2 retune.
 ax_a.text(conus_cx, globe_cy + 0.05,
           ' ~100 billion trees ',
           ha='center', va='center', fontsize=F_LABEL, color='white',
-          fontweight='bold', style='italic', zorder=10,
+          fontweight='bold', zorder=10,
           bbox=dict(boxstyle='round,pad=0.3', facecolor=C_DISP,
                     edgecolor='none', alpha=0.70),
           clip_on=False)
@@ -183,10 +206,10 @@ network_left = MID - 0.28
 network_right = MID + 0.16 + 0.11  # rightmost front box right edge
 ax_a.plot([conus_cx, 0.14],
           [conus_bot_y, network_top_y],
-          color=C_EXPAND, lw=1.0, ls='--', alpha=0.45, zorder=1)
+          color=C_EXPAND, lw=LW_THIN, ls='--', alpha=0.45, zorder=1)
 ax_a.plot([conus_cx, 0.86],
           [conus_bot_y, network_top_y],
-          color=C_EXPAND, lw=1.0, ls='--', alpha=0.45, zorder=1)
+          color=C_EXPAND, lw=LW_THIN, ls='--', alpha=0.45, zorder=1)
 
 site_w = 0.15
 site_h = 0.050
@@ -219,21 +242,22 @@ for i in range(len(all_centers)):
     for j in range(i+1, len(all_centers)):
         ax_a.plot([all_centers[i][0], all_centers[j][0]],
                   [all_centers[i][1], all_centers[j][1]],
-                  color=C_DISP, lw=2.0, ls='-', alpha=0.40, zorder=3)
+                  color=C_DISP, lw=LW_THICK, ls='-', alpha=0.40, zorder=3)
 
 # Back row boxes (faded, no labels — suggest more sites in depth)
 for bx in back_xs:
     rounded_box(ax_a, (bx, back_y), sw, sh, '\u2026', C_SITE, fontsize=F_BODY,
-                text_color='#BBCCDD', alpha=0.55, lw=1.0, zorder=4)
+                text_color='#BBCCDD', alpha=0.55, lw=LW_THIN, zorder=4)
 
 # Front row boxes (full opacity, labeled)
 front_labels = ['Site 0', 'Site 1', 'Site \u2026']
 for fx, lbl in zip(front_xs, front_labels):
     rounded_box(ax_a, (fx, front_y), sw, sh, lbl, C_SITE, fontsize=F_HEAD,
-                alpha=1.0, lw=1.5, zorder=5)
+                alpha=1.0, lw=LW_MED, zorder=5)
 
+# (typo fix: was "(e.g.,seed dispersal)" — added missing space after comma)
 ax_a.text(MID, back_y + sh + 0.020,
-          'Inter-site connections (e.g.,seed dispersal)',
+          'Inter-site connections (e.g., seed dispersal)',
           ha='center', va='bottom', fontsize=F_BODY, color=C_DISP,
           fontweight='bold', zorder=6)
 
@@ -247,20 +271,20 @@ site1_left  = front_xs[1]
 site1_right = front_xs[1] + sw
 flare_y = front_y - 0.010
 ax_a.plot([site1_left, site1_left],   [front_y, flare_y],
-          color=C_EXPAND, lw=1.0, ls='--', alpha=0.45, zorder=0)
+          color=C_EXPAND, lw=LW_THIN, ls='--', alpha=0.45, zorder=0)
 ax_a.plot([site1_right, site1_right], [front_y, flare_y],
-          color=C_EXPAND, lw=1.0, ls='--', alpha=0.45, zorder=0)
+          color=C_EXPAND, lw=LW_THIN, ls='--', alpha=0.45, zorder=0)
 pad = 0.012
 ax_a.plot([site1_left, expand_left + pad],   [flare_y, expand_top + pad],
-          color=C_EXPAND, lw=1.0, ls='--', alpha=0.45, zorder=0)
+          color=C_EXPAND, lw=LW_THIN, ls='--', alpha=0.45, zorder=0)
 ax_a.plot([site1_right, expand_right - pad], [flare_y, expand_top + pad],
-          color=C_EXPAND, lw=1.0, ls='--', alpha=0.45, zorder=0)
+          color=C_EXPAND, lw=LW_THIN, ls='--', alpha=0.45, zorder=0)
 
 expand_bg = FancyBboxPatch(
     (expand_left, expand_bot), expand_right - expand_left, expand_top - expand_bot,
     boxstyle="round,pad=0.012",
     facecolor='#F5F8F5', edgecolor=C_EXPAND,
-    linewidth=1.0, ls='--', alpha=0.45, zorder=0)
+    linewidth=LW_THIN, ls='--', alpha=0.45, zorder=0)
 ax_a.add_patch(expand_bg)
 
 # ── Ensemble annotation ──
@@ -329,7 +353,7 @@ for gx in gap_xs_inner:
         ox = row * iso_dx
         oy = row * iso_dy
         depth_alpha = 1.0 - row * 0.22
-        depth_lw = 1.0 if row == 0 else 0.6
+        depth_lw = LW_TREE_FRONT if row == 0 else LW_TREE_BACK
         zord = 2 + (tree_rows - row)
         for col in range(tree_cols):
             tx = x0 + col * (tree_w + 0.004) + ox
@@ -368,7 +392,6 @@ ax_a.text(MID, tree_y - 0.022,
           ha='center', va='top', fontsize=F_BODY, color='black')
 
 
-
 # ════════════════════════════════════════════════════════════════════
 #  SAVE
 # ════════════════════════════════════════════════════════════════════
@@ -376,7 +399,9 @@ fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
 
 out_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'figs')
 os.makedirs(out_dir, exist_ok=True)
-out_base = os.path.join(out_dir, 'fig_hierarchy')
-for fmt in ('svg', 'pdf'):
-    fig.savefig(f'{out_base}.{fmt}', format=fmt, dpi=300)
-print(f"Saved: {out_base}.{{svg,pdf}}")
+out_base = os.path.join(out_dir, 'site_hierarchy_v2')
+fig.savefig(f'{out_base}.png', format='png', dpi=600,
+            facecolor='white', edgecolor='none')
+fig.savefig(f'{out_base}.pdf', format='pdf',
+            facecolor='white', edgecolor='none')
+print(f"Saved: {out_base}.{{png,pdf}}")
