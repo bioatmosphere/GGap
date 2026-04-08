@@ -58,7 +58,7 @@ def plot(g_rep, avg, out_pdf, out_png, dpi):
                     arrowprops=dict(arrowstyle="->", color="red", lw=0.7))
 
     ax.set_xlabel("Simulation Length (ticks)", fontsize=FONT_LABEL)
-    ax.set_ylabel("Setup Fraction of Total Wall Time (%)", fontsize=FONT_LABEL)
+    ax.set_ylabel("Setup % of Wall Time", fontsize=FONT_LABEL)
     ax.set_ylim([0, 100])
     # Legend at upper-right: in the right half the curve is well below
     # 70%, so the legend sits in clear space at the top of the plot.

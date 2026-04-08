@@ -20,9 +20,15 @@ import numpy as np
 
 # Default standalone subfigure size. LaTeX subfigure environments will scale
 # these to fit a column or half-column slot; this size keeps text readable
-# both as the original PDF and after scaling.
+# both as the original PDF and after scaling. Height tightened in two
+# steps: 2.6 → 2.0 → 1.8 in to reduce visual weight on the page when 2
+# panels are paired in a stacked single-column \begin{figure} layout. The
+# 1.8 in floor is the practical minimum at FONT_LABEL = 6 pt: the rotated
+# y-axis label "Speedup vs. 8-GPU baseline" (~1.26 in tall at 6 pt) just
+# fits in the plot interior (~1.4 in after x-axis margins). Going below
+# 1.8 in would clip the y-axis label.
 FIG_W = 3.3   # inches
-FIG_H = 2.6   # inches
+FIG_H = 1.8   # inches (was 2.0, originally 2.6)
 
 # Wider variant for stacked-bar breakdown plots that need legend space.
 FIG_W_WIDE = 4.0
@@ -44,10 +50,15 @@ COLOR_XRANK  = "#FB8C00"   # orange — cross-rank fraction overlay
 # Shared font sizes (IEEE single-column figures, ~3.5" wide)
 # ============================================================================
 # Centralized so weak and strong scaling plots stay visually identical.
-FONT_LABEL = 8   # x/y axis labels
-FONT_TICK  = 7   # x/y tick labels
-FONT_LEG   = 7   # legend text
-FONT_PILL  = 8   # in-plot annotation pill (e.g., "sustained ≈ 41 ms/tick")
+# All set to 6 pt — the IEEE conference figure floor — so the rotated
+# y-axis labels (e.g. "Speedup vs. 8-GPU baseline") fit cleanly inside
+# the new compact FIG_H = 2.0 in plot height without overflowing the top
+# edge, and so labels / ticks / legends / annotations all share one
+# consistent visual weight across the figure pair.
+FONT_LABEL = 6   # x/y axis labels
+FONT_TICK  = 6   # x/y tick labels
+FONT_LEG   = 6   # legend text
+FONT_PILL  = 6   # in-plot annotation pill (e.g., "sustained ≈ 41 ms/tick")
 FONT_ANNOT = 6   # smaller annotations (e.g., per-bar efficiency labels)
 
 # Ideal-reference line styling (dashed slate-gray, used by both weak and
@@ -94,9 +105,6 @@ PHASE_COLORS = {
 }
 
 # Expected GPU counts per the experiment design (used to mark missing rows).
-# Weak B targets 8-2048 GPUs (matching Weak A); 256/512/1024/2048 are queued and
-# will fill in as those runs land.
-EXPECTED_WEAK_B = [8, 16, 32, 64, 128, 256, 512, 1024, 2048]
 EXPECTED_STRONG = [8, 16, 32, 64, 128, 256, 512]
 
 
@@ -255,8 +263,14 @@ def setup_log2_xaxis(ax, expected_gpus, label="Number of GPUs", rotation=45):
 
 
 def save_figure(fig, out_pdf, out_png, dpi):
-    """Save the figure as PNG only (PDF skipped during dev to reduce noise)."""
+    """Save the figure as PNG (white bg, for dev preview) and PDF (transparent
+    bg, for LaTeX inclusion).
+
+    Transparent PDF lets LaTeX subfigure layouts blend cleanly with the page
+    background regardless of any document-level coloring.
+    """
     fig.savefig(out_png, dpi=dpi, bbox_inches="tight")
+    fig.savefig(out_pdf, format="pdf", bbox_inches="tight", transparent=True)
 
 
 def add_cli_args(parser, plot_name):

@@ -10,9 +10,11 @@ experiment. Combines what used to be two separate plots (speedup and efficiency
     count visually IS the parallel-efficiency loss.
   - Right Y-axis (linear, 0-100%): cross-rank edge fraction (orange). Climbs
     from 1.2% to 75% as the per-GPU partition shrinks.
-  - In-plot annotation: "12.4× speedup, 19.3% efficiency at 512 GPUs" so the
-    headline numbers are visible without needing the reader to mentally divide
-    measured/ideal.
+
+The colored y-axis labels (green left, orange right) carry the
+line-color → metric mapping directly, so the figure does not draw a
+legend or in-plot text annotation — headline numbers (peak speedup,
+peak efficiency, cross-rank range) live in the LaTeX caption instead.
 
 This single plot replaces the previous pair `strong_scaling_speedup` (just
 speedup) + `strong_scaling_efficiency` (efficiency + cross-rank) — they were
@@ -29,7 +31,7 @@ import numpy as np
 
 from _scaling_common import (
     FIG_W, FIG_H, COLOR_STRONG, COLOR_IDEAL, COLOR_XRANK, EXPECTED_STRONG,
-    FONT_LABEL, FONT_TICK, FONT_LEG, FONT_PILL, IDEAL_LW,
+    FONT_LABEL, FONT_TICK, IDEAL_LW,
     read_csv, derive_metrics, cross_rank_pct, get_default_paths,
     setup_log2_xaxis, save_figure, add_cli_args,
 )
@@ -67,31 +69,11 @@ def plot(gpus, avg, metrics, out_pdf, out_png, dpi):
     ax2.tick_params(axis="y", labelsize=FONT_TICK, labelcolor=COLOR_XRANK)
     ax2.set_ylim([0, 100])
 
-    # Combined legend, placed ABOVE the axes box so the entire plot interior is
-    # free for the speedup curves and the headline annotation pill.
-    # Ideal first to match the weak-scaling plots' legend order.
-    lines = [line_ideal, line_measured, line_xrank]
-    ax.legend(lines, [l.get_label() for l in lines],
-              fontsize=FONT_LEG, loc="lower center", bbox_to_anchor=(0.5, 1.02),
-              ncol=3, framealpha=0.9, columnspacing=0.8, handletextpad=0.4)
-
-    # In-plot annotation pill: headline numbers at the largest GPU count.
-    # Placed in the TOP-LEFT corner inside the plot. The upper-left area is
-    # empty because the measured speedup at small x is at low y, the ideal
-    # line at small x is also at low y, and the cross-rank line at small x
-    # is near the bottom — so the upper-left wedge has no curves.
-    peak = gpus[-1]
-    peak_speedup = metrics[peak]["speedup"]
-    peak_eff = metrics[peak]["efficiency"]
-    ax.text(
-        0.025, 0.96,
-        f"{peak_speedup:.1f}× speedup\n{peak_eff:.1f}% efficiency at {peak} GPUs",
-        transform=ax.transAxes,
-        ha="left", va="top",
-        fontsize=FONT_PILL,
-        color="#1A202C",
-        zorder=6,
-    )
+    # No legend, no in-plot annotation: the colored y-axis labels (green
+    # left = "Speedup vs. 8-GPU baseline", orange right = "Cross-rank
+    # edges (%)") carry the line-color → metric mapping, and headline
+    # numbers (12.4× speedup, 19.3% efficiency at 512 GPUs, cross-rank
+    # 1.2% → 75%) live in the LaTeX caption.
 
     plt.tight_layout()
     save_figure(fig, out_pdf, out_png, dpi)

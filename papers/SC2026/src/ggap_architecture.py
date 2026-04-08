@@ -45,7 +45,7 @@ apply_rcparams()
 FIGS_DIR = Path(__file__).resolve().parent.parent / "figs"
 
 FIG_W = COL_DOUBLE
-FIG_H = 3.8                          # content-driven height (see plan)
+FIG_H = 3.0                          # content-driven height (see plan)
 FIG_SIZE = figsize_double(FIG_H)
 
 # Local-only colour: pale GPU box background — internal to this figure,
@@ -77,35 +77,32 @@ def main():
 
     # ==================================================================
     # HPC SYSTEM LABEL (top) — in-figure title removed; use LaTeX \caption.
-    # Promoted from F_BODY italic gray to a larger bold dark "section
-    # header" so it reads as the figure's conceptual subtitle, paralleling
-    # the "Multi-priority kernel pipeline" header below.
+    # Bold dark "section header" reads as the figure's conceptual
+    # subtitle, paralleling the "Multi-priority kernel pipeline" header
+    # below.
     # ==================================================================
-    hpc_label_y = FIG_H - 0.13
+    hpc_label_y = FIG_H - 0.12
     ax.text(CX, hpc_label_y, "Two-level parallelism on an Exascale HPC system",
-            ha="center", va="center", fontsize=10.5, fontweight="bold",
+            ha="center", va="center", fontsize=6, fontweight="bold",
             color=C_TEXT)
 
     # ==================================================================
     # LAYOUT COMPUTATION (top-down from HPC label)
     # ==================================================================
     # Level 2: Inter-GPU (directly below HPC label with small gap)
-    l2_box_h = 1.00
-    l2_box_top = hpc_label_y - 0.14
+    l2_box_h = 0.78
+    l2_box_top = hpc_label_y - 0.12
     l2_box_y = l2_box_top - l2_box_h
 
     # Level 1: Intra-GPU (below Level 2 with gap for "zoom" arrow).
-    # Shrunk from 1.20 to 1.00 to give the freed 0.20 to the fused-kernel
-    # priority strip below — the CU detail in here is conceptual schematic.
-    l1_box_h = 1.00
-    l1_box_top = l2_box_y - 0.18
+    l1_box_h = 0.78
+    l1_box_top = l2_box_y - 0.15
     l1_box_y = l1_box_top - l1_box_h
 
-    # Fused kernel strip (below Level 1 with gap for "per tick" arrow).
-    # Gap widened from 0.18 to 0.30 to give the bold "Multi-priority kernel
-    # pipeline" header room to breathe between the meta-box and the FK box.
-    fk_box_h = 1.00
-    fk_box_top = l1_box_y - 0.30
+    # Fused kernel strip (below Level 1 with gap for the bold
+    # "Multi-priority kernel pipeline" header to breathe.
+    fk_box_h = 0.78
+    fk_box_top = l1_box_y - 0.22
     fk_box_y = fk_box_top - fk_box_h
 
     # ==================================================================
@@ -122,25 +119,25 @@ def main():
          C_HPC, fc=C_HPC + "06", lw=LW_THICK, rad=0.02, zo=0)
     ax.text(L + l2_box_w / 2, l2_box_y + l2_box_h - 0.02,
             "Level 1: Inter-rank MPI \u2014 site's ensemble colocated (1 rank/GPU)",
-            ha="center", va="top", fontsize=F_TITLE, fontweight="bold",
+            ha="center", va="top", fontsize=6, fontweight="bold",
             color=C_MPI, zorder=1)
 
     # 3 GPU boxes inside
     gpu_w = 1.70
-    gpu_h = 0.54
+    gpu_h = 0.50
     gpu_gap_space = 0.28
     total_gpus_w = 3 * gpu_w + 2 * gpu_gap_space
     gx_start = CX - total_gpus_w / 2
-    content_top = l2_box_y + l2_box_h - 0.14
-    content_bot = l2_box_y + 0.14
+    content_top = l2_box_y + l2_box_h - 0.10
+    content_bot = l2_box_y + 0.10
     gpu_y = (content_top + content_bot) / 2 - gpu_h / 2
     gpu_xs = [gx_start + i * (gpu_w + gpu_gap_space) for i in range(3)]
 
     for gx, lab in zip(gpu_xs, ["GPU 0", "GPU 1", "GPU N"]):
         rbox(ax, gx, gpu_y, gpu_w, gpu_h, C_MPI, fc=C_GPU_BG,
              lw=LW_MED, rad=0.015, zo=2)
-        ax.text(gx + gpu_w / 2, gpu_y + gpu_h - 0.03, lab,
-                ha="center", va="top", fontsize=F_HEAD, fontweight="bold",
+        ax.text(gx + gpu_w / 2, gpu_y + gpu_h - 0.025, lab,
+                ha="center", va="top", fontsize=6, fontweight="bold",
                 color=C_MPI, zorder=3)
 
     # Box 1 bottom descriptor: per-site agent structure that gets colocated.
@@ -148,22 +145,23 @@ def main():
     # Counts shown as illustrative examples ("e.g.") — actual experiments vary.
     # White bbox + high zorder so the descriptor visually masks the
     # "zoom into one GPU" arrow that passes through this region.
-    ax.text(L + l2_box_w / 2, l2_box_y + 0.07,
+    ax.text(L + l2_box_w / 2, l2_box_y + 0.05,
             "Per colocated site: 1 site agent + gap agents (e.g. 500/site) "
             "+ tree agents (e.g. 1000/gap)",
-            ha="center", va="center", fontsize=F_BODY, fontstyle="italic",
+            ha="center", va="center", fontsize=6, fontstyle="italic",
             color=C_MPI, zorder=5,
             bbox=dict(facecolor="white", edgecolor="none", pad=1))
 
-    # Site circles (labeled "S" inside)
-    sr = 0.078
-    s0_raw = [(0.28, 0.28), (0.70, 0.30), (0.34, 0.10),
-              (1.02, 0.22), (1.24, 0.09)]
+    # Site circles (labeled "S" inside). Coords scaled by 0.92x in y to
+    # fit gpu_h = 0.50 (originally 0.54); sr fits the 6 pt "S" label.
+    sr = 0.065
+    s0_raw = [(0.28, 0.258), (0.70, 0.276), (0.34, 0.092),
+              (1.02, 0.202), (1.24, 0.083)]
     s0 = [(gpu_xs[0] + x, gpu_y + y) for x, y in s0_raw]
-    s1_raw = [(0.24, 0.30), (0.68, 0.32), (0.46, 0.12),
-              (1.04, 0.26), (1.24, 0.10)]
+    s1_raw = [(0.24, 0.276), (0.68, 0.294), (0.46, 0.110),
+              (1.04, 0.239), (1.24, 0.092)]
     s1 = [(gpu_xs[1] + x, gpu_y + y) for x, y in s1_raw]
-    s2_raw = [(0.36, 0.26), (1.00, 0.22), (0.58, 0.08), (1.18, 0.08)]
+    s2_raw = [(0.36, 0.239), (1.00, 0.202), (0.58, 0.074), (1.18, 0.074)]
     s2 = [(gpu_xs[2] + x, gpu_y + y) for x, y in s2_raw]
 
     # Plain site circles with "S" label
@@ -172,7 +170,7 @@ def main():
             ax.add_patch(plt.Circle((sx, sy), sr, fc=C_SITE,
                                     ec=C_SITE, lw=LW_THIN, zorder=4))
             ax.text(sx, sy, "S", ha="center", va="center",
-                    fontsize=F_HEAD, fontweight="bold", color="white", zorder=5)
+                    fontsize=6, fontweight="bold", color="white", zorder=5)
 
     edge_color = C_MPI + "70"
 
@@ -196,7 +194,7 @@ def main():
     for i in range(2):
         mx = (gpu_xs[i] + gpu_w + gpu_xs[i + 1]) / 2
         ax.text(mx, gpu_y + gpu_h / 2, "MPI", ha="center", va="center",
-                fontsize=F_BODY, fontstyle="italic", color=C_MPI)
+                fontsize=6, fontstyle="italic", color=C_MPI)
 
     # ==================================================================
     # Box 1 → Box 2 transition: vertical arrow with "zoom into one GPU"
@@ -223,7 +221,7 @@ def main():
     ax.text(CX + 0.06, label_y,
             "zoom into one GPU",
             ha="left", va="center",
-            fontsize=F_BODY, fontstyle="italic",
+            fontsize=6, fontstyle="italic",
             color=C_EXPAND, zorder=6)
 
     # ==================================================================
@@ -238,27 +236,25 @@ def main():
             color=C_HPC, lw=LW_THIN, ls="--", zorder=1)
     ax.text(L + l1_box_w / 2, l1_box_y + l1_box_h - 0.02,
             "Level 2: Intra-rank GPU threads \u2014 1 agent = 1 thread (grid-stride at scale)",
-            ha="center", va="top", fontsize=F_TITLE, fontweight="bold",
+            ha="center", va="top", fontsize=6, fontweight="bold",
             color=C_THREAD, zorder=1)
     # System-spec subtitle: makes the magic 110 in "CU 109" self-explanatory.
     # Positioned below the CU row, inside the bottom margin of Level 2 box.
-    ax.text(L + l1_box_w / 2, l1_box_y + 0.08,
+    ax.text(L + l1_box_w / 2, l1_box_y + 0.06,
             "AMD MI250X GCD: 110 CUs \u00b7 8 blocks/CU \u00b7 128 threads/block",
-            ha="center", va="center", fontsize=F_BODY, fontstyle="italic",
+            ha="center", va="center", fontsize=6, fontstyle="italic",
             color=C_THREAD, zorder=1)
 
     # Horizontal agent bar — centered horizontally to match the GPU row above.
     # bar_total_w = total_gpus_w so the bar sits in the same horizontal
     # envelope as the 3 GPU boxes in Level 1, and bar_left = gx_start so
-    # the bar's left edge aligns with the leftmost GPU box. Pushed down from
-    # the title banner so a "agents across" heading can fit above it AND
-    # the bar→CU gap can grow for longer per-CU arrows.
-    bar_h = 0.12
+    # the bar's left edge aligns with the leftmost GPU box.
+    bar_h = 0.10
     bar_total_w = total_gpus_w
     bar_left = gx_start
-    bar_y = l1_box_y + 0.68  # bar bottom; moved up 0.09 in from prior 0.59
-                              # so the AMD spec line gets ~0.20 in headroom
-                              # below the CU row instead of ~0.11 in.
+    bar_y = l1_box_y + 0.55  # bar bottom; positioned with ~0.11 gap below
+                              # the Level 2 banner and ~0.13 gap above the
+                              # CU row.
 
     # Bar widths are conceptual (Site < Gap << Tree), not calibrated to any
     # specific N_g / N_t — actual experiments use varying values. The visual
@@ -273,7 +269,7 @@ def main():
     ax.text(bar_left - 0.10, bar_y + bar_h / 2,
             "Agents:",
             ha="right", va="center",
-            fontsize=F_BODY, fontstyle="italic",
+            fontsize=6, fontstyle="italic",
             color=C_THREAD)
 
     bx = bar_left
@@ -285,20 +281,18 @@ def main():
         rbox(ax, bx, bar_y, w, bar_h, color, fc=color,
              lw=LW_THIN, rad=0.004, zo=3)
         ax.text(bx + w / 2, bar_y + bar_h / 2, label,
-                ha="center", va="center", fontsize=F_HEAD, fontweight="bold",
+                ha="center", va="center", fontsize=6, fontweight="bold",
                 color="white", zorder=4)
         bx += w
 
 
-    # 3 CU boxes (mirror GPU width). Pushed down so the bar→CU gap is
-    # ~0.17 in (was 0.10), giving the per-CU arrows a much longer travel
-    # for visibility.
+    # 3 CU boxes (mirror GPU width). Bar->CU gap proportional to
+    # l1_box_h = 0.78.
     cu_w_box = gpu_w
     cu_gap_x = gpu_gap_space
-    cu_y_top = l1_box_y + 0.50  # moved up 0.08 in (was +0.42) — shrinks
-                                  # the bar→CU connector arrows by ~1/3
-                                  # and gives the AMD spec line more room.
-    cu_h_box = 0.30
+    cu_y_top = l1_box_y + 0.42  # ~0.13 below the bar bottom; gives the
+                                  # per-CU connector arrows visible travel.
+    cu_h_box = 0.26
     cu_y_bot = cu_y_top - cu_h_box
     cu_total_w_val = 3 * cu_w_box + 2 * cu_gap_x
     cu_left_start = CX - cu_total_w_val / 2
@@ -308,14 +302,14 @@ def main():
     for ci, (cx, clab) in enumerate(zip(cu_xs, cu_labels)):
         rbox(ax, cx, cu_y_bot, cu_w_box, cu_h_box,
              C_CU, fc=C_CU + "08", lw=LW_MED, rad=0.01, zo=3)
-        ax.text(cx + 0.04, cu_y_top - 0.02, clab,
-                ha="left", va="top", fontsize=F_HEAD, fontweight="bold",
+        ax.text(cx + 0.04, cu_y_top - 0.015, clab,
+                ha="left", va="top", fontsize=6, fontweight="bold",
                 color=C_CU, zorder=5)
         n_blk_cols = 4
         n_blk_rows = 2
         blk_margin_x = 0.05
-        blk_margin_top = 0.09  # smaller CU box → tighter top margin
-        blk_margin_bot = 0.03
+        blk_margin_top = 0.07  # smaller CU box → tighter top margin
+        blk_margin_bot = 0.02
         blk_gap_x = 0.015
         blk_gap_y = 0.018
         blk_avail_w = cu_w_box - 2 * blk_margin_x
@@ -367,12 +361,11 @@ def main():
     # connector. Temporal/execution drill-down indicator.
     # ==================================================================
     tick_label_y = (l1_box_y + fk_box_y + fk_box_h) / 2
-    # Promoted from F_BODY italic gray to a larger bold dark "section header"
-    # so the inter-box connector reads as a real section title, paralleling
-    # the top "Two-level parallelism..." label.
+    # Bold dark "section header" so the inter-box connector reads as a
+    # real section title, paralleling the top "Two-level parallelism..." label.
     ax.text(CX, tick_label_y, "Multi-priority kernel pipeline (inside each tick)",
             ha="center", va="center",
-            fontsize=10.5, fontweight="bold",
+            fontsize=6, fontweight="bold",
             color=C_TEXT)
 
     # ==================================================================
@@ -384,7 +377,7 @@ def main():
          C_BARRIER, fc=C_BARRIER + "06", lw=LW_THICK, rad=0.02, zo=0)
     ax.text(fk_box_x + fk_box_w / 2, fk_box_y + fk_box_h - 0.02,
             "Fused kernel per tick: 10 priorities in order \u2192 1 launch via on-device grid barriers",
-            ha="center", va="top", fontsize=F_TITLE, fontweight="bold",
+            ha="center", va="top", fontsize=6, fontweight="bold",
             color=C_BARRIER, zorder=1)
 
     # 10 priority steps arranged horizontally
@@ -406,12 +399,9 @@ def main():
     gap_between = 0.10  # was 0.04 — wider gaps so short sync arrows fit
     step_w = (avail_w - (n_p - 1) * gap_between) / n_p
 
-    # Strip top moved up 0.06 in (from -0.40 to -0.34) so the priority
-    # arrow + cell grids sit slightly higher within the FK box, freeing
-    # more space at the bottom for the legend and giving each priority
-    # icon more breathing room from the legend below.
-    step_icon_y_top = fk_box_y + fk_box_h - 0.34
-    step_icon_h = 0.46
+    # Priority strip sized for fk_box_h = 0.78.
+    step_icon_y_top = fk_box_y + fk_box_h - 0.24
+    step_icon_h = 0.38
     step_icon_y_bot = step_icon_y_top - step_icon_h
     step_breed_label_y = step_icon_y_bot - 0.05  # unused now
 
@@ -486,14 +476,14 @@ def main():
                  "\u25a0 active (Site/Gap/Tree)   "
                  "\u25a1 idle at barrier   ")
     red_part = "|=grid barrier"
-    char_w = 0.044  # rough per-char width at F_LABEL=8pt italic sans-serif
+    char_w = 0.033  # rough per-char width at 6 pt italic sans-serif
     center_x = fk_box_x + fk_box_w / 2
     boundary_x = center_x + (len(navy_part) - len(red_part)) * char_w / 2
-    ax.text(boundary_x, fk_box_y + 0.04, navy_part,
-            ha="right", va="bottom", fontsize=F_LABEL, fontstyle="italic",
+    ax.text(boundary_x, fk_box_y + 0.03, navy_part,
+            ha="right", va="bottom", fontsize=6, fontstyle="italic",
             color=C_HPC)
-    ax.text(boundary_x, fk_box_y + 0.04, red_part,
-            ha="left", va="bottom", fontsize=F_LABEL, fontstyle="italic",
+    ax.text(boundary_x, fk_box_y + 0.03, red_part,
+            ha="left", va="bottom", fontsize=6, fontstyle="italic",
             color=C_DISP)
 
     # ==================================================================
@@ -503,8 +493,12 @@ def main():
     # saved files are exactly FIG_SIZE — fits IEEE column width with
     # no overflow into the gutter.
     out_base = FIGS_DIR / "ggap_architecture"
+    # PDF for LaTeX: transparent background so the figure blends with the
+    # page color regardless of document-level styling.
     fig.savefig(f"{out_base}.pdf", format="pdf",
-                facecolor="white", edgecolor="none")
+                transparent=True, edgecolor="none")
+    # PNG for dev preview: keep white background for readability against any
+    # IDE / browser background.
     fig.savefig(f"{out_base}.png", format="png", dpi=args.dpi,
                 facecolor="white", edgecolor="none")
     print(f"Saved: {out_base}.{{pdf,png}}  ({FIG_W}\u00d7{FIG_H} in)")
