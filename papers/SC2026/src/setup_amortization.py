@@ -3,7 +3,10 @@
 
 Standalone subfigure: setup-fraction-of-total-wall-time vs. simulation length
 (log x), showing the break-even point at which one-time setup becomes <5% of
-the run. Uses the largest measured Weak Scaling B configuration.
+the run. Uses the largest measured **Weak Scaling A** configuration (2,048
+GPUs, full UVAFME per-site fidelity), which is the main-paper weak-scaling
+experiment. Weak Scaling B is reported in §S.1 supplementary; its queued
+runs above 128 GPUs did not complete before the submission deadline.
 """
 import argparse
 from pathlib import Path
@@ -79,8 +82,8 @@ def main():
     figs_dir = Path(args.figs_dir) if args.figs_dir else figs_dir
     figs_dir.mkdir(parents=True, exist_ok=True)
 
-    gpus, avg = read_csv(csv_dir / "weak_scaling_b.csv")
-    g_rep = gpus[-1]  # largest measured Weak B configuration
+    gpus, avg = read_csv(csv_dir / "weak_scaling.csv")
+    g_rep = gpus[-1]  # largest measured Weak A configuration (2048 GPUs)
 
     out_pdf = figs_dir / "setup_amortization.pdf"
     out_png = figs_dir / "setup_amortization.png"

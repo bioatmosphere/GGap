@@ -163,21 +163,23 @@ def write_headline(metrics_a, metrics_b, metrics_s, gpus_a, gpus_b, gpus_s):
         b_gpus = b_sites = b_agents = b_tput = b_per_gpu_str = b_tick = b_eff = "—"
         b_per_tick_avg_str = "—"
 
-    # Weak B is the headline weak-scaling experiment (matches Strong's per-site
-    # fidelity); Weak A is reported in §S.1 as a supplementary cross-validation.
+    # Weak A is the headline weak-scaling experiment (full UVAFME per-site
+    # fidelity, complete 8 → 2,048 GPU sweep); Weak B is reported in §S.1 as
+    # a supplementary cross-validation point — its 256/512/1024/2048 GPU runs
+    # were queued on Frontier but did not complete before the SC2026 deadline.
     lines = [
         "### Headline Numbers",
         "",
-        "| Metric | **Weak B (100 sites/GPU)** | **Strong (2,048 sites)** | Weak A (10 sites/GPU, §S.1) |",
+        "| Metric | **Weak A (10 sites/GPU)** | **Strong (2,048 sites)** | Weak B (100 sites/GPU, §S.1) |",
         "|---|---|---|---|",
-        f"| Peak GPUs | {b_gpus} | {peak_s} | {peak_a} |",
-        f"| Peak total sites | {b_sites} | {fmt_int(ms['total_sites'])} | {fmt_int(ma['total_sites'])} |",
-        f"| Peak total agents | {b_agents} | {fmt_int(ms['total_agents'])} | {fmt_int(ma['total_agents'])} |",
-        f"| Peak total throughput | {b_tput} | {ms['throughput']/1e9:.2f} B upd/s | {ma['throughput']/1e9:.2f} B upd/s |",
-        f"| Sustained per-GPU throughput | {b_per_gpu_str} | {s_per_gpu_str} | {a_per_gpu_mups:.0f} M upd/s/GPU |",
-        f"| Sustained steady-state per-tick (avg) | {b_per_tick_avg_str} | {s_per_tick_avg_str} | ~{a_per_tick_avg_ms:.0f} ms |",
-        f"| Mean tick at peak GPU count | {b_tick} | {ms['mean_tick']*1000:.2f} ms | {ma['mean_tick']*1000:.2f} ms |",
-        f"| Parallel efficiency at peak | {b_eff} | {ms['efficiency']:.1f}% | {ma['efficiency']:.1f}% |",
+        f"| Peak GPUs | {peak_a} | {peak_s} | {b_gpus} |",
+        f"| Peak total sites | {fmt_int(ma['total_sites'])} | {fmt_int(ms['total_sites'])} | {b_sites} |",
+        f"| Peak total agents | {fmt_int(ma['total_agents'])} | {fmt_int(ms['total_agents'])} | {b_agents} |",
+        f"| Peak total throughput | {ma['throughput']/1e9:.2f} B upd/s | {ms['throughput']/1e9:.2f} B upd/s | {b_tput} |",
+        f"| Sustained per-GPU throughput | {a_per_gpu_mups:.0f} M upd/s/GPU | {s_per_gpu_str} | {b_per_gpu_str} |",
+        f"| Sustained steady-state per-tick (avg) | ~{a_per_tick_avg_ms:.0f} ms | {s_per_tick_avg_str} | {b_per_tick_avg_str} |",
+        f"| Mean tick at peak GPU count | {ma['mean_tick']*1000:.2f} ms | {ms['mean_tick']*1000:.2f} ms | {b_tick} |",
+        f"| Parallel efficiency at peak | {ma['efficiency']:.1f}% | {ms['efficiency']:.1f}% | {b_eff} |",
     ]
     if ms["speedup"]:
         lines.append(f"| Speedup at peak | — | {ms['speedup']:.1f}× | — |")
@@ -228,6 +230,12 @@ def main():
     peak_b = max(gpus_b) if gpus_b else None
     peak_s = max(gpus_s)
 
+    # Per-GPU and per-tick aggregates referenced in multiple sections (§1
+    # headline, §1 key claims, §9.1, §9.4, §S.1) — compute once up front so
+    # the section blocks below can reference them directly.
+    a_per_gpu_mups = metrics_a[peak_a]['throughput'] / peak_a / 1e6
+    a_per_tick_avg_ms = sum(metrics_a[g]['mean_tick'] for g in gpus_a) / len(gpus_a) * 1000
+
     md = []
     md.append("# GGap Scaling Results — SC2026 Application Track\n")
     md.append("This document is the source of truth for all numbers in the scaling section of "
@@ -239,37 +247,28 @@ def main():
     md.append("## 1. Executive Summary\n")
     md.append(write_headline(metrics_a, metrics_b, metrics_s, gpus_a, gpus_b, gpus_s))
     md.append("**Key claims for the paper:**\n")
-    if peak_b is not None:
-        b_per_gpu_mups = metrics_b[peak_b]['throughput'] / peak_b / 1e6
-        if missing_b:
-            md.append(f"- Weak Scaling B (main weak-scaling experiment, headline) reaches "
-                      f"**{fmt_int(metrics_b[peak_b]['total_agents'])} agents on {peak_b} GPUs** "
-                      f"at **{metrics_b[peak_b]['efficiency']:.0f}% parallel efficiency**, "
-                      f"sustaining ~{b_per_gpu_mups:.0f} M agent-updates/sec/GPU. "
-                      f"The queued {', '.join(str(g) for g in missing_b)} GPU runs are expected "
-                      f"to extend the sweep to **~20.5 B agents at 2,048 GPUs** while "
-                      f"holding per-rank work fixed.")
-        else:
-            md.append(f"- Weak Scaling B demonstrates **{metrics_b[peak_b]['efficiency']:.0f}% "
-                      f"parallel efficiency at {peak_b} GPUs** "
-                      f"({fmt_int(metrics_b[peak_b]['total_agents'])} agents = "
-                      f"{fmt_int(metrics_b[peak_b]['total_sites'])} sites at 100 sites/GPU), "
-                      f"sustaining ~{b_per_gpu_mups:.0f} M agent-updates/sec/GPU.")
+    md.append(f"- Weak Scaling A (main weak-scaling experiment, headline) demonstrates "
+              f"**{metrics_a[peak_a]['efficiency']:.0f}% parallel efficiency at {peak_a} GPUs** "
+              f"({fmt_int(metrics_a[peak_a]['total_agents'])} agents = "
+              f"{fmt_int(metrics_a[peak_a]['total_sites'])} sites at 10 sites/GPU under full "
+              f"UVAFME per-site fidelity), sustaining "
+              f"~{a_per_gpu_mups:.0f} M agent-updates/sec/GPU under a stress-test "
+              f"communication regime (37.5% cross-rank edges).")
     md.append(f"- Strong Scaling delivers a **{metrics_s[peak_s]['speedup']:.1f}× speedup** "
               f"from {gpus_s[0]} → {peak_s} GPUs ({metrics_s[peak_s]['efficiency']:.0f}% parallel "
               f"efficiency at the largest scale). The efficiency drop is correlated with the per-GPU "
               f"partition shrinking from 256 → 4 sites: at the smallest partitions each GPU kernel "
               f"underutilizes the MI250X GCD (kernel launch overhead becomes a larger fraction of "
               f"GPU time), and the cross-rank edge fraction climbs from 1.2% → 75%.")
-    md.append(f"- Strong and Weak B share the same per-site fidelity (200 gaps × 500 trees), so "
-              f"`setup_phase_breakdown` can plot both on a single per-rank-workload axis — Weak "
-              f"B's hatched bar lies precisely on the strong-scaling curve, **directly proving "
-              f"setup time depends only on per-rank work, not on rank count**.")
-    md.append(f"- Weak Scaling A (supplementary, §S.1) cross-validates Weak B at a different "
-              f"point in the design space (10 sites/GPU, 500 gaps × 1,000 trees per site, "
-              f"37.5% cross-rank stress) and reaches "
-              f"**{metrics_a[peak_a]['efficiency']:.0f}% parallel efficiency at {peak_a} GPUs** "
-              f"({fmt_int(metrics_a[peak_a]['total_agents'])} agents).")
+    if peak_b is not None:
+        b_per_gpu_mups = metrics_b[peak_b]['throughput'] / peak_b / 1e6
+        md.append(f"- Weak Scaling B (supplementary, §S.1) cross-validates Weak A at a different "
+                  f"point in the design space (100 sites/GPU, 200 gaps × 500 trees per site — "
+                  f"matches the Strong scaling experiment's per-site fidelity) and reaches "
+                  f"**{fmt_int(metrics_b[peak_b]['total_agents'])} agents on {peak_b} GPUs at "
+                  f"{metrics_b[peak_b]['efficiency']:.0f}% efficiency**, sustaining "
+                  f"~{b_per_gpu_mups:.0f} M agent-updates/sec/GPU. *(Runs above 128 GPUs were "
+                  f"queued on Frontier but did not complete before the SC2026 deadline.)*")
     md.append(f"- Across all experiments, GPU execution is ≥99% of per-tick wall time and "
               f"MPI ghost-exchange consumes "
               f"<{max(metrics_a[peak_a]['mpi_fraction'], metrics_s[peak_s]['mpi_fraction']):.3f}% "
@@ -288,28 +287,22 @@ def main():
 
     # 3. Experiment matrix
     md.append("## 3. Experiment Matrix\n")
-    md.append("| Experiment | Sites/GPU | Gaps/site | Trees/gap | Grid H | Cross-rank % | GPU Range | Paper section |")
+    md.append("| Experiment | Sites/GPU | Gaps/site | Trees/gap | Grid H | Cross-rank % | GPU Range (complete) | Paper section |")
     md.append("|---|---:|---:|---:|---:|---:|---|---|")
-    md.append("| Weak B (compute-heavy)     | 100   | 200 |   500 | 10 |  7.5%       | 8–2,048 | **Main (§4, §9.1)** |")
-    md.append("| Strong (fixed 2,048 sites) | 256→4 | 200 |   500 |  4 | 1.2%→75.0%  | 8–512   | **Main (§5, §9.2)** |")
-    md.append("| Weak A (comm-heavy)        |  10   | 500 | 1,000 |  5 | 37.5%       | 8–2,048 | Supplementary (§S.1) |")
+    md.append("| Weak A (comm-heavy)        |  10   | 500 | 1,000 |  5 | 37.5%       | 8–2,048 (9/9) | **Main (§4, §9.1)** |")
+    md.append("| Strong (fixed 2,048 sites) | 256→4 | 200 |   500 |  4 | 1.2%→75.0%  | 8–512 (7/7)   | **Main (§5, §9.2)** |")
+    md.append("| Weak B (compute-heavy)     | 100   | 200 |   500 | 10 |  7.5%       | 8–128 (5/9, runs above 128 GPUs did not complete before deadline) | Supplementary (§S.1) |")
     md.append("")
 
-    # 4. Weak B — main result
-    md.append("## 4. Weak Scaling B — Main Result\n")
-    md.append("High-density compute-heavy configuration: 100 sites/GPU with 200 gaps × 500 trees "
-              "per site (matching the Strong scaling experiment's per-site fidelity for direct "
-              "cross-comparison — see §5). 7.5% cross-rank density, 1D column-slab partitioning "
-              "with grid height 10. This is the headline weak-scaling configuration for the main "
-              "paper. *(A complementary configuration with 5× higher per-site fidelity but 10× "
-              "fewer sites per GPU — Weak A — is reported in §S.1 as supplementary "
-              "cross-validation.)*\n")
-    if missing_b:
-        md.append(f"> **Status:** {len(gpus_b)}/{len(EXPECTED_WEAK_B)} GPU configurations "
-                  f"complete. Missing: {', '.join(str(g) for g in missing_b)} GPUs (queued on "
-                  f"Frontier; will fill in before submission). All numbers below auto-update "
-                  f"when the new CSV rows land.\n")
-    md.append(write_table_weak("Weak Scaling B — 100 sites/GPU", metrics_b, EXPECTED_WEAK_B, "weak_scaling_b.csv"))
+    # 4. Weak A — main result
+    md.append("## 4. Weak Scaling A — Main Result\n")
+    md.append("Full UVAFME per-site fidelity (500 gaps × 1,000 trees), 10 sites/GPU, "
+              "37.5% cross-rank density. This is the headline weak-scaling configuration "
+              "for the main paper, with all 9 rank counts (8 → 2,048 GPUs) complete. *(A "
+              "complementary high-site-density configuration — Weak B — is reported in §S.1 "
+              "as supplementary cross-validation; its runs above 128 GPUs were queued on "
+              "Frontier but did not complete before the SC2026 deadline.)*\n")
+    md.append(write_table_weak("Weak Scaling A — 10 sites/GPU", metrics_a, gpus_a, "weak_scaling.csv"))
 
     # 5. Strong scaling
     md.append("## 5. Strong Scaling Results\n")
@@ -320,35 +313,31 @@ def main():
     md.append("All values in microseconds (μs). `GPU Exec` = `mean_gpu_compute + mean_gpu_sync` "
               "(kernel launch overhead + actual GPU work). MPI columns are the GPU-aware MPI "
               "ghost-cell exchange. `Total` is the average per-tick wall time. Decomposition "
-              "tables for both main (Weak B, Strong) and supplementary (Weak A) experiments are "
+              "tables for both main (Weak A, Strong) and supplementary (Weak B) experiments are "
               "co-located here for reference.\n")
-    md.append(write_decomp_table("Weak B", gpus_b, avg_b))
+    md.append(write_decomp_table("Weak A", gpus_a, avg_a))
     md.append(write_decomp_table("Strong", gpus_s, avg_s))
-    md.append(write_decomp_table("Weak A (supplementary)", gpus_a, avg_a))
+    md.append(write_decomp_table("Weak B (supplementary)", gpus_b, avg_b))
 
     # 7. Setup-phase
     md.append("## 7. Setup-Phase Breakdown\n")
     md.append("Setup phases are one-time costs amortized over the simulation run. Setup is "
               "dominated by Python-side site initialization and the first-tick buffer build "
-              "(ghost topology discovery + GPU buffer allocation). Fig.~`setup_phase_breakdown` "
-              "merges **strong scaling and Weak B** on a single x-axis (sites/GPU = per-rank "
-              "workload) — both experiments share the same per-site fidelity (200 gaps × 500 "
-              "trees), so they live on the same curve. Strong contributes 7 bars at sites/GPU = "
-              "256, 128, 64, 32, 16, 8, 4 (each a different rank count, 8 → 512 GPUs); Weak B "
-              "contributes 1 hatched bar at sites/GPU = 100, **averaged across the Weak B rank "
-              "sweep (8 → 2,048 GPUs)** — currently 5/9 rank counts complete (8/16/32/64/128) "
-              "with var <3% across them; the queued 256/512/1024/2048 GPU runs are expected to "
-              "extend the sweep without changing the bar height because per-rank work is fixed "
-              "in weak scaling. The Weak B bar lands precisely between Strong's 64 and 128 bars "
-              "on every segment, visually demonstrating that **setup time = f(per-rank work) "
-              "independent of rank count**. (Weak A is excluded from this plot because its "
-              "per-site fidelity is 5× higher and would land on a different curve — see §S.1 "
-              "for Weak A's separate efficiency story; see §9.2 for the merged-figure narrative "
-              "and §9.3 for the amortization story.) The end-to-end Weak B breakdown table "
-              "below is kept as the data source for `setup_amortization.{pdf,png}`, which uses "
-              "the largest measured Weak B configuration as the representative steady-state "
-              "cost.\n")
-    md.append(write_setup_table("Weak B (representative)", gpus_b, avg_b))
+              "(ghost topology discovery + GPU buffer allocation). Three figures use the "
+              "setup-phase data: (1) Fig.~`setup_amortization` plots setup-fraction-of-total "
+              "vs. simulation length using the **largest Weak A 2,048-GPU configuration** as "
+              "the representative steady-state cost — see §9.3 for the temporal-capability "
+              "story. (2) Fig.~`weak_scaling_a_phase_breakdown` shows a single representative "
+              "bar averaged across all 9 Weak A rank counts (8 → 2,048 GPUs), decomposed into "
+              "the four phases (Initialize / GPU Setup / First Tick / Steady State) — the "
+              "variance across the sweep is <5%, which is the direct visual proof that "
+              "**per-rank cost is constant in N under weak scaling**. (3) Fig.~"
+              "`strong_scaling_phase_breakdown` shows 7 stacked bars across the strong-scaling "
+              "sweep (sites/GPU = 256 → 4, one per rank count from 8 → 512 GPUs), demonstrating "
+              "how each phase **scales with per-rank workload** as the partition shrinks. The "
+              "two breakdown figures together characterize setup cost on both axes: constant "
+              "in N (Weak A) and scales with per-rank work (Strong) — see §9.1 and §9.2.\n")
+    md.append(write_setup_table("Weak A (representative for amortization)", gpus_a, avg_a))
 
     # 8. Figures — list each standalone subfigure, split into main vs supplementary
     md.append("## 8. Figures (standalone subfigures for LaTeX `subcaption`)\n")
@@ -356,40 +345,41 @@ def main():
               "`../figs/` (sibling of this `md/` folder). Each panel is its own file so LaTeX can "
               "compose them via `\\begin{subfigure}` / `\\subfloat`.\n")
     md.append("### 8.1 Main paper figures\n")
-    md.append("**Weak Scaling B (100 sites/GPU, compute-heavy)** — `weak_scaling_b_*.{pdf,png}`")
-    md.append("- `weak_scaling_b_efficiency` — combined plot: stacked-bar of "
+    md.append("**Weak Scaling A (10 sites/GPU, comm-heavy) — subfigure pair**, composed in "
+              "LaTeX as a double-column figure with two side-by-side subfigures:")
+    md.append("- (a) `weak_scaling_a_efficiency` — combined plot: stacked-bar of "
               "first-tick + steady-state simulation time, with ideal-baseline reference line "
-              "and parallel efficiency annotated above each bar. Headline weak-scaling figure.\n")
-    md.append("**Strong Scaling (2,048 fixed sites)** — `strong_scaling_speedup.{pdf,png}`")
-    md.append("- `strong_scaling_speedup` — combined plot: log-log speedup curve with "
+              "and parallel efficiency annotated above each bar. Headline weak-scaling figure.")
+    md.append("- (b) `weak_scaling_a_phase_breakdown` — **single representative bar** "
+              "(averaged across all 9 Weak A rank counts 8 → 2,048 GPUs) showing the 4-phase "
+              "decomposition (Initialize / GPU Setup / First Tick / Steady State), with a "
+              "variance annotation `var <5%` that visually IS the **constant-in-N** claim of "
+              "weak scaling — applied end-to-end across the full setup phase, not just "
+              "steady-state per-tick cost.\n")
+    md.append("**Strong Scaling (2,048 fixed sites) — subfigure pair**, composed in LaTeX as "
+              "a double-column figure with two side-by-side subfigures:")
+    md.append("- (a) `strong_scaling_speedup` — combined plot: log-log speedup curve with "
               "ideal-linear reference (left axis), cross-rank edge fraction on right twin "
-              "axis, and a charcoal pill annotating peak speedup + efficiency. The vertical "
-              "gap between the measured and ideal curves visually IS the parallel-efficiency "
-              "loss; the explicit % is in the annotation. Replaces the earlier separate "
-              "`strong_scaling_speedup` + `strong_scaling_efficiency` pair which were "
-              "mathematically equivalent.\n")
-    md.append("**Setup vs. Simulation** — `setup_*.{pdf,png}`")
-    md.append("- `setup_phase_breakdown` — end-to-end phase breakdown plotted against "
-              "**sites/GPU** (per-rank workload), merging **strong scaling** (7 bars at "
-              "sites/GPU = 4 / 8 / 16 / 32 / 64 / 128 / 256, one per rank count) and **Weak B** "
-              "(1 hatched bar at sites/GPU = 100, averaged across the Weak B rank sweep "
-              "8 → 2,048 GPUs; 5/9 currently complete with var <3%). Weak B lies exactly on "
-              "Strong's curve between sites/GPU = 64 and 128, visually proving that setup time "
-              "depends only on per-rank work and not on rank count (the 2D characterization, "
-              "in one figure).")
-    md.append("- `setup_amortization` — setup fraction of total wall time vs. simulation length "
-              "(uses Weak B 128-GPU representative steady-state cost; pure computational, no "
-              "use-case markers — production use cases are referenced in §9.3 text)\n")
+              "axis, and a charcoal pill annotating peak speedup + efficiency.")
+    md.append("- (b) `strong_scaling_phase_breakdown` — **7 stacked bars** across the "
+              "strong-scaling sweep (sites/GPU = 4 / 8 / 16 / 32 / 64 / 128 / 256, one per "
+              "rank count from 8 → 512 GPUs), each decomposed into the same 4 phases. Bars "
+              "shrink dramatically left-to-right as per-rank work decreases, with composition "
+              "shifting from setup-dominated (8 GPUs, ~85% setup) to steady-state-dominated "
+              "(512 GPUs, ~51% steady state). Visually shows the kernel-granularity bound "
+              "and the per-phase scaling-with-per-rank-work claim.\n")
+    md.append("**Setup vs. Simulation** — `setup_amortization.{pdf,png}`")
+    md.append("- `setup_amortization` — setup fraction of total wall time vs. simulation "
+              "length, computed from the largest **Weak A** configuration (2,048 GPUs, the "
+              "main weak-scaling experiment); pure computational, no use-case markers — "
+              "production use cases are referenced in §9.3 text.\n")
     md.append("### 8.2 Supplementary figures\n")
-    md.append("**Weak Scaling A (10 sites/GPU, comm-heavy)** — `weak_scaling_a_*.{pdf,png}` "
-              "(supplementary cross-validation, see §S.1 narrative)")
-    md.append("- `weak_scaling_a_efficiency` — combined plot: stacked-bar of first-tick + "
-              "steady-state simulation time with ideal-baseline reference and per-bar "
-              "efficiency annotations. Same design as `weak_scaling_b_efficiency` for visual "
-              "consistency.")
+    md.append("**Weak Scaling A — extra plot** (numbers redundant with §8.1's efficiency figure):")
     md.append("- `weak_scaling_a_throughput` — billion agent-updates/s vs. GPUs (essentially "
               "linear; redundant with the efficiency plot)\n")
-    md.append("**Weak Scaling B — extra plot** (numbers redundant with §8.1's efficiency figure):")
+    md.append("**Weak Scaling B (100 sites/GPU, compute-heavy)** — `weak_scaling_b_*.{pdf,png}` "
+              "(supplementary cross-validation, see §S.1 narrative)")
+    md.append("- `weak_scaling_b_efficiency` — combined plot: same stacked-bar design as Weak A")
     md.append("- `weak_scaling_b_throughput` — billion agent-updates/s vs. GPUs\n")
 
     # 9. Narrative
@@ -406,92 +396,78 @@ def main():
               "**higher spatial resolution** (more sites at the same fidelity) and **higher "
               "temporal resolution** (much shorter time steps over comparable simulated "
               "horizons), or both.\n")
-    md.append("The four figures of this section answer four independent questions. "
-              "Fig.~`weak_scaling_b_efficiency` proves the framework scales to ~146× more sites "
-              "than the current CONUS baseline at near-perfect efficiency. "
-              "Fig.~`strong_scaling_speedup` proves wall time can be shrunk for a fixed problem "
-              "so per-scenario turnaround drops. Fig.~`setup_amortization` proves that one-time "
-              "setup costs become negligible for long-horizon production runs at any temporal "
-              "resolution finer than yearly. Fig.~`setup_phase_breakdown` (merging Weak B with "
-              "the strong-scaling sweep on a single per-rank-workload axis) shows how each "
-              "phase scales with per-rank workload AND that rank count alone has no effect, "
-              "completing the 2D characterization in one figure. Together they argue that "
-              "GGap's scaling unlocks production-quality high-resolution forest simulation "
-              "that was previously infeasible.\n")
+    md.append("The main-paper figures answer four independent questions. The Weak A "
+              "subfigure pair — Fig.~`weak_scaling_a_efficiency` (a) paired with "
+              "Fig.~`weak_scaling_a_phase_breakdown` (b) — proves the framework scales to ~14× "
+              "more sites than the current CONUS baseline at near-perfect efficiency, and the "
+              "(b) panel's single representative bar with a `var <5%` annotation directly "
+              "demonstrates that per-rank cost is **constant in N** across the 8 → 2,048 GPU "
+              "sweep. The Strong subfigure pair — Fig.~`strong_scaling_speedup` (a) paired "
+              "with Fig.~`strong_scaling_phase_breakdown` (b) — proves wall time can be shrunk "
+              "for a fixed problem AND shows how each setup phase **scales with per-rank "
+              "workload** as the partition shrinks from 256 → 4 sites/GPU. Fig.~"
+              "`setup_amortization` proves that one-time setup costs become negligible for "
+              "long-horizon production runs at any temporal resolution finer than yearly. The "
+              "two breakdown panels together characterize setup cost on both axes (constant in "
+              "N + scales with per-rank work), completing the 2D characterization without "
+              "needing to merge experiments. Together the four results argue that GGap's "
+              "scaling unlocks production-quality high-resolution forest simulation that was "
+              "previously infeasible.\n")
 
-    md.append("### 9.1 Weak scaling — high-density compute-heavy (Weak B)\n")
-    a_per_gpu_mups = metrics_a[peak_a]['throughput'] / peak_a / 1e6
-    a_per_tick_avg_ms = sum(metrics_a[g]['mean_tick'] for g in gpus_a) / len(gpus_a) * 1000
+    md.append("### 9.1 Weak scaling — full-fidelity, communication-heavy (Weak A)\n")
     conus_baseline_sites = 1400
-    # Use the EXPECTED Weak B max (2,048 GPUs) for the headline projection so
-    # that the narrative reads as the eventual claim regardless of how many
-    # rank counts are currently in the CSV. The current peak_b is what's
-    # actually measured; the projected headline is what the figure will show
-    # once the queued runs land.
-    expected_peak_b = EXPECTED_WEAK_B[-1]
-    expected_b_total_sites = expected_peak_b * 100  # 100 sites/GPU
-    expected_b_total_agents = expected_b_total_sites * 100_201  # 1 site + 200 gaps + 200×500 trees
-    sites_ratio_expected = expected_b_total_sites / conus_baseline_sites
-    if peak_b is not None:
-        b_per_gpu_mups = metrics_b[peak_b]['throughput'] / peak_b / 1e6
-        b_per_tick_avg_ms = sum(metrics_b[g]['mean_tick'] for g in gpus_b) / len(gpus_b) * 1000
-        b_eff = metrics_b[peak_b]['efficiency']
-        sites_ratio_measured = metrics_b[peak_b]['total_sites'] / conus_baseline_sites
-    else:
-        b_per_gpu_mups = 0
-        b_per_tick_avg_ms = 0
-        b_eff = 0
-        sites_ratio_measured = 0
-
+    sites_ratio = metrics_a[peak_a]['total_sites'] / conus_baseline_sites
     md.append(f"**Spatial capability vs. CONUS baseline.** Today's CONUS production run uses "
-              f"~{conus_baseline_sites:,} sites. Weak Scaling B's full target sweep extends to "
-              f"**{expected_peak_b} GPUs at 100 sites/GPU = {fmt_int(expected_b_total_sites)} "
-              f"sites (~{sites_ratio_expected:.0f}× more sites than current CONUS) and "
-              f"~{expected_b_total_agents/1e9:.1f} B agents** at production-relevant per-site "
-              f"density, demonstrating that spatial resolution is not capacity-limited.")
-    if missing_b:
-        md.append(f"  *(Currently {len(gpus_b)}/{len(EXPECTED_WEAK_B)} rank counts complete: "
-                  f"the measured peak is {fmt_int(metrics_b[peak_b]['total_sites'])} sites = "
-                  f"{fmt_int(metrics_b[peak_b]['total_agents'])} agents at {peak_b} GPUs / "
-                  f"{b_eff:.1f}% efficiency. The queued "
-                  f"{', '.join(str(g) for g in missing_b)} GPU runs are expected to extend the "
-                  f"sweep without changing the per-rank cost because per-rank work is fixed by "
-                  f"construction in weak scaling.)*")
-    md.append("")
+              f"~{conus_baseline_sites:,} sites; the framework sustains "
+              f"**{metrics_a[peak_a]['efficiency']:.0f}% parallel efficiency at {peak_a} GPUs** "
+              f"({fmt_int(metrics_a[peak_a]['total_sites'])} sites = "
+              f"{fmt_int(metrics_a[peak_a]['total_agents'])} agents, "
+              f"~{sites_ratio:.0f}× more sites than current CONUS), demonstrating that spatial "
+              f"resolution is not capacity-limited at full per-site fidelity. The methodology "
+              f"and per-tick numbers behind this claim are detailed below.\n")
+    md.append(f"We evaluate weak scaling on OLCF Frontier with the **full-fidelity, "
+              f"communication-heavy configuration**: 10 sites per GPU with 500 gaps × 1,000 trees "
+              f"per site (matching production UVAFME runs). With grid height 5 and 1D column-slab "
+              f"partitioning, each rank exchanges 30 of its 80 site-edges across rank boundaries — "
+              f"a **37.5% cross-rank fraction** that stress-tests the communication subsystem. "
+              f"From {gpus_a[0]} to {peak_a} GPUs (a {peak_a // gpus_a[0]}× scale-up to "
+              f"{fmt_int(metrics_a[peak_a]['total_agents'])} agents), parallel efficiency stays at "
+              f"**{metrics_a[peak_a]['efficiency']:.1f}%** (Fig.~`weak_scaling_a_efficiency`). "
+              f"The model sustains a steady-state per-tick wall time of "
+              f"**~{a_per_tick_avg_ms:.0f} ms/tick** across the entire 256× scale-up "
+              f"(variation < 5%; full range "
+              f"{min(metrics_a[g]['mean_tick'] for g in gpus_a)*1000:.1f}–"
+              f"{max(metrics_a[g]['mean_tick'] for g in gpus_a)*1000:.1f} ms), and "
+              f"each GPU sustains **~{a_per_gpu_mups:.0f} M agent-updates/sec**, "
+              f"totaling **{metrics_a[peak_a]['throughput']/1e9:.0f} B agent-updates/sec at "
+              f"{peak_a} GPUs**. Fig.~`weak_scaling_a_efficiency` decomposes the 1,000-tick "
+              f"simulation time into the one-time first-tick warmup (orange) and the 999 "
+              f"steady-state ticks (green); the dashed reference line marks the 8-GPU baseline. "
+              f"The first 7 bars (8–512 GPUs) sit at the baseline (~100% efficiency); the 1024- "
+              f"and 2048-GPU bars exceed it slightly because the first-tick segment grows from "
+              f"~53 s to ~56 s — the steady-state green segment stays flat at "
+              f"~{a_per_tick_avg_ms:.0f} ms × 999 ticks. Steady-state per-tick MPI ghost-exchange "
+              f"remains constant at ~1 μs/rank across the entire range — see §9.3 for the "
+              f"first-tick anatomy and §S.1 for the Weak B cross-validation at a different "
+              f"point in the design space.\n")
 
-    md.append(f"We evaluate weak scaling on OLCF Frontier with the **high-density "
-              f"compute-heavy configuration**: 100 sites per GPU with 200 gaps × 500 trees per "
-              f"site (deliberately matching the Strong scaling experiment's per-site fidelity, "
-              f"see §5, so the two experiments live on the same `f(per-rank work)` curve and "
-              f"can be merged in `setup_phase_breakdown`). With grid height 10 and 1D "
-              f"column-slab partitioning, each rank exchanges 60 of its 800 site-edges across "
-              f"rank boundaries — a **7.5% cross-rank fraction**, a low-communication-density "
-              f"regime where MPI is amortized aggressively over local compute. From "
-              f"{gpus_b[0]} to {peak_b} GPUs (currently a "
-              f"{peak_b // gpus_b[0]}× scale-up; target is {expected_peak_b // gpus_b[0]}× to "
-              f"{fmt_int(expected_b_total_agents)} agents), parallel efficiency stays at "
-              f"**{b_eff:.1f}%** (Fig.~`weak_scaling_b_efficiency`). The model sustains a "
-              f"steady-state per-tick wall time of **~{b_per_tick_avg_ms:.0f} ms/tick** across "
-              f"the measured range (variation < 5%; full range "
-              f"{min(metrics_b[g]['mean_tick'] for g in gpus_b)*1000:.1f}–"
-              f"{max(metrics_b[g]['mean_tick'] for g in gpus_b)*1000:.1f} ms), and each GPU "
-              f"sustains **~{b_per_gpu_mups:.0f} M agent-updates/sec** — the highest sustained "
-              f"per-GPU rate of any GGap configuration tested, indicating that 10 M agents per "
-              f"GPU saturate the MI250X GCD effectively. At the eventual {expected_peak_b}-GPU "
-              f"target, total throughput projects to "
-              f"**~{(b_per_gpu_mups * expected_peak_b)/1e3:.0f} B agent-updates/sec**.")
-    md.append("")
-
-    md.append(f"Fig.~`weak_scaling_b_efficiency` decomposes the 1,000-tick simulation time "
-              f"into the one-time first-tick warmup (orange) and the 999 steady-state ticks "
-              f"(green); the dashed reference line marks the {gpus_b[0]}-GPU baseline. The "
-              f"steady-state green segment stays flat at "
-              f"~{b_per_tick_avg_ms:.0f} ms × 999 ticks across the measured sweep — direct "
-              f"visual proof that per-rank work alone determines per-tick cost in this regime. "
-              f"Steady-state per-tick MPI ghost-exchange remains in the noise (<0.005% of "
-              f"per-tick wall time) across the entire range — see §9.3 for the first-tick "
-              f"anatomy and the constant-MPI verification, and §S.1 for the Weak A "
-              f"cross-validation at a different point in the design space.\n")
+    # Weak A phase-breakdown paragraph (companion to the strong-scaling
+    # breakdown paragraph in §9.2 below). The (b) panel of the Weak A
+    # subfigure pair makes the constant-in-N claim concrete via a single
+    # representative bar with a variance annotation.
+    md.append(f"**Constant in N: the per-phase view.** "
+              f"Fig.~`weak_scaling_a_phase_breakdown` (the (b) panel of the Weak A subfigure "
+              f"pair) decomposes the wall-clock time into four phases — Initialize (host-side "
+              f"Python agent construction), GPU Setup (write-buffer allocation), First Tick "
+              f"(buffer build + ghost topology + first kernel JIT), and Steady State (the "
+              f"~{a_per_tick_avg_ms:.0f} ms/tick × 999 repeating ticks) — averaged across all "
+              f"{len(gpus_a)} Weak A rank counts. The total bar height varies by **<5%** "
+              f"across the 8 → 2,048 GPU sweep, which is the direct visual proof that "
+              f"**per-rank cost is independent of rank count under weak scaling**. This is "
+              f"what *weak scaling* means by definition, but here we demonstrate it end-to-end "
+              f"across the full setup phase, not just the steady-state per-tick cost. The "
+              f"orthogonal question — how does each phase scale with per-rank workload? — is "
+              f"answered by Fig.~`strong_scaling_phase_breakdown` in §9.2.\n")
 
     md.append("### 9.2 Strong scaling — time-to-solution\n")
     md.append(f"Strong scaling on a fixed problem of 2,048 sites "
@@ -564,55 +540,36 @@ def main():
     s_setup_pct_8 = (s_init_8 + s_gpu_setup_8 + s_first_8) / s_total_8 * 100
     s_steady_pct_max = s_steady_max / s_total_max * 100
     spg_max = peak_s // gpus_s[0]  # 64×
-    # Compute averaged Weak B segments (across all rank counts) for the
-    # narrative cross-check that the merged bar lies on the strong curve.
-    wb_init_avg   = sum((avg_b[g]['model_creation_time'] + avg_b[g]['load_globals_time']
-                         + avg_b[g]['site_init_time']    + avg_b[g]['connectivity_time'])
-                        for g in gpus_b) / len(gpus_b)
-    wb_gpu_avg    = sum(avg_b[g]['gpu_setup_time']    for g in gpus_b) / len(gpus_b)
-    wb_first_avg  = sum(avg_b[g]['first_tick_time']   for g in gpus_b) / len(gpus_b)
-    wb_steady_avg = sum(avg_b[g]['steady_state_time'] for g in gpus_b) / len(gpus_b)
-    md.append(f"**How each phase scales with per-rank work — and why it's the same regardless "
-              f"of rank count.** Fig.~`setup_phase_breakdown` decomposes total wall time on a "
-              f"single **sites/GPU** axis, merging strong scaling (7 solid bars, one per rank "
-              f"count from 8–512 GPUs at sites/GPU = 256 → 4) with Weak B (1 hatched bar at "
-              f"sites/GPU = 100, averaged across the Weak B rank sweep 8 → 2,048 GPUs). "
-              f"Reading the "
-              f"strong-scaling sweep first: Initialize (host-side Python agent construction, "
-              f"dominated by site init) and GPU Setup (write-buffer allocation) **scale "
-              f"near-linearly with the per-rank agent count** — as sites/GPU shrinks "
-              f"{spg_max}× (256 → 4), Initialize falls from ~{s_init_8:.0f} s to "
-              f"~{s_init_max:.0f} s and GPU Setup from ~{s_gpu_setup_8:.0f} s to "
-              f"~{s_gpu_setup_max:.0f} s. First Tick scales **sub-linearly** "
-              f"(~{s_first_8/s_first_max:.0f}× shrinkage from ~{s_first_8:.0f} s to "
-              f"~{s_first_max:.0f} s) because it bundles per-rank buffer construction with "
-              f"smaller per-rank components for kernel JIT and the MPI communication-map "
-              f"handshake. Steady State scales **least** "
+    md.append(f"**Scales with per-rank work: the per-phase view.** "
+              f"Fig.~`strong_scaling_phase_breakdown` (the (b) panel of the Strong subfigure "
+              f"pair) decomposes total wall time across the strong-scaling sweep into four "
+              f"merged segments (Initialize / GPU Setup / First Tick / Steady State). "
+              f"Initialize (host-side Python agent construction, dominated by site init) and "
+              f"GPU Setup (write-buffer allocation) **scale near-linearly with the per-rank "
+              f"agent count** — as sites/GPU shrinks {spg_max}× (256 → 4), Initialize falls "
+              f"from ~{s_init_8:.0f} s to ~{s_init_max:.0f} s and GPU Setup from "
+              f"~{s_gpu_setup_8:.0f} s to ~{s_gpu_setup_max:.0f} s. First Tick scales "
+              f"**sub-linearly** (~{s_first_8/s_first_max:.0f}× shrinkage from "
+              f"~{s_first_8:.0f} s to ~{s_first_max:.0f} s) because it bundles per-rank buffer "
+              f"construction with smaller per-rank components for kernel JIT and the MPI "
+              f"communication-map handshake. Steady State scales **least** "
               f"(~{s_steady_8/s_steady_max:.0f}× shrinkage from ~{s_steady_8:.0f} s to "
               f"~{s_steady_max:.0f} s), reflecting the GPU kernel-granularity bound discussed "
               f"above. Bars shrink from ~{s_total_8:.0f} s at {gpus_s[0]} GPUs "
-              f"(~{s_setup_pct_8:.0f}% setup-dominated) to ~{s_total_max:.0f} s at {peak_s} GPUs "
-              f"(~{s_steady_pct_max:.0f}% steady-state-dominated), and the crossover where "
-              f"steady state catches up with setup is directly visible.\n")
-    md.append(f"**The Weak B bar (hatched, sites/GPU = 100) closes the 2D characterization.** "
-              f"Averaged across the Weak B rank sweep (8 → 2,048 GPUs target; "
-              f"{len(gpus_b)}/{len(EXPECTED_WEAK_B)} currently complete), it sits at "
-              f"~{wb_init_avg:.0f} s Initialize, ~{wb_gpu_avg:.1f} s GPU Setup, "
-              f"~{wb_first_avg:.0f} s First Tick, ~{wb_steady_avg:.0f} s Steady State — landing "
-              f"**precisely between Strong's sites/GPU = 64 and 128 bars** on every segment "
-              f"(linear interpolation across the same fidelity curve). The variation across the "
-              f"currently-complete rank counts is **<3% on the total bar height**, annotated "
-              f"above the bar; the queued 256/512/1024/2048 GPU runs are expected to keep this "
-              f"flat because per-rank work is fixed by construction in weak scaling. That "
-              f"flatness is the direct visual proof that **setup time depends only on per-rank "
-              f"work, with no rank-count tax**. Strong scaling sweeps the per-rank workload "
-              f"axis (varying x at varying N); Weak B holds the per-rank workload fixed and "
-              f"varies N (one x with collapsed N). They agree, so the curve is f(per-rank work) "
-              f"alone.\n")
+              f"(~{s_setup_pct_8:.0f}% setup-dominated) to ~{s_total_max:.0f} s at {peak_s} "
+              f"GPUs (~{s_steady_pct_max:.0f}% steady-state-dominated), and the crossover "
+              f"where steady state catches up with setup is directly visible. Combined with "
+              f"the **constant-in-N** proof from Fig.~`weak_scaling_a_phase_breakdown` (§9.1), "
+              f"the two breakdown panels complete the 2D characterization: **setup time "
+              f"depends only on per-rank work, with no rank-count tax**.\n")
 
     md.append("### 9.3 Setup amortization — temporal capability for long-horizon production\n")
-    g_rep = gpus_b[-1] if gpus_b else gpus_a[-1]
-    avg_rep = avg_b if gpus_b else avg_a
+    # Use the largest measured Weak A configuration as the representative for
+    # setup amortization (Weak A is the main-paper weak-scaling experiment with
+    # the complete 8 → 2,048 GPU sweep). Weak B is supplementary and its runs
+    # above 128 GPUs did not complete before the deadline.
+    g_rep = gpus_a[-1]
+    avg_rep = avg_a
     setup_total = sum(avg_rep[g_rep][k] for k in [
         "model_creation_time", "load_globals_time", "partitioning_time",
         "site_init_time", "connectivity_time", "gpu_setup_time", "first_tick_time",
@@ -636,7 +593,7 @@ def main():
               f"ticks; a millennial run at daily resolution is 365,000 ticks; an "
               f"hourly-resolution centennial run is 876,000 ticks. Fig.~`setup_amortization` "
               f"shows that the one-time setup cost (~{setup_total:.0f} s for the representative "
-              f"Weak B {g_rep}-GPU configuration, dominated by site initialization "
+              f"Weak A {g_rep}-GPU configuration, dominated by site initialization "
               f"({site_init_s:.0f} s of host-side Python agent construction) and the first-tick "
               f"buffer build ({first_tick_s:.0f} s of ghost-cell topology discovery + GPU buffer "
               f"allocation)) drops below 5% of total wall time at "
@@ -702,20 +659,22 @@ def main():
     # 9.4 — synthesis tying the three capabilities together
     md.append("### 9.4 Synthesis: what GGap unlocks\n")
     md.append(f"Combining the three results: the **spatial capability** "
-              f"(Fig.~`weak_scaling_b_efficiency`, ~{sites_ratio_expected:.0f}× more sites "
-              f"than current CONUS at ~{b_eff:.0f}% efficiency), the **temporal capability** "
+              f"(Fig.~`weak_scaling_a_efficiency`, ~{sites_ratio:.0f}× more sites than current "
+              f"CONUS at {metrics_a[peak_a]['efficiency']:.0f}% efficiency under full UVAFME "
+              f"per-site fidelity), the **temporal capability** "
               f"(Fig.~`setup_amortization`, setup amortized for daily-or-finer resolution at "
               f"centennial horizons), and the **time-to-solution capability** "
               f"(Fig.~`strong_scaling_speedup`, {metrics_s[peak_s]['speedup']:.1f}× wall-time "
               f"reduction for fixed problems) collectively argue that GGap's scaling unlocks a "
               f"class of high-resolution, long-horizon, large-domain forest simulations that "
               f"were previously infeasible with the current 1,400-site / 1-year-per-tick CONUS "
-              f"baseline. Fig.~`setup_phase_breakdown` provides the per-phase characterization "
+              f"baseline. Fig.~`strong_scaling_phase_breakdown` (and its companion "
+              f"Fig.~`weak_scaling_a_phase_breakdown`) provide the per-phase characterization "
               f"that lets us project these capabilities forward: with setup time = f(per-rank "
-              f"work) and steady-state time pinned at ~{b_per_tick_avg_ms:.0f} ms/tick in the "
-              f"weak-scaling-B regime, scaling to ~{fmt_int(expected_b_total_sites)} sites at "
-              f"sub-yearly resolution for centennial horizons is a straightforward extension "
-              f"of the measurements reported here.\n")
+              f"work) and steady-state time pinned at ~{a_per_tick_avg_ms:.0f} ms/tick in the "
+              f"weak-scaling-A regime, scaling to ~{fmt_int(metrics_a[peak_a]['total_sites'])} "
+              f"sites at sub-yearly resolution for centennial horizons is a straightforward "
+              f"extension of the measurements reported here.\n")
 
     # 10. Methodology
     md.append("## 10. Methodology Notes\n")
@@ -751,11 +710,12 @@ def main():
     md.append("## 11. Data Provenance\n")
     md.append("| Source CSV | Used by | GPU counts present | Missing |")
     md.append("|---|---|---|---|")
-    md.append(f"| `weak_scaling_b.csv` | weak_scaling_b_*, setup_*, §4, §9.1 | {gpus_b} | "
+    md.append(f"| `weak_scaling.csv` | weak_scaling_a_*, weak_scaling_a_phase_breakdown, "
+              f"setup_amortization, §4, §9.1, §9.3 | {gpus_a} | none |")
+    md.append(f"| `strong_scaling_b.csv` | strong_scaling_*, strong_scaling_phase_breakdown, "
+              f"§5, §9.2 | {gpus_s} | {missing_s if missing_s else 'none'} |")
+    md.append(f"| `weak_scaling_b.csv` | weak_scaling_b_*, §S.1 | {gpus_b} | "
               f"{missing_b if missing_b else 'none'} |")
-    md.append(f"| `strong_scaling_b.csv` | strong_scaling_*, §5, §9.2 | {gpus_s} | "
-              f"{missing_s if missing_s else 'none'} |")
-    md.append(f"| `weak_scaling.csv` | weak_scaling_a_*, §S.1 | {gpus_a} | none |")
     md.append("")
     md.append("**To refresh:** drop new rows into the relevant CSV and re-run the affected plot "
               "scripts in `papers/SC2026/src/`, then re-run "
@@ -763,51 +723,50 @@ def main():
 
     # ===== Supplementary section =====
     md.append("---\n")
-    md.append("## §S.1 Supplementary: Weak Scaling A (full-fidelity, communication-heavy)\n")
-    md.append("This supplementary section reports the results of the **Weak Scaling A** "
-              "configuration, which complements the main paper's Weak Scaling B (§4, §9.1) by "
+    md.append("## §S.1 Supplementary: Weak Scaling B (high site density)\n")
+    md.append("This supplementary section reports the results of the **Weak Scaling B** "
+              "configuration, which complements the main paper's Weak Scaling A (§4, §9.1) by "
               "exercising a different point in the design space:\n")
-    md.append("- **10 sites per GPU** (10× fewer than Weak B) — low site density per rank")
-    md.append("- **500 gaps × 1,000 trees** per site (5× higher per-site fidelity than Weak B "
-              "/ Strong) — matches canonical full-fidelity UVAFME production runs")
-    md.append("- **37.5% cross-rank edges** — a high-communication-density regime that "
-              "stress-tests the GPU-aware Slingshot-11 path (5× the cross-rank fraction of "
-              "Weak B)")
-    md.append("- Range: **8–2,048 GPUs** (all 9 rank counts complete)\n")
-    md.append("Together with Weak B, these two configurations span the compute-vs-communication "
-              "spectrum: Weak B is the high-site-density / large-total-agents / compute-bound "
-              "end, Weak A is the comm-stress / full-fidelity / communication-bound end. They "
-              "are deliberately paired so that no reviewer can claim the main result depends on "
-              "a single design point.\n")
-    a_per_gpu_mups_supp = metrics_a[peak_a]['throughput'] / peak_a / 1e6
-    md.append(write_table_weak("Weak Scaling A — 10 sites/GPU", metrics_a, gpus_a, "weak_scaling.csv"))
-    md.append(f"At {peak_a} GPUs the model handles "
-              f"{fmt_int(metrics_a[peak_a]['total_agents'])} agents at "
-              f"{metrics_a[peak_a]['efficiency']:.1f}% parallel efficiency under the 37.5% "
-              f"cross-rank stress regime (Fig.~`weak_scaling_a_efficiency` — same combined "
-              f"design as `weak_scaling_b_efficiency`: stacked first-tick + steady-state "
-              f"simulation time with ideal-baseline reference and efficiency annotations). The "
-              f"sustained per-GPU throughput is "
-              f"**~{a_per_gpu_mups_supp:.0f} M agent-updates/sec** — about half the Weak B "
-              f"per-GPU rate (~{b_per_gpu_mups:.0f} M upd/s/GPU), which is consistent with "
-              f"Weak A having half as many agents per GPU (5 M vs 10 M) under heavier per-site "
-              f"compute. Steady-state per-tick MPI ghost-exchange remains constant at "
-              f"~5 μs/rank across the entire 8 → 2,048 GPU sweep, confirming that the GPU-aware "
-              f"Slingshot-11 path scales as the methodology predicts even at the high "
-              f"cross-rank fraction.")
-    md.append("")
-    md.append("**Why Weak A is excluded from `setup_phase_breakdown`.** Weak A's per-site "
-              "fidelity (500 gaps × 1,000 trees = ~500,001 agents/site) is 5× higher than "
-              "Weak B / Strong (200 × 500 = ~100,001 agents/site). Setup time is dominated by "
-              "per-rank Python agent construction, which is roughly linear in *total agents per "
-              "rank*. Plotting Weak A on the same `sites/GPU` axis as Weak B + Strong would put "
-              "its bar on a different curve (~5× higher at the same sites/GPU), breaking the "
-              "visual claim that *all bars lie on one curve*. The agreement between Weak B and "
-              "Strong on the merged figure is a clean per-fidelity result; Weak A's existence "
-              "as a separate consistent measurement at a different fidelity is documented here "
-              "for cross-validation.\n")
-    md.append("Supplementary figures: `../figs/weak_scaling_a_efficiency.png` and "
-              "`../figs/weak_scaling_a_throughput.png`.\n")
+    md.append("- **100 sites per GPU** (10× more than Weak A) — high site density")
+    md.append("- **200 gaps × 500 trees** per site (reduced fidelity, deliberately matching "
+              "the Strong scaling experiment's per-site workload — see §5 — so that Weak B "
+              "and Strong live on the same `f(per-rank work)` curve and per-rank costs are "
+              "directly comparable)")
+    md.append("- **7.5% cross-rank edges** — a low-communication-density regime where MPI is "
+              "amortized aggressively over local compute")
+    md.append("- Originally targeted **8–2,048 GPUs** (matching Weak A), but the 256 / 512 / "
+              "1024 / 2048 GPU runs were queued on Frontier and **did not complete before the "
+              "SC2026 submission deadline**. We report the 5/9 measured rank counts "
+              "(8/16/32/64/128) below.\n")
+    md.append("Together with Weak A, these two configurations span the compute-vs-communication "
+              "spectrum: Weak A is the comm-stress / full-fidelity end, Weak B is the high-"
+              "site-density / large-total-agents end. The two configurations also have "
+              "different per-site fidelity (Weak A: 500 gaps × 1,000 trees; Weak B: 200 gaps × "
+              "500 trees), and Weak B's choice was made specifically so it shares fidelity "
+              "with the Strong scaling experiment, allowing direct per-rank-cost comparison.\n")
+    if missing_b:
+        md.append(f"> **Status:** {len(gpus_b)}/{len(EXPECTED_WEAK_B)} GPU configurations complete. "
+                  f"Missing: {', '.join(str(g) for g in missing_b)} GPUs (queued on Frontier; "
+                  f"runs did not complete before the SC2026 deadline).\n")
+    md.append(write_table_weak("Weak Scaling B — 100 sites/GPU", metrics_b, EXPECTED_WEAK_B, "weak_scaling_b.csv"))
+    if peak_b is not None:
+        b_per_gpu_mups = metrics_b[peak_b]['throughput'] / peak_b / 1e6
+        md.append(f"At {peak_b} GPUs the model handles "
+                  f"{fmt_int(metrics_b[peak_b]['total_agents'])} agents at "
+                  f"{metrics_b[peak_b]['efficiency']:.1f}% parallel efficiency "
+                  f"(Fig.~`weak_scaling_b_efficiency` — same combined design as Weak A: "
+                  f"stacked first-tick + steady-state simulation time with ideal-baseline "
+                  f"reference and efficiency annotations). The sustained per-GPU throughput is "
+                  f"**~{b_per_gpu_mups:.0f} M agent-updates/sec** — "
+                  f"~{b_per_gpu_mups / a_per_gpu_mups:.1f}× the Weak A per-GPU rate, indicating "
+                  f"the runtime is GPU-occupancy-bound rather than algorithm-bound (Weak B's "
+                  f"~10 M agents per GPU and lighter per-site compute saturate the MI250X GCD "
+                  f"more effectively than Weak A's ~5 M agents per GPU with full-fidelity "
+                  f"per-site workload). The pattern matches Weak A: GPU execution dominates "
+                  f"and MPI ghost-exchange is in the noise "
+                  f"(<{metrics_b[peak_b]['mpi_fraction']:.3f}%).\n")
+    md.append("Supplementary figures: `../figs/weak_scaling_b_efficiency.png` and "
+              "`../figs/weak_scaling_b_throughput.png`.\n")
 
     md_path = md_dir / "scaling_results.md"
     md_path.write_text("\n".join(md))

@@ -32,7 +32,7 @@ from _style import (
     F_TITLE, F_HEAD, F_LABEL, F_BODY, F_SMALL,
     LW_THICK, LW_MED, LW_THIN, LW_HAIR,
     C_SITE, C_GAP, C_TREE,
-    C_HPC, C_IDLE, C_EXPAND, C_DISP,
+    C_HPC, C_IDLE, C_EXPAND, C_DISP, C_TEXT,
 )
 
 # Chassis unification: every non-agent structural color in this figure
@@ -76,12 +76,15 @@ def main():
     CX = (L + LR) / 2
 
     # ==================================================================
-    # HPC SYSTEM LABEL (top) — in-figure title removed; use LaTeX \caption
+    # HPC SYSTEM LABEL (top) — in-figure title removed; use LaTeX \caption.
+    # Promoted from F_BODY italic gray to a larger bold dark "section
+    # header" so it reads as the figure's conceptual subtitle, paralleling
+    # the "Multi-priority kernel pipeline" header below.
     # ==================================================================
-    hpc_label_y = FIG_H - 0.12
+    hpc_label_y = FIG_H - 0.13
     ax.text(CX, hpc_label_y, "Two-level parallelism on an Exascale HPC system",
-            ha="center", va="center", fontsize=F_BODY, fontstyle="italic",
-            color=C_EXPAND)
+            ha="center", va="center", fontsize=10.5, fontweight="bold",
+            color=C_TEXT)
 
     # ==================================================================
     # LAYOUT COMPUTATION (top-down from HPC label)
@@ -99,18 +102,24 @@ def main():
     l1_box_y = l1_box_top - l1_box_h
 
     # Fused kernel strip (below Level 1 with gap for "per tick" arrow).
-    # Grown to match l2_box_h / l1_box_h so all three boxes are the same
-    # height — visual consistency across the three parallelism levels.
+    # Gap widened from 0.18 to 0.30 to give the bold "Multi-priority kernel
+    # pipeline" header room to breathe between the meta-box and the FK box.
     fk_box_h = 1.00
-    fk_box_top = l1_box_y - 0.18
+    fk_box_top = l1_box_y - 0.30
     fk_box_y = fk_box_top - fk_box_h
 
     # ==================================================================
     # HPC → Level 2 angled connectors
     # ==================================================================
     l2_box_w = LR - L
-    rbox(ax, L, l2_box_y, l2_box_w, l2_box_h,
-         C_MPI, fc=C_MPI + "06", lw=LW_THICK, rad=0.02, zo=0)
+    # META-BOX for "two-level parallelism" — encompasses Box 1 (top),
+    # the zoom-into-GPU arrow gap, and Box 2 (bottom). Replaces what used
+    # to be two separate outlined boxes. Same outline style as before;
+    # the Level 1 / Level 2 banners inside act as section headers.
+    meta_box_y = l1_box_y                           # bottom of former Box 2
+    meta_box_h = (l2_box_y + l2_box_h) - l1_box_y   # full span
+    rbox(ax, L, meta_box_y, l2_box_w, meta_box_h,
+         C_HPC, fc=C_HPC + "06", lw=LW_THICK, rad=0.02, zo=0)
     ax.text(L + l2_box_w / 2, l2_box_y + l2_box_h - 0.02,
             "Level 1: Inter-rank MPI \u2014 site's ensemble colocated (1 rank/GPU)",
             ha="center", va="top", fontsize=F_TITLE, fontweight="bold",
@@ -137,11 +146,14 @@ def main():
     # Box 1 bottom descriptor: per-site agent structure that gets colocated.
     # Symmetrical with Box 2 (GPU spec) and Box 3 (legend) bottom descriptors.
     # Counts shown as illustrative examples ("e.g.") — actual experiments vary.
+    # White bbox + high zorder so the descriptor visually masks the
+    # "zoom into one GPU" arrow that passes through this region.
     ax.text(L + l2_box_w / 2, l2_box_y + 0.07,
             "Per colocated site: 1 site agent + gap agents (e.g. 500/site) "
             "+ tree agents (e.g. 1000/gap)",
             ha="center", va="center", fontsize=F_BODY, fontstyle="italic",
-            color=C_MPI, zorder=1)
+            color=C_MPI, zorder=5,
+            bbox=dict(facecolor="white", edgecolor="none", pad=1))
 
     # Site circles (labeled "S" inside)
     sr = 0.078
@@ -187,21 +199,43 @@ def main():
                 fontsize=F_BODY, fontstyle="italic", color=C_MPI)
 
     # ==================================================================
-    # Box 1 → Box 2 transition: just a small italic label, no visual
-    # connector. Spatial zoom-in indicator. Sits in the inter-box gap.
+    # Box 1 → Box 2 transition: vertical arrow with "zoom into one GPU"
+    # label alongside, visually grouping the two boxes as the
+    # "two-level parallelism" pair from the paper's abstract.
+    # Arrow tail at the bottom edge of GPU 1 (the middle GPU, centered
+    # at CX), so it visually emanates from that specific GPU. Tip just
+    # above Box 2's top edge.
     # ==================================================================
-    zoom_label_y = (l2_box_y + l1_box_y + l1_box_h) / 2
-    ax.text(CX, zoom_label_y, "zoom into one GPU",
-            ha="center", va="center",
+    zoom_arrow_top_y = gpu_y                       # tail (bottom of GPU 1)
+    zoom_arrow_bot_y = l1_box_y + l1_box_h + 0.02  # tip (just above Box 2)
+    ax.annotate("",
+                xy=(CX, zoom_arrow_bot_y),     # arrow tip (downward)
+                xytext=(CX, zoom_arrow_top_y), # arrow tail
+                arrowprops=dict(arrowstyle="-|>",
+                                color=C_EXPAND, lw=1.0,
+                                mutation_scale=8,
+                                shrinkA=0, shrinkB=0),
+                zorder=4)
+    # Label alongside the arrow, positioned BELOW the white-bbox descriptor
+    # so it sits in the visible portion of the arrow between the descriptor
+    # and Box 2 (otherwise the descriptor's white bbox would mask it).
+    label_y = (l2_box_y + zoom_arrow_bot_y) / 2 - 0.02
+    ax.text(CX + 0.06, label_y,
+            "zoom into one GPU",
+            ha="left", va="center",
             fontsize=F_BODY, fontstyle="italic",
-            color=C_EXPAND)
+            color=C_EXPAND, zorder=6)
 
     # ==================================================================
     # LEVEL 1 BOX
     # ==================================================================
     l1_box_w = LR - L
-    rbox(ax, L, l1_box_y, l1_box_w, l1_box_h,
-         C_THREAD, fc=C_THREAD + "06", lw=LW_THICK, rad=0.02, zo=0)
+    # (Box 2 individual outline removed — now part of the meta-box drawn above.)
+    # Dashed divider line right above the Level 2 banner — visually splits
+    # the meta-box into the upper "Level 1" half and the lower "Level 2" half.
+    divider_y = l1_box_y + l1_box_h + 0.03
+    ax.plot([L, LR], [divider_y, divider_y],
+            color=C_HPC, lw=LW_THIN, ls="--", zorder=1)
     ax.text(L + l1_box_w / 2, l1_box_y + l1_box_h - 0.02,
             "Level 2: Intra-rank GPU threads \u2014 1 agent = 1 thread (grid-stride at scale)",
             ha="center", va="top", fontsize=F_TITLE, fontweight="bold",
@@ -333,10 +367,13 @@ def main():
     # connector. Temporal/execution drill-down indicator.
     # ==================================================================
     tick_label_y = (l1_box_y + fk_box_y + fk_box_h) / 2
+    # Promoted from F_BODY italic gray to a larger bold dark "section header"
+    # so the inter-box connector reads as a real section title, paralleling
+    # the top "Two-level parallelism..." label.
     ax.text(CX, tick_label_y, "Multi-priority kernel pipeline (inside each tick)",
             ha="center", va="center",
-            fontsize=F_BODY, fontstyle="italic",
-            color=C_EXPAND)
+            fontsize=10.5, fontweight="bold",
+            color=C_TEXT)
 
     # ==================================================================
     # FUSED KERNEL BOX (bottom)
@@ -358,15 +395,15 @@ def main():
     ]
     bc = {"Gap": C_GAP, "Tree": C_TREE, "Site": C_SITE}
 
-    # Active cells per breed (out of 84, in a 14x6 icon).
+    # Active cells per breed (out of 50, in a 10x5 icon).
     # Ratio Site:Gap:Tree ≈ 1:3:28 preserved as closely as possible
-    # given 84 isn't a multiple of 32.
-    fill_count = {"Site": 3, "Gap": 8, "Tree": 73}
+    # given 50 isn't a multiple of 32.
+    fill_count = {"Site": 2, "Gap": 5, "Tree": 43}
 
     n_p = len(priorities)
     margin_x = 0.14
     avail_w = fk_box_w - 2 * margin_x
-    gap_between = 0.04
+    gap_between = 0.10  # was 0.04 — wider gaps so short sync arrows fit
     step_w = (avail_w - (n_p - 1) * gap_between) / n_p
 
     # Strip top moved up 0.06 in (from -0.40 to -0.34) so the priority
@@ -380,25 +417,35 @@ def main():
 
     step_x_start = fk_box_x + margin_x
 
-    # Horizontal priority-flow arrow spanning the priority strip (above icons)
-    arrow_y = step_icon_y_top + 0.06
-    arrow_x0 = step_x_start
-    arrow_x1 = step_x_start + n_p * step_w + (n_p - 1) * gap_between
-    ax.annotate("",
-                xy=(arrow_x1, arrow_y), xytext=(arrow_x0, arrow_y),
-                arrowprops=dict(arrowstyle="-|>",
-                                color=C_HPC, lw=1.5),  # 1.5x LW_THICK
-                zorder=4)
+    # Short sequential-flow arrows in each gap between adjacent priorities.
+    # Tail at right edge of priority i, tip at left edge of priority i+1.
+    # IMPORTANT: shrinkA=shrinkB=0 — matplotlib defaults are 2pt each end,
+    # which on a 0.10 in gap leaves the arrow physically pulled inward and
+    # not touching either icon. Setting both to 0 lets the arrow span the
+    # whole gap. The arrow passes through the red grid-barrier line at the
+    # midpoint and clearly reaches the next step function.
+    short_arrow_y = (step_icon_y_top + step_icon_y_bot) / 2
+    for _i in range(n_p - 1):
+        icon_right_x = step_x_start + _i * (step_w + gap_between) + step_w
+        next_icon_left_x = step_x_start + (_i + 1) * (step_w + gap_between)
+        ax.annotate("",
+                    xy=(next_icon_left_x, short_arrow_y),       # arrow tip
+                    xytext=(icon_right_x, short_arrow_y),       # arrow tail
+                    arrowprops=dict(arrowstyle="->",
+                                    color=C_HPC, lw=1.2,
+                                    mutation_scale=8,
+                                    shrinkA=0, shrinkB=0),
+                    zorder=6)
 
     for i, (pnum, breed) in enumerate(priorities):
         sx = step_x_start + i * (step_w + gap_between)
         color = bc[breed]
 
-        # Thread-grid icon: 14 cols × 6 rows = 84 cells. Reduced from 16×8
-        # so individual cells are larger and the (now-emphasized) grid
-        # barriers between priorities have more visual room around them.
-        n_cols = 14
-        n_rows = 6
+        # Thread-grid icon: 10 cols × 5 rows = 50 cells. Smaller cell count
+        # leaves room for wider gap_between (see below) so we can fit short
+        # arrows / sync indicators between adjacent priority icons.
+        n_cols = 10
+        n_rows = 5
         icon_margin = 0.012
         icon_w_avail = step_w - 2 * icon_margin
         icon_h_avail = step_icon_h - 2 * icon_margin
@@ -430,13 +477,24 @@ def main():
                     color=C_DISP, lw=1.5, zorder=5)
 
     # Legend at bottom of fused kernel box
-    ax.text(fk_box_x + fk_box_w / 2, fk_box_y + 0.04,
-            "each cell = 1 thread   "
-            "\u25a0 active (Site/Gap/Tree)   "
-            "\u25a1 idle at barrier   "
-            "|=grid barrier",
-            ha="center", va="bottom", fontsize=F_LABEL, fontstyle="italic",
-            color=C_BARRIER)
+    # Legend split into two text calls so the "|=grid barrier" item can
+    # use the same red (C_DISP) as the actual barriers in the strip above.
+    # Both text calls share the same y and the same x boundary; navy
+    # part ends at the boundary (ha=right), red part starts at it (ha=left),
+    # so the legend reads as one continuous line with two colors.
+    navy_part = ("each cell = 1 thread   "
+                 "\u25a0 active (Site/Gap/Tree)   "
+                 "\u25a1 idle at barrier   ")
+    red_part = "|=grid barrier"
+    char_w = 0.044  # rough per-char width at F_LABEL=8pt italic sans-serif
+    center_x = fk_box_x + fk_box_w / 2
+    boundary_x = center_x + (len(navy_part) - len(red_part)) * char_w / 2
+    ax.text(boundary_x, fk_box_y + 0.04, navy_part,
+            ha="right", va="bottom", fontsize=F_LABEL, fontstyle="italic",
+            color=C_HPC)
+    ax.text(boundary_x, fk_box_y + 0.04, red_part,
+            ha="left", va="bottom", fontsize=F_LABEL, fontstyle="italic",
+            color=C_DISP)
 
     # ==================================================================
     plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
