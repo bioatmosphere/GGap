@@ -16,3 +16,6 @@ output_data/
 
 # Virtual environments
 .venv
+
+# Large simulation outputs (kept local, not versioned)
+conus_simulations/results/simulation/
