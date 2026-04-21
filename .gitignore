@@ -5,6 +5,14 @@ build/
 dist/
 wheels/
 *.egg-info
+.ipynb_checkpoints/
+
+gap/__pycache__
+gap/.ipynb_checkpoints/
+gap/step_func_code.py
+*.out
+input_data/.ipynb_checkpoints/
+output_data/
 
 # Virtual environments
 .venv

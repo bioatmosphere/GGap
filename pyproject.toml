@@ -9,6 +9,7 @@ dependencies = [
     "earthengine-api>=1.6.13",
     "geemap>=0.36.5",
     "matplotlib>=3.10.6",
+    "mpi4py>=4.1.1",
     "numpy>=2.3.3",
     "pip>=25.2",
     "rasterio>=1.4.3",

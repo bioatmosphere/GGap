@@ -52,37 +52,50 @@ python main.py
 
 This demo doesn't require GPU/CuPy - it just displays species data.
 
-### GGap Model (GPU Required)
+### GGap Single-Site Simulation (GPU Required)
 
-The full GGap simulation requires CUDA/ROCm and CuPy:
+The primary entry point runs a single-site simulation with CSV-initialized species and climate from UVAFME input files:
 
 ```bash
 cd gap
-mpirun -n 4 python run.py --num_trees 200 --years 100
+python run_one_site.py --num_gaps 200 --pool_size 1000 --years 500
 ```
 
 Command-line options:
-- `--num_trees`: Number of tree agents (default: 100)
-- `--forest_size`: Square forest size in meters (default: 100)
-- `--years`: Simulation duration in years (default: 50)
-- `--neighborhood_radius`: Interaction radius in meters (default: 10)
-- `--deg_days`: Annual degree days (default: 2500)
-- `--dry_days`: Annual drought days (default: 30)
-- `--base_mortality`: Base mortality rate (default: 0.02)
-- `--report_interval`: Years between reports (default: 10)
-- `--species_dist`: Distribution - `equal`, `mixed`, or `single:ID` (default: equal)
+- `--num_gaps`: Number of gaps per site (default: 200)
+- `--pool_size`: Max tree slots per gap (default: 1000)
+- `--years`: Simulation duration in years (default: 1000)
+- `--report_interval`: Years between progress reports and CSV output (default: 10)
+- `--site_id`: Site ID from UVAFME CSV files (default: 0)
+- `--data_dir`: Directory containing UVAFME CSV files (default: input_data)
+- `--prefix`: File prefix for UVAFME CSV files (default: UVAFME2012)
+- `--output_dir`: Directory for CSV output files (default: output_data)
+- `--no_tree_data`: Skip writing tree_data.csv (can be very large)
 
 **Example runs:**
 ```bash
-# Small test
-mpirun -n 2 python run.py --num_trees 50 --forest_size 50 --years 50
+# Quick test (10 gaps, 50 years)
+python run_one_site.py --num_gaps 10 --years 50
 
-# Large-scale simulation
-mpirun -n 8 python run.py --num_trees 5000 --forest_size 200 --years 200
+# Full simulation
+python run_one_site.py --num_gaps 200 --pool_size 1000 --years 1000
 
-# White Oak forest
-mpirun -n 4 python run.py --num_trees 500 --species_dist single:3 --years 150
+# Different site
+python run_one_site.py --site_id 1 --data_dir input_data --prefix UVAFME2012
 ```
+
+### Plotting Output
+
+After a simulation, generate plots from CSV output:
+
+```bash
+cd gap
+python plot_outputs.py --output-dir ../output_data --format png
+```
+
+Options: `--plots-dir`, `--format` (png/pdf/svg), `--dpi`, `--style`, `--show/--no-show`
+
+Generates 4 plot types: forest_dynamics, soil_biogeochemistry, environmental_conditions, summary_dashboard.
 
 ### SAGESim Examples (Reference)
 
@@ -111,9 +124,9 @@ python main.py
 
 ### Testing
 
-Test species data access (no GPU):
+Test model initialization (no GPU):
 ```bash
-python -c "from gap.tree_species_data import get_species_params; sp = get_species_params(3); print(sp.common_name)"
+python -c "from gap.gap_model import GAPModel; m = GAPModel(); s = m.initialize_site(); print(s['site_name'], len(s['species']), 'species')"
 ```
 
 Run SAGESim tests:
@@ -174,17 +187,38 @@ UVAFME is a traditional forest gap model translated from Fortran to Python.
 
 ### GGap Integration (`gap/`)
 
-**Current Status**: In early development. The integration layer is being built to connect UVAFME forest processes with SAGESim's GPU-accelerated agent framework.
+GGap implements the full UVAFME forest dynamics using a 3-level agent hierarchy (Site → Gap → Tree) with 7-priority step functions running on GPU.
 
-**Files:**
-- `gap_model.py` - GAPModel extending SAGESim Model class
-- `gap_breed.py` - Tree breed definition (currently based on SIR template)
-- `gap_step_func.py` - GPU kernel for tree dynamics (placeholder with UVAFME function calls outlined)
+**Agent Hierarchy:**
+- **Site agents** - Hold soil pools (A0/A/Base C/N), climate data (12 months × 4 variables), available nitrogen
+- **Gap agents** - Aggregate litter/demand from trees, compute light profiles, manage seedbank/renewal
+- **Tree agents** - Individual trees with species parameters, growth state, biomass tracking
 
-**Integration Goals**:
-- Translate UVAFME tree processes (growth, mortality, reproduction) into GPU kernels
-- Use SAGESim's spatial structures for tree neighborhoods and light competition
-- Leverage MPI parallelization for large-scale forest simulations
+**Core Files:**
+- `gap_model.py` - GAPModel class: breed registration, CSV-based site/species initialization, gap/tree creation, data collection
+- `run_one_site.py` - Main simulation runner with GAPpy-compatible CSV output
+- `output_utils.py` - OutputWriter producing 5 CSV files (site_data, soil_data, genus_data, species_data, tree_data)
+- `plot_outputs.py` - Visualization of simulation outputs (4 plot types)
+- `step_func_code.py` - Generated GPU kernel code
+
+**Step Functions** (`step_functions/`):
+- `gap/gap_litter_aggregate_step.py` (P0) - Aggregate litter from trees, density-based recruitment count
+- `site/soil_step.py` (P1) - Daily soil biogeochemistry (365 days), climate variability, water balance
+- `tree/tree_potential_growth_step.py` (P2) - Environmental responses, potential diameter growth
+- `gap/gap_demand_aggregate_step.py` (P3) - Sum N demand across trees per gap
+- `site/site_nutrient_step.py` (P4) - Compute N supply ratio
+- `gap/gap_sync_step.py` (P5) - Relay climate and N ratio to trees, clear accumulators
+- `tree/tree_actual_growth_step.py` (P6) - N-limited growth, mortality, biomass update, renewal
+
+**Species Data:**
+- 32 species loaded from `input_data/UVAFME2012_specieslist.csv` (filtered by site range)
+- 20 genera (Acer, Betula, Carya, Fagus, Fraxinus, etc.)
+- Species parameters: max age/diam/ht, growth rate, shade/drought/flood tolerance, degree-day range, leaf area, wood density
+
+**Output System:**
+- 5 GAPpy-compatible CSV files with proper scaling (plotscale = HEC_TO_M2/plotsize)
+- Per-gap aggregation with cross-gap averaging
+- Diameter categories: <=8, <=28, <=48, <=68, <=88, >88 cm
 
 ## CuPy JIT Limitations
 
@@ -232,9 +266,12 @@ Creates visualizations of forest distributions. Works with downloaded NLCD data 
 ## Project Structure Notes
 
 - `SAGESim/` is a git submodule - contains the full SAGESim framework and examples
-- `input_data/` contains UVAFME input files (species lists, site data, climate data)
-- `output_data/` stores simulation outputs
-- `gap/` is the integration layer (work in progress)
+- `GAPpy/` is a git submodule - Python translation of UVAFME (reference implementation)
+- `input_data/` contains UVAFME CSV input files (species list, site data, climate, climate stddev, range list, altitudes)
+- `output_data/` stores simulation CSV outputs
+- `gap/` is the main GGap implementation
+- `gap/step_functions/` contains GPU step functions organized by agent type (tree/, gap/, site/)
+- `gap/docs/` contains detailed documentation (AGENT_PROPERTIES.md, implementation_logic.md)
 
 ## Development Guidelines
 
