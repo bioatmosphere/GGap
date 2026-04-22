@@ -2,8 +2,8 @@
 #SBATCH -A lrn088
 #SBATCH -J conus_test
 #SBATCH -N 2
-#SBATCH -p batch
-#SBATCH -t 30:00
+#SBATCH -q debug
+#SBATCH -t 2:00:00
 #SBATCH -o ../logs/conus_test_%j.out
 #SBATCH -e ../logs/conus_test_%j.err
 

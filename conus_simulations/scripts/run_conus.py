@@ -499,71 +499,40 @@ def collect_local_site_data(model, local_sites):
     return results, timings
 
 
-def run_simulation(model, local_sites, years, report_interval, output_dir, no_tree_data, no_snapshots=False):
+def run_simulation(model, local_sites, years, report_interval, output_dir, no_tree_data):
     """
     Run the simulation with periodic raw data snapshots.
 
     Saves raw GPU data as .npz files to: {output_dir}/snapshots/year_XXXX_rank_XXX.npz
     Post-processing to generate CSVs can be done offline after simulation completes.
-
-    If no_snapshots=True, skip GPU→CPU transfer and disk save inside the loop.
-    Used to measure pure simulation cost without I/O overhead.
     """
     log("\n" + "=" * 80)
     log(f"Phase 5: Running Simulation for {years} Years")
     log("-" * 80)
 
-    if no_snapshots:
-        if rank == 0:
-            log("  NO-SNAPSHOT MODE: skipping GPU→CPU transfer and disk save in loop")
-            log("")
-    else:
-        # Create snapshot directory
-        snapshot_dir = os.path.join(output_dir, "snapshots")
-        os.makedirs(snapshot_dir, exist_ok=True)
+    # Create snapshot directory
+    snapshot_dir = os.path.join(output_dir, "snapshots")
+    os.makedirs(snapshot_dir, exist_ok=True)
 
-        # Save local_sites metadata for post-processing
-        metadata_file = os.path.join(output_dir, f"rank_{rank:03d}_sites.pkl")
-        with open(metadata_file, 'wb') as f:
-            pickle.dump({
-                'local_sites': local_sites,
-                'species_by_id': model.species_by_id,
-                'tree_to_gap': model.tree_to_gap,
-                'tree_ids': model.tree_ids,  # Agent ID order (matches array indices)
-            }, f)
+    # Save local_sites metadata for post-processing
+    metadata_file = os.path.join(output_dir, f"rank_{rank:03d}_sites.pkl")
+    with open(metadata_file, 'wb') as f:
+        pickle.dump({
+            'local_sites': local_sites,
+            'species_by_id': model.species_by_id,
+            'tree_to_gap': model.tree_to_gap,
+            'tree_ids': model.tree_ids,  # Agent ID order (matches array indices)
+        }, f)
 
-        if rank == 0:
-            log(f"\nSnapshot configuration:")
-            log(f"  {len(local_sites)} local sites on rank 0")
-            log(f"  Saving raw GPU data to: {snapshot_dir}/")
-            log(f"  Metadata saved to: rank_XXX_sites.pkl")
-            log(f"  Post-processing: python process_snapshots.py --snapshot_dir {snapshot_dir} --output_dir {output_dir}")
-            log("")
+    if rank == 0:
+        log(f"\nSnapshot configuration:")
+        log(f"  {len(local_sites)} local sites on rank 0")
+        log(f"  Saving raw GPU data to: {snapshot_dir}/")
+        log(f"  Metadata saved to: rank_XXX_sites.pkl")
+        log(f"  Post-processing: python process_snapshots.py --snapshot_dir {snapshot_dir} --output_dir {output_dir}")
+        log("")
 
     t_total_start = time.time()
-
-    if no_snapshots:
-        # Pure simulation: single simulate() call for all years, no batching, no I/O.
-        if rank == 0:
-            log(f"Calling model.simulate(ticks={years}) in a single invocation...")
-
-        t_sim_start = time.time()
-        model.simulate(ticks=years, sync_workers_every_n_ticks=1)
-        t_sim_total = time.time() - t_sim_start
-
-        if rank == 0:
-            log(f"  simulate({years}) completed in {t_sim_total:.2f}s "
-                f"({t_sim_total / years:.3f}s/year)")
-
-        t_total = time.time() - t_total_start
-
-        log("\n" + "=" * 80)
-        log("Simulation Complete (no-snapshot mode)")
-        log(f"  Total time: {t_total:.2f}s")
-        log(f"  Pure sim time: {t_sim_total:.2f}s")
-        log(f"  Time per year: {t_total / years:.3f}s")
-        log("=" * 80)
-        return
 
     # Run simulation in batches with periodic snapshots
     for year_batch in range(0, years, report_interval):
@@ -668,9 +637,6 @@ def main():
     # Output control
     parser.add_argument("--no_tree_data", action="store_true",
                        help="Skip writing tree_data.csv (can be very large)")
-    parser.add_argument("--no_snapshots", action="store_true",
-                       help="Skip GPU→CPU transfer and .npz snapshot save during loop "
-                            "(measures pure simulation cost without I/O)")
 
     # Test mode
     parser.add_argument("--test", action="store_true",
@@ -713,8 +679,7 @@ def main():
         years=args.years,
         report_interval=args.report_interval,
         output_dir=args.output_dir,
-        no_tree_data=args.no_tree_data,
-        no_snapshots=args.no_snapshots,
+        no_tree_data=args.no_tree_data
     )
 
 
