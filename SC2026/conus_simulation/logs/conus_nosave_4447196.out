@@ -1,0 +1,560 @@
+======================================================================
+CONUS GGap Simulation (NO SNAPSHOTS)
+======================================================================
+Job ID: 4447196
+Nodes: 20
+Tasks per node: 8 (GPUs)
+Total ranks: 160
+Start time: Wed Apr 22 04:53:41 PM EDT 2026
+======================================================================
+Loading modules...
+
+======================================================================
+Production Parameters (no-snapshot mode):
+  Dispersal factor: 2.0
+  Gaps per site: 500
+  Max trees per gap: 1000
+  Simulation years: 1000
+  Report interval: 10 years (timing prints only, no data save)
+  Sites: 1424 CONUS sites distributed across 160 ranks
+  Snapshots: DISABLED (--no_snapshots)
+======================================================================
+
+[Rank 0] ================================================================================
+[Rank 0] Phase 1: Loading CONUS Data
+[Rank 0] --------------------------------------------------------------------------------
+[Rank 0]   Loaded 1424 sites from CONUS_site.csv
+[Rank 0]   Loaded 235 species from CONUS_rangelist.csv
+[Rank 0]   Data loading completed in 0.07s
+[Rank 0] 
+Phase 2: Building Directed Dispersal Graph
+[Rank 0] --------------------------------------------------------------------------------
+[Rank 0]   Dispersal factor: 2.0
+[Rank 0]   Directed edges: 11371
+[Rank 0]   Graph built in 1.23s
+[Rank 0] 
+Phase 3: METIS Graph Partitioning
+[Rank 0] --------------------------------------------------------------------------------
+[Rank 0]   Undirected edges: 5741
+[Rank 0]   Partitioned 1424 sites into 160 partitions
+[Rank 0]   Partitioning completed in 0.06s
+[Rank 0]   Sites per partition: min=7, max=10, avg=8.9
+[Rank 0] 
+================================================================================
+[Rank 0] Phase 4: Initializing Simulation
+[Rank 0] --------------------------------------------------------------------------------
+[Rank 0]   Loading global species and site data...
+[Rank 21]   Rank 21: assigned 9 sites
+[Rank 21]   Rank 21: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 15]   Rank 15: assigned 9 sites
+[Rank 15]   Rank 15: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 126]   Rank 126: assigned 9 sites
+[Rank 126]   Rank 126: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 125]   Rank 125: assigned 9 sites
+[Rank 125]   Rank 125: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 110]   Rank 110: assigned 9 sites
+[Rank 110]   Rank 110: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 83]   Rank 83: assigned 9 sites
+[Rank 83]   Rank 83: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 123]   Rank 123: assigned 9 sites
+[Rank 123]   Rank 123: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 158]   Rank 158: assigned 9 sites
+[Rank 158]   Rank 158: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 57]   Rank 57: assigned 9 sites
+[Rank 57]   Rank 57: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 127]   Rank 127: assigned 9 sites
+[Rank 127]   Rank 127: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 107]   Rank 107: assigned 9 sites
+[Rank 107]   Rank 107: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 23]   Rank 23: assigned 9 sites
+[Rank 23]   Rank 23: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 51]   Rank 51: assigned 9 sites
+[Rank 51]   Rank 51: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 87]   Rank 87: assigned 9 sites
+[Rank 87]   Rank 87: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 61]   Rank 61: assigned 7 sites
+[Rank 61]   Rank 61: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 106]   Rank 106: assigned 9 sites
+[Rank 106]   Rank 106: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 152]   Rank 152: assigned 9 sites
+[Rank 152]   Rank 152: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 38]   Rank 38: assigned 9 sites
+[Rank 38]   Rank 38: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 59]   Rank 59: assigned 9 sites
+[Rank 59]   Rank 59: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 124]   Rank 124: assigned 9 sites
+[Rank 124]   Rank 124: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 17]   Rank 17: assigned 9 sites
+[Rank 17]   Rank 17: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 150]   Rank 150: assigned 9 sites
+[Rank 150]   Rank 150: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 82]   Rank 82: assigned 9 sites
+[Rank 82]   Rank 82: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 10]   Rank 10: assigned 9 sites
+[Rank 10]   Rank 10: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 121]   Rank 121: assigned 9 sites
+[Rank 121]   Rank 121: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 25]   Rank 25: assigned 9 sites
+[Rank 25]   Rank 25: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 54]   Rank 54: assigned 9 sites
+[Rank 54]   Rank 54: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 81]   Rank 81: assigned 9 sites
+[Rank 81]   Rank 81: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 50]   Rank 50: assigned 9 sites
+[Rank 50]   Rank 50: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 101]   Rank 101: assigned 9 sites
+[Rank 101]   Rank 101: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 104]   Rank 104: assigned 9 sites
+[Rank 104]   Rank 104: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 100]   Rank 100: assigned 9 sites
+[Rank 100]   Rank 100: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 103]   Rank 103: assigned 9 sites
+[Rank 103]   Rank 103: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 35]   Rank 35: assigned 9 sites
+[Rank 35]   Rank 35: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 19]   Rank 19: assigned 9 sites
+[Rank 19]   Rank 19: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 39]   Rank 39: assigned 8 sites
+[Rank 39]   Rank 39: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 62]   Rank 62: assigned 9 sites
+[Rank 62]   Rank 62: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 18]   Rank 18: assigned 9 sites
+[Rank 18]   Rank 18: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 20]   Rank 20: assigned 9 sites
+[Rank 20]   Rank 20: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 11]   Rank 11: assigned 10 sites
+[Rank 11]   Rank 11: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 12]   Rank 12: assigned 9 sites
+[Rank 12]   Rank 12: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 48]   Rank 48: assigned 9 sites
+[Rank 48]   Rank 48: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 36]   Rank 36: assigned 9 sites
+[Rank 36]   Rank 36: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 77]   Rank 77: assigned 8 sites
+[Rank 77]   Rank 77: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 122]   Rank 122: assigned 9 sites
+[Rank 122]   Rank 122: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 55]   Rank 55: assigned 9 sites
+[Rank 55]   Rank 55: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 63]   Rank 63: assigned 8 sites
+[Rank 63]   Rank 63: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 53]   Rank 53: assigned 9 sites
+[Rank 53]   Rank 53: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 148]   Rank 148: assigned 9 sites
+[Rank 148]   Rank 148: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 153]   Rank 153: assigned 9 sites
+[Rank 153]   Rank 153: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 156]   Rank 156: assigned 9 sites
+[Rank 156]   Rank 156: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 111]   Rank 111: assigned 9 sites
+[Rank 111]   Rank 111: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 120]   Rank 120: assigned 9 sites
+[Rank 120]   Rank 120: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 13]   Rank 13: assigned 9 sites
+[Rank 13]   Rank 13: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 52]   Rank 52: assigned 8 sites
+[Rank 52]   Rank 52: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 22]   Rank 22: assigned 9 sites
+[Rank 22]   Rank 22: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 32]   Rank 32: assigned 9 sites
+[Rank 32]   Rank 32: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 146]   Rank 146: assigned 9 sites
+[Rank 146]   Rank 146: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 72]   Rank 72: assigned 9 sites
+[Rank 72]   Rank 72: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 74]   Rank 74: assigned 8 sites
+[Rank 74]   Rank 74: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 85]   Rank 85: assigned 8 sites
+[Rank 85]   Rank 85: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 30]   Rank 30: assigned 9 sites
+[Rank 30]   Rank 30: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 109]   Rank 109: assigned 9 sites
+[Rank 109]   Rank 109: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 33]   Rank 33: assigned 9 sites
+[Rank 33]   Rank 33: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 16]   Rank 16: assigned 9 sites
+[Rank 16]   Rank 16: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 88]   Rank 88: assigned 9 sites
+[Rank 88]   Rank 88: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 99]   Rank 99: assigned 9 sites
+[Rank 99]   Rank 99: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 151]   Rank 151: assigned 8 sites
+[Rank 151]   Rank 151: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 147]   Rank 147: assigned 9 sites
+[Rank 147]   Rank 147: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 80]   Rank 80: assigned 9 sites
+[Rank 80]   Rank 80: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 0]   Rank 0: assigned 10 sites
+[Rank 0]   Rank 0: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 98]   Rank 98: assigned 9 sites
+[Rank 98]   Rank 98: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 8]   Rank 8: assigned 9 sites
+[Rank 8]   Rank 8: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 94]   Rank 94: assigned 9 sites
+[Rank 94]   Rank 94: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 105]   Rank 105: assigned 8 sites
+[Rank 105]   Rank 105: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 155]   Rank 155: assigned 9 sites
+[Rank 155]   Rank 155: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 154]   Rank 154: assigned 9 sites
+[Rank 154]   Rank 154: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 149]   Rank 149: assigned 9 sites
+[Rank 149]   Rank 149: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 144]   Rank 144: assigned 9 sites
+[Rank 144]   Rank 144: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 102]   Rank 102: assigned 9 sites
+[Rank 102]   Rank 102: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 56]   Rank 56: assigned 9 sites
+[Rank 56]   Rank 56: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 26]   Rank 26: assigned 9 sites
+[Rank 26]   Rank 26: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 91]   Rank 91: assigned 8 sites
+[Rank 91]   Rank 91: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 31]   Rank 31: assigned 9 sites
+[Rank 31]   Rank 31: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 1]   Rank 1: assigned 9 sites
+[Rank 1]   Rank 1: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 14]   Rank 14: assigned 9 sites
+[Rank 14]   Rank 14: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 34]   Rank 34: assigned 9 sites
+[Rank 34]   Rank 34: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 145]   Rank 145: assigned 9 sites
+[Rank 145]   Rank 145: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 9]   Rank 9: assigned 9 sites
+[Rank 9]   Rank 9: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 5]   Rank 5: assigned 9 sites
+[Rank 5]   Rank 5: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 159]   Rank 159: assigned 9 sites
+[Rank 159]   Rank 159: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 86]   Rank 86: assigned 9 sites
+[Rank 86]   Rank 86: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 49]   Rank 49: assigned 9 sites
+[Rank 49]   Rank 49: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 4]   Rank 4: assigned 9 sites
+[Rank 4]   Rank 4: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 2]   Rank 2: assigned 9 sites
+[Rank 2]   Rank 2: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 73]   Rank 73: assigned 9 sites
+[Rank 73]   Rank 73: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 108]   Rank 108: assigned 8 sites
+[Rank 108]   Rank 108: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 78]   Rank 78: assigned 9 sites
+[Rank 78]   Rank 78: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 60]   Rank 60: assigned 9 sites
+[Rank 60]   Rank 60: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 3]   Rank 3: assigned 9 sites
+[Rank 3]   Rank 3: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 7]   Rank 7: assigned 9 sites
+[Rank 7]   Rank 7: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 58]   Rank 58: assigned 9 sites
+[Rank 58]   Rank 58: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 28]   Rank 28: assigned 9 sites
+[Rank 28]   Rank 28: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 27]   Rank 27: assigned 9 sites
+[Rank 27]   Rank 27: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 84]   Rank 84: assigned 9 sites
+[Rank 84]   Rank 84: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 93]   Rank 93: assigned 8 sites
+[Rank 93]   Rank 93: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 6]   Rank 6: assigned 9 sites
+[Rank 6]   Rank 6: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 92]   Rank 92: assigned 9 sites
+[Rank 92]   Rank 92: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 95]   Rank 95: assigned 9 sites
+[Rank 95]   Rank 95: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 79]   Rank 79: assigned 9 sites
+[Rank 79]   Rank 79: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 157]   Rank 157: assigned 8 sites
+[Rank 157]   Rank 157: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 75]   Rank 75: assigned 8 sites
+[Rank 75]   Rank 75: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 29]   Rank 29: assigned 10 sites
+[Rank 29]   Rank 29: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 37]   Rank 37: assigned 9 sites
+[Rank 37]   Rank 37: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 24]   Rank 24: assigned 9 sites
+[Rank 24]   Rank 24: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 96]   Rank 96: assigned 9 sites
+[Rank 96]   Rank 96: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 128]   Rank 128: assigned 9 sites
+[Rank 128]   Rank 128: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 131]   Rank 131: assigned 9 sites
+[Rank 131]   Rank 131: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 136]   Rank 136: assigned 9 sites
+[Rank 136]   Rank 136: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 139]   Rank 139: assigned 9 sites
+[Rank 139]   Rank 139: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 138]   Rank 138: assigned 9 sites
+[Rank 138]   Rank 138: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 130]   Rank 130: assigned 9 sites
+[Rank 130]   Rank 130: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 134]   Rank 134: assigned 9 sites
+[Rank 134]   Rank 134: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 142]   Rank 142: assigned 9 sites
+[Rank 142]   Rank 142: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 135]   Rank 135: assigned 9 sites
+[Rank 135]   Rank 135: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 140]   Rank 140: assigned 8 sites
+[Rank 140]   Rank 140: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 133]   Rank 133: assigned 9 sites
+[Rank 133]   Rank 133: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 141]   Rank 141: assigned 8 sites
+[Rank 141]   Rank 141: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 143]   Rank 143: assigned 9 sites
+[Rank 143]   Rank 143: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 137]   Rank 137: assigned 9 sites
+[Rank 137]   Rank 137: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 129]   Rank 129: assigned 9 sites
+[Rank 129]   Rank 129: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 116]   Rank 116: assigned 9 sites
+[Rank 116]   Rank 116: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 132]   Rank 132: assigned 9 sites
+[Rank 132]   Rank 132: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 115]   Rank 115: assigned 9 sites
+[Rank 115]   Rank 115: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 118]   Rank 118: assigned 9 sites
+[Rank 118]   Rank 118: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 119]   Rank 119: assigned 9 sites
+[Rank 119]   Rank 119: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 117]   Rank 117: assigned 9 sites
+[Rank 117]   Rank 117: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 113]   Rank 113: assigned 9 sites
+[Rank 113]   Rank 113: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 89]   Rank 89: assigned 9 sites
+[Rank 89]   Rank 89: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 114]   Rank 114: assigned 9 sites
+[Rank 114]   Rank 114: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 112]   Rank 112: assigned 9 sites
+[Rank 112]   Rank 112: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 42]   Rank 42: assigned 9 sites
+[Rank 42]   Rank 42: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 41]   Rank 41: assigned 9 sites
+[Rank 41]   Rank 41: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 65]   Rank 65: assigned 9 sites
+[Rank 65]   Rank 65: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 45]   Rank 45: assigned 8 sites
+[Rank 45]   Rank 45: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 47]   Rank 47: assigned 9 sites
+[Rank 47]   Rank 47: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 44]   Rank 44: assigned 9 sites
+[Rank 44]   Rank 44: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 43]   Rank 43: assigned 9 sites
+[Rank 43]   Rank 43: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 40]   Rank 40: assigned 9 sites
+[Rank 40]   Rank 40: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 46]   Rank 46: assigned 9 sites
+[Rank 46]   Rank 46: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 71]   Rank 71: assigned 8 sites
+[Rank 71]   Rank 71: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 68]   Rank 68: assigned 9 sites
+[Rank 68]   Rank 68: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 66]   Rank 66: assigned 9 sites
+[Rank 66]   Rank 66: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 69]   Rank 69: assigned 9 sites
+[Rank 69]   Rank 69: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 64]   Rank 64: assigned 9 sites
+[Rank 64]   Rank 64: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 70]   Rank 70: assigned 9 sites
+[Rank 70]   Rank 70: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 67]   Rank 67: assigned 9 sites
+[Rank 67]   Rank 67: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 76]   Rank 76: assigned 9 sites
+[Rank 76]   Rank 76: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 90]   Rank 90: assigned 9 sites
+[Rank 90]   Rank 90: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 97]   Rank 97: assigned 9 sites
+[Rank 97]   Rank 97: initializing sites with 500 gaps, 1000 maxtrees each...
+[Rank 61]   Rank 61: site initialization completed in 26.25s
+[Rank 77]   Rank 77: site initialization completed in 29.85s
+[Rank 141]   Rank 141: site initialization completed in 30.72s
+[Rank 74]   Rank 74: site initialization completed in 30.76s
+[Rank 140]   Rank 140: site initialization completed in 30.76s
+[Rank 52]   Rank 52: site initialization completed in 30.85s
+[Rank 45]   Rank 45: site initialization completed in 30.93s
+[Rank 157]   Rank 157: site initialization completed in 31.02s
+[Rank 75]   Rank 75: site initialization completed in 31.07s
+[Rank 71]   Rank 71: site initialization completed in 31.24s
+[Rank 85]   Rank 85: site initialization completed in 31.53s
+[Rank 63]   Rank 63: site initialization completed in 31.61s
+[Rank 39]   Rank 39: site initialization completed in 31.84s
+[Rank 151]   Rank 151: site initialization completed in 32.05s
+[Rank 93]   Rank 93: site initialization completed in 32.15s
+[Rank 105]   Rank 105: site initialization completed in 32.18s
+[Rank 91]   Rank 91: site initialization completed in 32.25s
+[Rank 108]   Rank 108: site initialization completed in 32.57s
+[Rank 79]   Rank 79: site initialization completed in 32.71s
+[Rank 42]   Rank 42: site initialization completed in 33.24s
+[Rank 73]   Rank 73: site initialization completed in 33.28s
+[Rank 76]   Rank 76: site initialization completed in 33.26s
+[Rank 44]   Rank 44: site initialization completed in 33.30s
+[Rank 56]   Rank 56: site initialization completed in 33.50s
+[Rank 82]   Rank 82: site initialization completed in 33.64s
+[Rank 7]   Rank 7: site initialization completed in 33.88s
+[Rank 2]   Rank 2: site initialization completed in 34.15s
+[Rank 1]   Rank 1: site initialization completed in 34.17s
+[Rank 4]   Rank 4: site initialization completed in 34.26s
+[Rank 3]   Rank 3: site initialization completed in 34.28s
+[Rank 5]   Rank 5: site initialization completed in 34.44s
+[Rank 6]   Rank 6: site initialization completed in 34.48s
+[Rank 25]   Rank 25: site initialization completed in 34.95s
+[Rank 19]   Rank 19: site initialization completed in 35.04s
+[Rank 41]   Rank 41: site initialization completed in 35.08s
+[Rank 70]   Rank 70: site initialization completed in 35.08s
+[Rank 156]   Rank 156: site initialization completed in 35.11s
+[Rank 72]   Rank 72: site initialization completed in 35.12s
+[Rank 53]   Rank 53: site initialization completed in 35.15s
+[Rank 20]   Rank 20: site initialization completed in 35.22s
+[Rank 28]   Rank 28: site initialization completed in 35.22s
+[Rank 13]   Rank 13: site initialization completed in 35.24s
+[Rank 58]   Rank 58: site initialization completed in 35.24s
+[Rank 30]   Rank 30: site initialization completed in 35.28s
+[Rank 32]   Rank 32: site initialization completed in 35.28s
+[Rank 17]   Rank 17: site initialization completed in 35.30s
+[Rank 21]   Rank 21: site initialization completed in 35.30s
+[Rank 47]   Rank 47: site initialization completed in 35.31s
+[Rank 18]   Rank 18: site initialization completed in 35.34s
+[Rank 51]   Rank 51: site initialization completed in 35.34s
+[Rank 37]   Rank 37: site initialization completed in 35.37s
+[Rank 24]   Rank 24: site initialization completed in 35.40s
+[Rank 14]   Rank 14: site initialization completed in 35.44s
+[Rank 48]   Rank 48: site initialization completed in 35.44s
+[Rank 12]   Rank 12: site initialization completed in 35.48s
+[Rank 26]   Rank 26: site initialization completed in 35.52s
+[Rank 43]   Rank 43: site initialization completed in 35.51s
+[Rank 152]   Rank 152: site initialization completed in 35.55s
+[Rank 16]   Rank 16: site initialization completed in 35.58s
+[Rank 27]   Rank 27: site initialization completed in 35.58s
+[Rank 81]   Rank 81: site initialization completed in 35.62s
+[Rank 15]   Rank 15: site initialization completed in 35.62s
+[Rank 142]   Rank 142: site initialization completed in 35.65s
+[Rank 83]   Rank 83: site initialization completed in 35.74s
+[Rank 33]   Rank 33: site initialization completed in 35.74s
+[Rank 34]   Rank 34: site initialization completed in 35.75s
+[Rank 49]   Rank 49: site initialization completed in 35.79s
+[Rank 54]   Rank 54: site initialization completed in 35.81s
+[Rank 155]   Rank 155: site initialization completed in 35.85s
+[Rank 78]   Rank 78: site initialization completed in 35.90s
+[Rank 80]   Rank 80: site initialization completed in 35.95s
+[Rank 136]   Rank 136: site initialization completed in 35.95s
+[Rank 10]   Rank 10: site initialization completed in 35.97s
+[Rank 146]   Rank 146: site initialization completed in 35.96s
+[Rank 150]   Rank 150: site initialization completed in 35.97s
+[Rank 143]   Rank 143: site initialization completed in 35.97s
+[Rank 36]   Rank 36: site initialization completed in 36.00s
+[Rank 153]   Rank 153: site initialization completed in 36.02s
+[Rank 84]   Rank 84: site initialization completed in 36.04s
+[Rank 62]   Rank 62: site initialization completed in 36.06s
+[Rank 22]   Rank 22: site initialization completed in 36.06s
+[Rank 55]   Rank 55: site initialization completed in 36.08s
+[Rank 38]   Rank 38: site initialization completed in 36.13s
+[Rank 127]   Rank 127: site initialization completed in 36.16s
+[Rank 86]   Rank 86: site initialization completed in 36.17s
+[Rank 158]   Rank 158: site initialization completed in 36.18s
+[Rank 144]   Rank 144: site initialization completed in 36.18s
+[Rank 87]   Rank 87: site initialization completed in 36.20s
+[Rank 40]   Rank 40: site initialization completed in 36.20s
+[Rank 60]   Rank 60: site initialization completed in 36.25s
+[Rank 128]   Rank 128: site initialization completed in 36.25s
+[Rank 50]   Rank 50: site initialization completed in 36.28s
+[Rank 31]   Rank 31: site initialization completed in 36.29s
+[Rank 57]   Rank 57: site initialization completed in 36.35s
+[Rank 88]   Rank 88: site initialization completed in 36.36s
+[Rank 23]   Rank 23: site initialization completed in 36.38s
+[Rank 46]   Rank 46: site initialization completed in 36.37s
+[Rank 147]   Rank 147: site initialization completed in 36.43s
+[Rank 149]   Rank 149: site initialization completed in 36.45s
+[Rank 159]   Rank 159: site initialization completed in 36.47s
+[Rank 118]   Rank 118: site initialization completed in 36.48s
+[Rank 154]   Rank 154: site initialization completed in 36.51s
+[Rank 90]   Rank 90: site initialization completed in 36.50s
+[Rank 8]   Rank 8: site initialization completed in 36.54s
+[Rank 129]   Rank 129: site initialization completed in 36.53s
+[Rank 137]   Rank 137: site initialization completed in 36.54s
+[Rank 107]   Rank 107: site initialization completed in 36.60s
+[Rank 126]   Rank 126: site initialization completed in 36.65s
+[Rank 139]   Rank 139: site initialization completed in 36.64s
+[Rank 111]   Rank 111: site initialization completed in 36.67s
+[Rank 64]   Rank 64: site initialization completed in 36.68s
+[Rank 96]   Rank 96: site initialization completed in 36.69s
+[Rank 9]   Rank 9: site initialization completed in 36.71s
+[Rank 69]   Rank 69: site initialization completed in 36.71s
+[Rank 116]   Rank 116: site initialization completed in 36.73s
+[Rank 114]   Rank 114: site initialization completed in 36.74s
+[Rank 59]   Rank 59: site initialization completed in 36.79s
+[Rank 117]   Rank 117: site initialization completed in 36.78s
+[Rank 95]   Rank 95: site initialization completed in 36.80s
+[Rank 89]   Rank 89: site initialization completed in 36.80s
+[Rank 35]   Rank 35: site initialization completed in 36.82s
+[Rank 134]   Rank 134: site initialization completed in 36.85s
+[Rank 120]   Rank 120: site initialization completed in 36.86s
+[Rank 65]   Rank 65: site initialization completed in 36.85s
+[Rank 133]   Rank 133: site initialization completed in 36.86s
+[Rank 104]   Rank 104: site initialization completed in 36.87s
+[Rank 148]   Rank 148: site initialization completed in 36.93s
+[Rank 68]   Rank 68: site initialization completed in 36.93s
+[Rank 66]   Rank 66: site initialization completed in 36.96s
+[Rank 103]   Rank 103: site initialization completed in 37.00s
+[Rank 131]   Rank 131: site initialization completed in 37.00s
+[Rank 115]   Rank 115: site initialization completed in 37.02s
+[Rank 130]   Rank 130: site initialization completed in 37.04s
+[Rank 135]   Rank 135: site initialization completed in 37.07s
+[Rank 138]   Rank 138: site initialization completed in 37.07s
+[Rank 106]   Rank 106: site initialization completed in 37.09s
+[Rank 97]   Rank 97: site initialization completed in 37.08s
+[Rank 122]   Rank 122: site initialization completed in 37.12s
+[Rank 145]   Rank 145: site initialization completed in 37.13s
+[Rank 112]   Rank 112: site initialization completed in 37.13s
+[Rank 100]   Rank 100: site initialization completed in 37.16s
+[Rank 113]   Rank 113: site initialization completed in 37.16s
+[Rank 67]   Rank 67: site initialization completed in 37.16s
+[Rank 119]   Rank 119: site initialization completed in 37.17s
+[Rank 125]   Rank 125: site initialization completed in 37.20s
+[Rank 92]   Rank 92: site initialization completed in 37.20s
+[Rank 110]   Rank 110: site initialization completed in 37.23s
+[Rank 94]   Rank 94: site initialization completed in 37.25s
+[Rank 132]   Rank 132: site initialization completed in 37.27s
+[Rank 101]   Rank 101: site initialization completed in 37.29s
+[Rank 109]   Rank 109: site initialization completed in 37.29s
+[Rank 98]   Rank 98: site initialization completed in 37.31s
+[Rank 99]   Rank 99: site initialization completed in 37.35s
+[Rank 121]   Rank 121: site initialization completed in 37.42s
+[Rank 123]   Rank 123: site initialization completed in 37.47s
+[Rank 102]   Rank 102: site initialization completed in 37.51s
+[Rank 124]   Rank 124: site initialization completed in 37.58s
+[Rank 29]   Rank 29: site initialization completed in 38.80s
+[Rank 11]   Rank 11: site initialization completed in 38.80s
+[Rank 0]   Rank 0: site initialization completed in 39.26s
+[Rank 0]   Connecting sites for seed dispersal...
+[Rank 0]   Site connections completed in 0.00s
+[Rank 0]   Setting up GPU kernels...
+[Rank 0]   GPU setup completed in 4.52s
+[Rank 0] 
+--------------------------------------------------------------------------------
+[Rank 0] Initialization Summary:
+[Rank 0]   Total sites: 1424
+[Rank 0]   Total gaps: 712,000
+[Rank 0]   Sites per rank (avg): 8.9
+[Rank 0]   MPI ranks: 160
+[Rank 0] 
+================================================================================
+[Rank 0] Phase 5: Running Simulation for 1000 Years
+[Rank 0] --------------------------------------------------------------------------------
+[Rank 0] 
+No-snapshot mode: running simulate(1000) in one call
+[Rank 0] 
+[Rank 0] 
+================================================================================
+[Rank 0] Simulation Complete (no snapshots)
+[Rank 0]   Total time: 112.37s
+[Rank 0]   Time per year: 0.1124s
+[Rank 0] ================================================================================
+
+======================================================================
+No-snapshot job completed
+Exit code: 0
+End time: Wed Apr 22 04:56:36 PM EDT 2026
+
+SUCCESS: No-snapshot run completed successfully
+  Review logs in ../logs/conus_nosave_4447196.out
+  Compare against ../logs/conus_<jobid>.out (with snapshots)
+======================================================================

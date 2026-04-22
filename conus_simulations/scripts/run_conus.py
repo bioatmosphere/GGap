@@ -659,6 +659,8 @@ def main():
     )
 
     # Initialize GGap model
+    # TODO: Add --seed argument and call model.set_seed(seed) for deterministic
+    # results in future runs. Without it, each run uses a different random seed.
     model = GAPModel()
 
     local_sites = initialize_simulation(

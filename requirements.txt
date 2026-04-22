@@ -1,0 +1,14 @@
+# GGap dependencies (sagesim installed separately)
+# Core (typically in sagesim_env already)
+awkward
+matplotlib
+mpi4py
+networkx
+numpy
+pillow
+ragged
+
+# Additional for SC2026 paper figures
+cartopy
+netcdf4
+shapely

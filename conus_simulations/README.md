@@ -274,8 +274,4 @@ SAGESim directed connections:
 - For seed dispersal: receiver reads donor's `site_avail_spec`
 - Therefore: `connect_agents(receiver, donor, directed=True)`
 
-## References
 
-- METIS: http://glaros.dtc.umn.edu/gkhome/metis/metis/overview
-- SAGESim: https://github.com/bioatmosphere/SAGESim
-- GGap model: ../gap/README.md

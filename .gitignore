@@ -6,16 +6,30 @@ dist/
 wheels/
 *.egg-info
 .ipynb_checkpoints/
+step_func_code.py
 
 gap/__pycache__
 gap/.ipynb_checkpoints/
-gap/step_func_code.py
-*.out
 input_data/.ipynb_checkpoints/
 output_data/
 
 # Virtual environments
 .venv
 
-# Large simulation outputs (kept local, not versioned)
-conus_simulations/results/simulation/
+# Original working directories — untracked outputs
+scaling_analysis/logs/
+scaling_analysis/results/
+scaling_analysis/synthetic_data/
+scaling_analysis/CUPY_ISSUE.md
+scaling_analysis/README.md
+conus_simulations/logs/
+conus_simulations/results/
+
+# Large data files (download separately)
+SC2026/figures/assets/surfdata_0.125nldas2_hist_2000_78pfts_c240908.nc
+
+# SC2026 artifact — user-generated outputs
+SC2026/scaling_analysis/input_data/
+SC2026/scaling_analysis/logs/
+SC2026/conus_simulation/results/
+SC2026/conus_simulation/logs/*.err
