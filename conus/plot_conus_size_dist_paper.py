@@ -32,11 +32,11 @@ import matplotlib.pyplot as plt
 # Duplicated here (rather than importing _scaling_common) so this script
 # can run from the conus/ directory without sys.path hacking.
 FIG_W = 3.3       # inches — matches _scaling_common.FIG_W
-FIG_H = 2.6       # inches — matches _scaling_common.FIG_H
-FONT_LABEL = 8    # axis labels
-FONT_TICK  = 7    # tick labels
-FONT_LEG   = 7    # legend text
-FONT_PILL  = 8    # in-plot annotation pill
+FIG_H = 1.8       # inches — matches _scaling_common.FIG_H (was 2.6, then 2.0, now 1.8)
+FONT_LABEL = 6    # axis labels — matches _scaling_common
+FONT_TICK  = 6    # tick labels
+FONT_LEG   = 6    # legend text
+FONT_PILL  = 6    # in-plot annotation pill
 FONT_ANNOT = 6    # bar-top value labels
 
 DPI = 600
@@ -89,7 +89,7 @@ def plot_size_distribution(rows, output_dir):
 
     fig, ax = plt.subplots(figsize=(FIG_W, FIG_H))
 
-    bars = ax.bar(BIN_LABELS, pcts, color=SIZE_COLORS, edgecolor='#424242',
+    bars = ax.bar(BIN_LABELS, pcts, color='#64B5F6', edgecolor='#424242',
                   linewidth=0.5, width=0.65, zorder=3)
 
     # Bar-top percentage labels (matches FONT_ANNOT from scaling figures)
@@ -99,31 +99,25 @@ def plot_size_distribution(rows, output_dir):
                     f'{pct:.1f}%', ha='center', va='bottom', fontsize=FONT_ANNOT,
                     color='#1A202C')
 
-    ax.set_xlabel('Diameter class (cm)', fontsize=FONT_LABEL)
     ax.set_ylabel('Proportion of trees (%)', fontsize=FONT_LABEL)
     ax.tick_params(axis='both', labelsize=FONT_TICK)
     ax.set_ylim(0, max(pcts) * 1.18)
     ax.grid(True, which='major', alpha=0.3, axis='y', zorder=0)
     ax.set_axisbelow(True)
 
-    # In-plot annotation pill: headline metric (matches strong_scaling pill)
-    below_28 = pcts[0] + pcts[1]
-    ax.text(0.97, 0.96,
-            f'{below_28:.0f}% of stems < 28 cm\n{int(total_sum):,} total trees',
-            transform=ax.transAxes, ha='right', va='top',
-            fontsize=FONT_PILL, color='#1A202C', zorder=6)
-
     plt.tight_layout()
 
-    for fmt in ['png', 'pdf']:
-        outpath = os.path.join(output_dir, f'conus_size_distribution_paper.{fmt}')
-        fig.savefig(outpath, dpi=DPI, format=fmt, bbox_inches='tight')
-        print(f"  Saved {outpath}")
+    outpath_png = os.path.join(output_dir, 'conus_size_distribution_paper.png')
+    outpath_pdf = os.path.join(output_dir, 'conus_size_distribution_paper.pdf')
+    fig.savefig(outpath_png, dpi=DPI, bbox_inches='tight')
+    fig.savefig(outpath_pdf, format='pdf', bbox_inches='tight', transparent=True)
+    print(f"  Saved {outpath_png}")
+    print(f"  Saved {outpath_pdf}")
     plt.close(fig)
 
 
 def plot_biomass_by_genus(rows, output_dir):
-    """Horizontal bar chart of biomass C by genus (style: strong_scaling_speedup)."""
+    """Pie chart of biomass C by genus (style: strong_scaling_speedup)."""
     genus_biomass = defaultdict(float)
     for row in rows:
         genus_biomass[row['genus']] += float(row['total_biomC'])
@@ -143,53 +137,57 @@ def plot_biomass_by_genus(rows, output_dir):
 
     labels = [clean(g) for g in top_genera]
     values = [genus_biomass[g] for g in top_genera]
-    pcts = [100.0 * v / total_biomass for v in values]
 
     if other_val > 0:
         labels.append('Others')
         values.append(other_val)
-        pcts.append(100.0 * other_val / total_biomass)
 
-    # Reverse for bottom-to-top display (largest at top)
-    labels = labels[::-1]
-    values = values[::-1]
-    pcts = pcts[::-1]
-    colors = GENUS_COLORS[:len(labels)][::-1]
+    colors = GENUS_COLORS[:len(labels)]
 
     fig, ax = plt.subplots(figsize=(FIG_W, FIG_H))
+    # Keep pie visually matched to bar chart height when paired as subfigures
+    ax.set_position([0.0, 0.12, 0.55, 0.76])
 
-    y_pos = np.arange(len(labels))
-    bars = ax.barh(y_pos, pcts, color=colors, edgecolor='#424242',
-                   linewidth=0.5, height=0.6, zorder=3)
+    pcts = [100.0 * v / sum(values) for v in values]
+    wedges, texts, autotexts = ax.pie(
+        values, labels=None, colors=colors,
+        autopct='', pctdistance=0.75, startangle=90, counterclock=False,
+        wedgeprops=dict(edgecolor='#424242', linewidth=0.5),
+        textprops=dict(fontsize=7, fontweight='bold', color='white'),
+    )
 
-    # Value labels at end of each bar
-    for bar, pct in zip(bars, pcts):
-        if pct > 1.5:
-            ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2,
-                    f'{pct:.1f}%', ha='left', va='center', fontsize=FONT_ANNOT,
-                    color='#1A202C')
+    # Place percentage labels: large wedges inside (white), small wedges outside with leader lines
+    for i, (wedge, pct) in enumerate(zip(wedges, pcts)):
+        ang = (wedge.theta2 + wedge.theta1) / 2.0
+        rad = np.deg2rad(ang)
+        if pct >= 5.0:
+            # Inside label
+            x = 0.65 * np.cos(rad)
+            y = 0.65 * np.sin(rad)
+            ax.text(x, y, f'{pct:.1f}%', ha='center', va='center',
+                    fontsize=7, fontweight='bold', color='white')
+        elif pct >= 1.5:
+            # Outside label with leader line
+            x_in = 0.95 * np.cos(rad)
+            y_in = 0.95 * np.sin(rad)
+            x_out = 1.25 * np.cos(rad)
+            y_out = 1.25 * np.sin(rad)
+            ax.annotate(f'{pct:.1f}%', xy=(x_in, y_in), xytext=(x_out, y_out),
+                        fontsize=6, color='#1A202C',
+                        arrowprops=dict(arrowstyle='-', color='#757575', lw=0.5),
+                        ha='center', va='center')
 
-    ax.set_yticks(y_pos)
-    ax.set_yticklabels(labels, fontsize=FONT_TICK, fontstyle='italic')
-    ax.set_xlabel('Share of total biomass C (%)', fontsize=FONT_LABEL)
-    ax.tick_params(axis='x', labelsize=FONT_TICK)
-    ax.set_xlim(0, max(pcts) * 1.18)
-    ax.grid(True, which='major', alpha=0.3, axis='x', zorder=0)
-    ax.set_axisbelow(True)
+    # Italic genus labels in legend
+    ax.legend(wedges, [f'$\\it{{{l}}}$' if l != 'Others' else l for l in labels],
+              loc='center left', bbox_to_anchor=(1.05, 0.5),
+              fontsize=FONT_LEG, frameon=False)
 
-    # In-plot annotation pill: total biomass
-    total_Mg = total_biomass
-    ax.text(0.97, 0.06,
-            f'{total_Mg:,.0f} Mg C total\n1,424 sites',
-            transform=ax.transAxes, ha='right', va='bottom',
-            fontsize=FONT_PILL, color='#1A202C', zorder=6)
-
-    plt.tight_layout()
-
-    for fmt in ['png', 'pdf']:
-        outpath = os.path.join(output_dir, f'conus_biomass_by_genus_paper.{fmt}')
-        fig.savefig(outpath, dpi=DPI, format=fmt, bbox_inches='tight')
-        print(f"  Saved {outpath}")
+    outpath_png = os.path.join(output_dir, 'conus_biomass_by_genus_paper.png')
+    outpath_pdf = os.path.join(output_dir, 'conus_biomass_by_genus_paper.pdf')
+    fig.savefig(outpath_png, dpi=DPI, bbox_inches='tight')
+    fig.savefig(outpath_pdf, format='pdf', bbox_inches='tight', transparent=True)
+    print(f"  Saved {outpath_png}")
+    print(f"  Saved {outpath_pdf}")
     plt.close(fig)
 
 
