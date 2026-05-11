@@ -1,14 +1,14 @@
 # GGap - GPU-Accelerated Forest Gap Dynamics Model
 
-A scalable GPU-enabled agent-based forest gap model that integrates UVAFME (University of Virginia Forest Model Enhanced) with the SAGESim framework to create a modern, high-performance forest simulation system.
+A scalable GPU-enabled agent-based forest gap model that integrates GAPpy (Python forest gap model) with the SAGESim framework to create a modern, high-performance forest simulation system.
 
 ## Overview
 
 GGap combines three major components:
 
-1. **UVAFME** - Traditional forest gap model with detailed ecological processes
+1. **GAPpy** - Traditional forest gap model with detailed ecological processes
 2. **SAGESim** - GPU-accelerated agent-based modeling framework
-3. **GGap Integration** - Implementation bridging UVAFME processes with SAGESim's GPU capabilities
+3. **GGap Integration** - Implementation bridging GAPpy processes with SAGESim's GPU capabilities
 
 ## Quick Start
 
@@ -29,7 +29,7 @@ python plot_outputs.py --output-dir ../output_data --format png
 ## Features
 
 - **3-level agent hierarchy**: Site → Gap → Tree with 7-priority step function pipeline
-- **32 tree species** (20 genera) loaded from UVAFME CSV input files
+- **32 tree species** (20 genera) loaded from GAPpy CSV input files
 - **Full soil biogeochemistry**: 3-layer (A0/A/Base) C/N cycling with daily timestep
 - **GPU-accelerated computation** using CuPy JIT kernels
 - **MPI parallelization** for multi-rank execution
@@ -53,11 +53,11 @@ GGap/
 │   │   ├── site/                 # P1: soil, P4: nutrient
 │   │   └── tree/                 # P2: potential growth, P6: actual growth
 │   └── docs/                     # AGENT_PROPERTIES.md, implementation_logic.md
-├── GAPpy/                        # Python UVAFME translation (submodule, reference)
+├── GAPpy/                        # Python forest gap model (submodule, reference)
 ├── SAGESim/                      # SAGESim framework (submodule)
 │   ├── sagesim/                  # Framework core
 │   └── examples/                 # Reference implementations
-├── input_data/                   # UVAFME CSV input files
+├── input_data/                   # GAPpy CSV input files
 │   ├── UVAFME2012_specieslist.csv
 │   ├── UVAFME2012_site.csv
 │   ├── UVAFME2012_climate.csv
@@ -99,8 +99,8 @@ Options:
   --pool_size INT         Max tree slots per gap (default: 1000)
   --years INT             Simulation years (default: 1000)
   --report_interval INT   Years between reports and CSV output (default: 10)
-  --site_id INT           Site ID from UVAFME CSV files (default: 0)
-  --data_dir PATH         Directory with UVAFME CSV files (default: input_data)
+  --site_id INT           Site ID from GAPpy CSV files (default: 0)
+  --data_dir PATH         Directory with GAPpy CSV files (default: input_data)
   --prefix STRING         File prefix for CSV files (default: UVAFME2012)
   --output_dir PATH       Output directory for CSV files (default: output_data)
   --no_tree_data          Skip tree_data.csv (can be very large)
@@ -188,10 +188,10 @@ Each simulation tick (= 1 year) executes 7 GPU kernels in priority order:
 
 ## References
 
-### UVAFME
-- University of Virginia Forest Model Enhanced
-- Fortran original translated to Python
+### GAPpy
+- Python forest gap model
 - Detailed ecological and biogeochemical processes
+- Reference implementation in `GAPpy/` submodule
 
 ### SAGESim
 - GPU-accelerated agent-based modeling
@@ -205,4 +205,4 @@ Each simulation tick (= 1 year) executes 7 GPU kernels in priority order:
 
 ## License
 
-Compatible with UVAFME and SAGESim licenses.
+Compatible with GAPpy and SAGESim licenses.
