@@ -1,0 +1,262 @@
+\documentclass[conference]{IEEEtran}
+
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{tagging}
+
+\usepackage{sc26repro}
+
+% For the FINAL submission the explanation/example tags are disabled so only the
+% author-provided content renders. Uncomment to see the template guidance again.
+% \usetag{explanation}
+% \usetag{example}
+
+\begin{document}
+
+\twocolumn[%
+{\begin{center}
+\Huge
+Appendix: Artifact Description/Artifact Evaluation
+\end{center}}
+]
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%  AD Appendix
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\appendixAD
+
+\section{Overview of Contributions and Artifacts}
+
+\subsection{Paper's Main Contributions}
+
+\begin{description}
+\item[$C_1$] \textbf{GGap}, a GPU-accelerated, agent-based re-implementation of the
+  UVAFME forest gap model that preserves full ecological fidelity. A Site--Gap--Tree
+  agent hierarchy with an 11-priority kernel pipeline resolves the model's sequential
+  intra-year dependencies (shared nitrogen pool, 365-day soil biogeochemistry, light
+  competition) on the GPU via CuPy JIT kernels on the SAGESim framework.
+\item[$C_2$] A data-movement-optimized multi-GPU distribution: a Site--Gap--Tree
+  \emph{colocation} invariant makes inter-rank MPI traffic scale with the number of
+  \emph{sites} rather than trees, enabling GPU-aware MPI seed dispersal between
+  geographically separated sites and strong/weak scaling on OLCF Frontier.
+\item[$C_3$] Deterministic reproducibility (Philox RNG, partition-invariant) validated
+  bitwise against the GAPpy CPU reference, together with a CONUS-scale ecological
+  application producing species-composition and tree-size-distribution results across
+  representative sites.
+\end{description}
+
+\subsection{Computational Artifacts}
+
+\begin{description}
+\item[$A_1$] GGap TN-region reproduction package. DOI: \texttt{https://doi.org/TODO}
+  \emph{(TODO: mint Zenodo DOI for the archived snapshot of this repository).}
+\end{description}
+
+Artifact $A_1$ is a self-contained, downscaled reproduction (directory
+\texttt{SC2026/tn\_example/}) that runs the GGap model on a two-GPU commodity node and
+regenerates the science figure for one of the paper's ten representative sites. It
+exercises $C_1$ (the full GPU model), $C_2$ (multi-GPU distribution with cross-rank
+dispersal), and $C_3$ (deterministic output and ecological validation).
+
+\begin{center}
+\begin{tabular}{rll}
+\toprule
+Artifact ID  &  Contributions &  Related \\
+             &  Supported     &  Paper Elements \\
+\midrule
+$A_1$   &  $C_1, C_2, C_3$ & Fig.~(10 representative \\
+        &                  & sites), panel \#7 \\
+        &                  & (S.~Appalachia) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Artifact Identification}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\newartifact
+
+\artrel
+
+Artifact $A_1$ is the reproduction package for contributions $C_1$--$C_3$. Because a
+full-CONUS Frontier run is impractical for a reviewer, $A_1$ reduces the \emph{scale}
+(a 54-site Tennessee sub-region) while keeping full per-site fidelity (500 gaps
+$\times$ 1000 tree slots, 1000 simulation years). It runs the identical model and
+distribution code path used for the paper's production runs, on two commodity GPUs.
+
+\artexp
+
+Running $A_1$ produces, for every site, a per-species time series of biomass and tree
+size structure, and composes a side-by-side comparison figure for site~978
+(S.~Appalachia)---one of the paper's ten representative sites that falls inside the
+Tennessee box. The reproduced panel matches the paper's published panel~\#7 in both the
+year-1000 diameter distribution (dominated by the $0$--$8$ and $8$--$28$~cm classes,
+$\sim$45\% each, with a rapid tail-off) and the successional species composition
+(a pitch pine, \textit{PINUrigi}, base with tulip poplar, sugar maple, white pine and
+white ash accumulating over time). Because the seed is fixed and the RNG is
+partition-invariant, the result is independent of the number of GPUs, substantiating
+the determinism claim in $C_3$.
+
+\arttime
+
+\begin{description}
+\item[Artifact Setup] $\approx$4~min: data load and directed-graph/METIS partitioning
+  ($<$1~s), host-side agent build (\texttt{build\_from\_local\_data}, $\sim$192~s), and
+  one-time GPU kernel generation ($\sim$32~s).
+\item[Artifact Execution] $\approx$14.5~min (869.8~s) for the 1000-year simulation on
+  2$\times$ P100. The first reported 50-year interval includes a one-time CUDA
+  JIT/kernel-compile warmup ($\sim$330~s); steady-state 50-year intervals take
+  $\sim$27~s each (compute plus snapshot I/O).
+\item[Artifact Analysis] $\approx$3~min: extract site~978's full time series across the
+  20 snapshots and render/compose the comparison figure.
+\end{description}
+Total wall-clock $\approx$22~min on the reference two-GPU node.
+
+\artin
+
+\artinpart{Hardware}
+
+The reference reproduction node has 2$\times$ NVIDIA Tesla P100-SXM2 GPUs (16~GB each),
+56 CPU cores and 125~GB host RAM (driver 560.35.05, CUDA 12.6). Requirements: at least
+one CUDA (or ROCm) GPU with $\geq$16~GB; \textbf{two GPUs are recommended}---the 54
+sites split $\sim$27 per GPU ($\sim$15M tree-agents each), which fits a 16~GB card,
+whereas all 54 sites on a single 16~GB GPU ($\sim$30M agents) may exhaust memory. No
+special interconnect is required (single node). The paper's production runs use OLCF
+Frontier (AMD MI250X, ROCm); the same artifact runs there via the ROCm CuPy build.
+
+\artinpart{Software}
+
+\begin{itemize}
+\item GGap --- this repository (branch \texttt{master}). URL: \texttt{https://github.com/TODO/GGap}.
+\item SAGESim --- GPU agent-based framework, commit $\geq$\texttt{16cb647} (branch
+  \texttt{dev}). URL: \texttt{https://github.com/TODO/SAGESim}. Installed via
+  \texttt{pip install -e .}; provides \texttt{numpy}, \texttt{networkx}, \texttt{awkward}.
+\item Python $\geq$3.13 (validated on 3.14.6).
+\item CuPy --- hardware-matched: \texttt{cupy-cuda12x}~14.1.1 (CUDA~12.x) or a ROCm build.
+\item \texttt{mpi4py}~4.1.2 with an MPI runtime (validated: OpenMPI~5.0.10).
+\item \texttt{numpy}~2.5.1, \texttt{networkx}~3.6.1, \texttt{awkward}~2.11.0.
+\item METIS~5.1.0 (\texttt{gpmetis} binary) --- required only for multi-GPU partitioning.
+\item Figure step only: \texttt{matplotlib}, \texttt{pandas}, \texttt{pillow}.
+\end{itemize}
+\texttt{cupy} and \texttt{mpi4py} are intentionally not pinned by SAGESim because they
+depend on the local CUDA/ROCm and MPI stack; reviewers install versions matching their
+hardware.
+
+\artinpart{Datasets / Inputs}
+
+All inputs ship with the repository at
+\texttt{SC2026/conus\_simulation/input\_data/} (seven \texttt{CONUS\_*.csv} files:
+site, rangelist, climate, climate\_stddev, altitudes, specieslist, species\_sources); no
+external download is needed. The artifact selects the Tennessee sub-region by bounding
+box (latitude $34.9$--$36.7$, longitude $-90.5$ to $-81.5$), yielding 54 sites and 235
+species. SHA-256 checksums of the input files are recorded with the artifact.
+
+\artinpart{Installation and Deployment}
+
+Install SAGESim (\texttt{pip install -e .}), then the hardware-matched
+\texttt{cupy}/\texttt{mpi4py}, and (for a multi-GPU run) the \texttt{gpmetis} binary
+(\texttt{conda install -c conda-forge metis}). Clone GGap; no \texttt{pip install} of
+GGap itself is required---\texttt{run.py} puts the \texttt{gap} package on the path
+automatically. If the local MPI is not CUDA-aware, leave
+\texttt{MPICH\_GPU\_SUPPORT\_ENABLED} unset. Full step-by-step instructions are in
+\texttt{SC2026/tn\_example/README.md}.
+
+\artcomp
+
+The workflow is a four-task pipeline, $T_1 \rightarrow T_2 \rightarrow T_3 \rightarrow T_4$:
+\begin{description}
+\item[$T_1$ Partition] Load the CONUS CSVs, apply the Tennessee bounding box (54 sites),
+  build the directed seed-dispersal graph, and METIS-partition the sites across the MPI
+  ranks (balanced 27/27 for two ranks). Number of partitions $=$ number of MPI ranks
+  $=$ number of GPUs.
+\item[$T_2$ Simulate] \texttt{mpirun -n 2 python run.py} --- run 1000 simulation years,
+  writing a snapshot every 50 years plus per-rank metadata. Each rank binds to its own
+  GPU. Output: \texttt{results/snapshots/}.
+\item[$T_3$ Extract] \texttt{python extract\_timeseries.py} --- read all 20 snapshots for
+  site~978 and write a per-year \texttt{species\_data.csv} time series.
+\item[$T_4$ Figure] \texttt{python plot\_tn\_site978.py} then
+  \texttt{python compose\_comparison.py} --- render the two panels and compose the
+  side-by-side comparison against the paper's published figure.
+\end{description}
+Experimental parameters (defaults, reproducing the reference run): dispersal factor
+$2.0$, 500 gaps/site, 1000 tree slots/gap, 1000 years, snapshot interval 50 years,
+random seed 42 (identical on all ranks). The run is deterministic, so a single
+replicate suffices; the seed makes 1-GPU and 2-GPU runs bitwise identical.
+
+\artout
+
+$T_2$ writes raw \texttt{.npz} snapshots and per-rank metadata; $T_3$ writes
+\texttt{results/species\_timeseries/site\_0978/species\_data.csv} (per species, per
+report year: six diameter-class counts, basal area, biomass~C/N); $T_4$ writes
+\texttt{figures/tn\_site978\_vs\_paper.\{png,pdf\}}. The figure places the paper's
+panel~\#7 above the reproduced panels; agreement in the year-1000 size distribution and
+in the dominant successional species constitutes a successful reproduction.
+
+
+% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% %  AE Appendix
+% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+\appendixAE
+
+\arteval{1}
+\artin
+
+Provision a node with $\geq$2 CUDA GPUs ($\geq$16~GB each; the reference used 2$\times$
+Tesla P100). Then:
+\begin{enumerate}
+\item Install SAGESim: \texttt{git clone <SAGESim>; cd SAGESim; pip install -e .}
+\item Install hardware-matched runtime packages:
+  \texttt{pip install cupy-cuda12x mpi4py} (swap the CuPy build to match your CUDA/ROCm;
+  \texttt{mpi4py} needs an MPI runtime such as OpenMPI installed first).
+\item Install the METIS partitioner (multi-GPU only):
+  \texttt{conda install -c conda-forge metis}.
+\item Install figure dependencies: \texttt{pip install matplotlib pandas pillow}.
+\item Clone GGap and enter the artifact directory:
+  \texttt{git clone <GGap>; cd GGap/SC2026/tn\_example}.
+\end{enumerate}
+
+\artcomp
+
+From \texttt{GGap/SC2026/tn\_example}, run the pipeline:
+\begin{verbatim}
+# T2: simulate (2 GPUs; use `python run.py`
+#     for a single GPU)
+mpirun -n 2 python run.py
+
+# T3: extract site-978 full time series
+python extract_timeseries.py
+
+# T4: plot and compose the comparison figure
+python plot_tn_site978.py
+python compose_comparison.py
+\end{verbatim}
+Each step depends on the previous one. \texttt{run.py} accepts overrides
+(e.g.\ \texttt{--years}, \texttt{--report\_interval}); the defaults reproduce the
+reference run. (\texttt{python extract.py} is an optional convenience that writes
+final-year tables for all 54 sites and is not part of the figure pipeline.)
+
+\artout
+
+The pipeline produces \texttt{figures/tn\_site978\_vs\_paper.png}. To evaluate:
+compare the reproduced panels (bottom) with the paper's published panel~\#7 (top). The
+reproduction is successful when (i) the year-1000 diameter distribution is concentrated
+in the two smallest size classes ($0$--$8$ and $8$--$28$~cm) with a rapid tail-off, and
+(ii) the species-composition-over-time panel shows the same dominant assemblage
+(\textit{PINUrigi} base, with \textit{LIRItuli}, \textit{ACERsacc}, \textit{PINUstro},
+\textit{FRAXamer}). This corresponds directly to the paper's Figure element for the ten
+representative sites and substantiates the ecological-validity and determinism claims
+($C_3$), while exercising the GPU model ($C_1$) and its multi-GPU distribution ($C_2$).
+Note: the reference artifact saves snapshots every 50 years (20 points); the paper's
+production figure uses a 10-year interval (100 points), so the reproduced composition
+curve is coarser but follows the same trajectory.
+
+\end{document}

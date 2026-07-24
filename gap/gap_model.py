@@ -144,6 +144,17 @@ class GAPModel(Model):
         self._num_sites_in_globals = 0
         self._breeds_registered = False
 
+        # --- Bulk (distributed) build state ---
+        # When _bulk_mode is True, initialize_site/gap/tree emit agent dicts into
+        # _bulk_agents (and connect_agents into _bulk_adjacency) using explicit
+        # global agent IDs, instead of creating agents one-by-one. The collected
+        # data is handed to Model.build_from_local_data() in one call.
+        self._bulk_mode = False
+        self._bulk_agents = []
+        self._bulk_adjacency = {}
+        self._bulk_site_agent_id = None   # explicit ID for the site agent being built
+        self._bulk_gaptree_counter = None  # running ID for gaps/trees of current site
+
     def _register_breeds(self, num_species):
         """Register breeds with property arrays.
 
@@ -595,12 +606,7 @@ class GAPModel(Model):
         states[int(SiteS.SITE_ID)] = float(site_slot)
 
         # Create site agent
-        site_agent_id = self.create_agent_of_breed(
-            self._site_breed,
-            rank=rank,
-            params=params,
-            states=states,
-        )
+        site_agent_id = self._emit_agent(self._site_breed, params, states, rank)
         self.site_agents.append(site_agent_id)
         self.set_agent_logical_id(site_agent_id, site_slot)
 
@@ -651,12 +657,7 @@ class GAPModel(Model):
         states[int(GapS.AVAIL_N)] = 0.1
         states[int(GapS.N_SUPPLY_RATIO)] = 1.0
 
-        gap_agent_id = self.create_agent_of_breed(
-            self._gap_breed,
-            rank=rank,
-            params=params,
-            states=states,
-        )
+        gap_agent_id = self._emit_agent(self._gap_breed, params, states, rank)
         self.gap_agents.append(gap_agent_id)
         site['gaps'].append(gap_agent_id)
         site_slot = site.get('site_slot', 0)
@@ -790,12 +791,7 @@ class GAPModel(Model):
         states[int(TreeS.CANOPY_HT)] = STD_HT if is_alive > 0.5 else 0.0
         states[int(TreeS.SPECIES_ID)] = float(species_info['global_id'])
 
-        agent_id = self.create_agent_of_breed(
-            self._tree_breed,
-            rank=rank,
-            params=params,
-            states=states,
-        )
+        agent_id = self._emit_agent(self._tree_breed, params, states, rank)
 
         self.tree_ids.append(agent_id)
         self.tree_to_gap[agent_id] = gap_agent_id
@@ -805,8 +801,134 @@ class GAPModel(Model):
         return agent_id
 
     def connect_agents(self, agent_0, agent_1, directed=False):
-        """Connect two agents. Bidirectional by default, one-way if directed=True."""
+        """Connect two agents. Bidirectional by default, one-way if directed=True.
+
+        In bulk mode, edges are collected into an adjacency dict instead of being
+        applied to the space immediately (the dict is later handed to
+        build_from_local_data). agent_1 may be a remote agent ID (a neighbor on
+        another rank) — only agent_0 must be local.
+        """
+        if self._bulk_mode:
+            a0, a1 = int(agent_0), int(agent_1)
+            self._bulk_adjacency.setdefault(a0, []).append(a1)
+            if not directed:
+                self._bulk_adjacency.setdefault(a1, []).append(a0)
+            return
         self.get_space().connect_agents(agent_0, agent_1, directed=directed)
+
+    def _emit_agent(self, breed, params, states, rank):
+        """Create an agent, or (in bulk mode) emit an agent dict with an explicit
+        global ID. Site agents take the pre-assigned site ID; gap/tree agents take
+        the running per-site gap/tree counter (creation order == layout order)."""
+        if self._bulk_mode:
+            if breed is self._site_breed:
+                aid = int(self._bulk_site_agent_id)
+            else:
+                aid = int(self._bulk_gaptree_counter)
+                self._bulk_gaptree_counter += 1
+            self._bulk_agents.append({
+                'id': aid,
+                'breed': breed,
+                'properties': {'params': params, 'states': states},
+            })
+            return aid
+        return self.create_agent_of_breed(breed, rank=rank, params=params, states=states)
+
+    def compute_agent_id_layout(self, all_site_ids, num_gaps, maxtrees):
+        """Assign globally-unique, deterministic agent IDs across all ranks.
+
+        Every rank calls this with the same (sorted) full site list and gets an
+        identical layout, so cross-rank references resolve without coordination.
+
+        - Site agents: id == global site index (0 .. N-1).
+        - Gap/tree agents: contiguous per-site blocks after the site range, sized
+          by prefix sum. Per site block = num_gaps * (1 + trees_per_gap), where
+          trees_per_gap = num_species(site) + maxtrees. num_species is read from
+          the global `rangelists` array (identical on all ranks).
+
+        Returns dict: site_id -> {site_agent_id, gaptree_base, trees_per_gap,
+        num_species, block_size}, plus '_total_agents'.
+        """
+        sorted_sites = sorted(all_site_ids)
+        n_sites = len(sorted_sites)
+        rangelists = self.get_global_property_value("rangelists")
+        layout = {}
+        next_base = n_sites  # gaps/trees start after the site-index range [0, N)
+        for idx, site_id in enumerate(sorted_sites):
+            site_slot = self._site_id_to_slot[site_id]
+            num_species = int(round(float(rangelists[site_slot].sum())))
+            trees_per_gap = num_species + maxtrees
+            block_size = num_gaps * (1 + trees_per_gap)
+            layout[site_id] = {
+                'site_agent_id': idx,
+                'gaptree_base': next_base,
+                'trees_per_gap': trees_per_gap,
+                'num_species': num_species,
+                'block_size': block_size,
+            }
+            next_base += block_size
+        layout['_total_agents'] = next_base
+        return layout
+
+    def build_conus_local(self, all_site_ids, local_site_ids, num_gaps, maxtrees,
+                          data_dir, prefix, partition_map, directed_edges, rank=0):
+        """Bulk-build this rank's local sites with globally-unique IDs, wire the
+        agent hierarchy + cross-rank dispersal, and load everything via
+        Model.build_from_local_data() in one call.
+
+        :return: list of local site info dicts (same shape as initialize_site_with_gaps)
+        """
+        layout = self.compute_agent_id_layout(all_site_ids, num_gaps, maxtrees)
+        site_to_agent = {sid: layout[sid]['site_agent_id'] for sid in all_site_ids}
+        local_set = set(local_site_ids)
+
+        self._bulk_mode = True
+        self._bulk_agents = []
+        self._bulk_adjacency = {}
+        local_sites = []
+        for site_id in local_site_ids:
+            entry = layout[site_id]
+            self._bulk_site_agent_id = entry['site_agent_id']
+            self._bulk_gaptree_counter = entry['gaptree_base']
+            site = self.initialize_site_with_gaps(
+                site_id=site_id, num_gaps=num_gaps, maxtrees=maxtrees,
+                data_dir=data_dir, prefix=prefix, rank=rank)
+            # Layout species count must match the actual filtered species, else IDs misalign
+            if len(site['species']) != entry['num_species']:
+                raise ValueError(
+                    f"Site {site_id}: layout num_species={entry['num_species']} != "
+                    f"actual {len(site['species'])}; ID layout is inconsistent.")
+            consumed = self._bulk_gaptree_counter - entry['gaptree_base']
+            if consumed != entry['block_size']:
+                raise ValueError(
+                    f"Site {site_id}: consumed {consumed} gap/tree IDs != "
+                    f"block_size {entry['block_size']}.")
+            local_sites.append(site)
+
+        # Cross-rank dispersal: reader (local) reads from source (maybe remote).
+        remote_agent_ranks = {}
+        for reader_site, source_site, _dist in directed_edges:
+            if reader_site not in local_set:
+                continue  # this rank only owns edges whose reader lives here
+            reader_agent = site_to_agent[reader_site]
+            source_agent = site_to_agent[source_site]
+            self.connect_agents(reader_agent, source_agent, directed=True)
+            if source_site not in local_set:
+                remote_agent_ranks[source_agent] = int(partition_map[source_site])
+
+        self._bulk_mode = False
+        self.build_from_local_data(
+            self._bulk_agents, self._bulk_adjacency,
+            remote_agent_ranks=remote_agent_ranks, directed=True)
+        # Note: ghost agents' breeds are discovered from their owning rank during
+        # setup()'s comm-map build (SAGESim build_communication_maps Phase 2b), so
+        # no local breed declaration is needed here — register_remote_agents stays
+        # (agent_id -> rank) only.
+
+        # Free the transient build buffers
+        self._bulk_agents = []
+        self._bulk_adjacency = {}
+        return local_sites
 
     def connect_torus_sites(self, width, height, site_agents_dict):
         """Connect sites in torus topology (8-neighbor Moore with wraparound).
