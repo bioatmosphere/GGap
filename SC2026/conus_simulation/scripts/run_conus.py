@@ -393,7 +393,7 @@ def initialize_simulation(model, partition_map, directed_edges, site_locations,
     t_start = time.time()
 
     model.register_breed_local_arrays()
-    model.setup(use_gpu=True)
+    model.setup()
 
     t_setup = time.time() - t_start
     log(f"  GPU setup completed in {t_setup:.2f}s")

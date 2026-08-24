@@ -171,7 +171,7 @@ def run_strong_scaling_test(args):
         model._max_blocks_per_sm = args.max_blocks_per_sm
 
     t0 = time.time()
-    model.setup(use_gpu=True)
+    model.setup()
     result['gpu_setup_time'] = time.time() - t0
 
     if rank == 0:
