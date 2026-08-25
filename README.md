@@ -205,4 +205,4 @@ Each simulation tick (= 1 year) executes 7 GPU kernels in priority order:
 
 ## License
 
-Compatible with GAPpy and SAGESim licenses.
+MIT — see [LICENSE](LICENSE).
