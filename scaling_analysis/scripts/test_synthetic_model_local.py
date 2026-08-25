@@ -256,7 +256,7 @@ def run_gpu_simulation(sites_per_gpu, grid_height, num_gaps, maxtrees, ticks):
     # B.7 GPU setup
     print("[B.7] GPU setup...")
     t0 = time.time()
-    model.setup(use_gpu=True)
+    model.setup()
     timings['gpu_setup'] = time.time() - t0
     print(f"  OK ({timings['gpu_setup']:.2f}s)")
 

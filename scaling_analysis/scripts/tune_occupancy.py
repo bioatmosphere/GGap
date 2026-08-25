@@ -112,7 +112,7 @@ def test_configuration(num_sites, max_blocks_per_sm, num_ticks=20, num_gaps=500,
         # GPU setup
         print(f"[DIAGNOSTIC] Starting GPU setup...", flush=True)
         t_start = time.time()
-        model.setup(use_gpu=True)
+        model.setup()
         setup_time = time.time() - t_start
         print(f"[DIAGNOSTIC] GPU setup completed in {setup_time:.2f}s", flush=True)
 

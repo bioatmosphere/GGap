@@ -160,7 +160,7 @@ SAGESim is a GPU-accelerated agent-based modeling framework with double-bufferin
    - Use double-buffering pattern for race-free writes
 
 3. **Model Execution Flow**:
-   - `model.setup(use_gpu=True)` - Initialize breeds, analyze step functions, generate GPU kernels
+   - `model.setup()` - Initialize breeds, analyze step functions, generate GPU kernels
    - `model.simulate(ticks, sync_workers_every_n_ticks)` - Run simulation for N ticks
    - MPI synchronization occurs every N ticks across workers
 
@@ -295,7 +295,7 @@ When implementing UVAFME processes as GPU kernels:
 
 ### Debugging GPU Kernels
 
-- Start with CPU mode: `model.setup(use_gpu=False)` (if supported)
+- There is no CPU mode: SAGESim always executes via CuPy kernels
 - Print statements don't work in GPU kernels - use global properties for debugging
 - Check generated kernel code in `step_func_code.py`
 - Use small agent counts and few ticks for rapid iteration

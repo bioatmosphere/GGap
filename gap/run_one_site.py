@@ -215,7 +215,7 @@ def main():
     model.register_breed_local_arrays()
 
     # Setup model (generates GPU kernels)
-    model.setup(use_gpu=True)
+    model.setup()
 
     t_setup_end = time.time()
 

@@ -86,7 +86,7 @@ def test_one_sm_value(num_sites, max_blocks_per_sm, num_ticks=3):
         # Setup GPU
         print("  Setting up GPU...", flush=True)
         t_start = time.time()
-        model.setup(use_gpu=True)
+        model.setup()
         setup_time = time.time() - t_start
         print(f"    Setup time: {setup_time:.2f}s")
 

@@ -47,6 +47,7 @@ MAXTREES=1000
 YEARS=1000
 REPORT_INTERVAL=10
 DISPERSAL_FACTOR=2.0
+SEED=42
 
 echo ""
 echo "======================================================================"
@@ -71,6 +72,7 @@ srun -n $((SLURM_JOB_NUM_NODES * 8)) \
      --maxtrees $MAXTREES \
      --years $YEARS \
      --report_interval $REPORT_INTERVAL \
+     --seed $SEED \
      --output_dir ../results/simulation
 
 EXIT_CODE=$?

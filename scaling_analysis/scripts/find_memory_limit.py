@@ -108,7 +108,7 @@ def test_sites(num_sites, num_gaps=500, maxtrees=1000, neighbors_per_site=10):
         # Setup GPU
         t_start = time.time()
         print(f"  Setting up GPU...", flush=True)
-        model.setup(use_gpu=True)
+        model.setup()
         timings['gpu_setup'] = time.time() - t_start
         print(f"    GPU setup in {timings['gpu_setup']:.2f}s", flush=True)
 

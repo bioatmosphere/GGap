@@ -57,7 +57,7 @@ model.initialize_site_with_gaps(site_id, num_gaps=10, maxtrees=100, prefix='CONU
 model._max_blocks_per_sm = 4
 
 print("   Running setup...")
-model.setup(use_gpu=True)
+model.setup()
 
 print("\n   Running 1 tick (AMD detection happens at kernel launch)...")
 model.simulate(ticks=1, sync_workers_every_n_ticks=1)

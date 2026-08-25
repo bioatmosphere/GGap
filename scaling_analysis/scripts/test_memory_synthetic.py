@@ -57,7 +57,7 @@ def test_sites(num_sites, data_dir, prefix="SYNTHETIC"):
         timings['register'] = time.time() - t0
 
         t0 = time.time()
-        model.setup(use_gpu=True)
+        model.setup()
         timings['gpu_setup'] = time.time() - t0
 
         if HAS_CUPY:

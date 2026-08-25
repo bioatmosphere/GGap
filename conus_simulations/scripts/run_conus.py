@@ -359,6 +359,7 @@ def initialize_simulation(model, partition_map, directed_edges, site_locations,
     log(f"  Rank {rank}: initializing sites with {num_gaps} gaps, {maxtrees} maxtrees each...", force=True)
 
     local_sites = []
+    site_to_agent = {}
     for site_id in local_site_ids:
         site = model.initialize_site_with_gaps(
             site_id=site_id,
@@ -368,6 +369,7 @@ def initialize_simulation(model, partition_map, directed_edges, site_locations,
             prefix=prefix
         )
         local_sites.append(site)
+        site_to_agent[site_id] = site['site_agent_id']
 
     t_init = time.time() - t_start
     log(f"  Rank {rank}: site initialization completed in {t_init:.2f}s", force=True)
@@ -376,24 +378,32 @@ def initialize_simulation(model, partition_map, directed_edges, site_locations,
     log("  Connecting sites for seed dispersal...")
     t_start = time.time()
 
-    # Apply directed edges (reader can read from source)
+    # directed_edges holds SITE ids, but connect_agents takes AGENT ids, so map
+    # through site_to_agent. Agent ids here are per-rank creation order, so a
+    # source living on another rank has no id nameable from here; count those
+    # rather than passing a site id through and silently wiring a wrong agent.
+    n_connected = 0
+    n_remote_skipped = 0
     for reader_site, source_site, distance in directed_edges:
-        # Only connect if both sites exist (might be on different ranks)
-        try:
-            model.connect_agents(reader_site, source_site, directed=True)
-        except:
-            # Sites might not be initialized yet on other ranks
-            pass
+        if reader_site not in site_to_agent:
+            continue  # this rank only owns edges whose reader lives here
+        if source_site not in site_to_agent:
+            n_remote_skipped += 1
+            continue
+        model.connect_agents(site_to_agent[reader_site],
+                             site_to_agent[source_site], directed=True)
+        n_connected += 1
 
     t_connect = time.time() - t_start
-    log(f"  Site connections completed in {t_connect:.2f}s")
+    log(f"  Rank {rank}: site connections completed in {t_connect:.2f}s "
+        f"({n_connected} wired, {n_remote_skipped} cross-rank skipped)", force=True)
 
     # Register local arrays and setup GPU
     log("  Setting up GPU kernels...")
     t_start = time.time()
 
     model.register_breed_local_arrays()
-    model.setup(use_gpu=True)
+    model.setup()
 
     t_setup = time.time() - t_start
     log(f"  GPU setup completed in {t_setup:.2f}s")
@@ -642,6 +652,10 @@ def main():
     parser.add_argument("--test", action="store_true",
                        help="Test mode: use smaller subset of sites")
 
+    parser.add_argument("--seed", type=int, default=42,
+                       help="RNG seed (same on all ranks -> reproducible & partition-invariant). "
+                            "SAGESim defaults to a random per-process seed if unset.")
+
     args = parser.parse_args()
 
     # Verify MPI configuration matches expected partitions
@@ -659,9 +673,14 @@ def main():
     )
 
     # Initialize GGap model
-    # TODO: Add --seed argument and call model.set_seed(seed) for deterministic
-    # results in future runs. Without it, each run uses a different random seed.
     model = GAPModel()
+    # Fix the RNG seed IDENTICALLY on every rank. SAGESim otherwise picks a random
+    # per-process seed, which makes runs irreproducible AND gives each rank a
+    # different seed in a multi-rank run. The RNG is keyed on logical_ids
+    # (partition-invariant), so a shared fixed seed makes 1-GPU and N-GPU runs
+    # produce identical results.
+    model.set_seed(args.seed)
+    log(f"  RNG seed set to {args.seed} (identical on all ranks)")
 
     local_sites = initialize_simulation(
         model=model,

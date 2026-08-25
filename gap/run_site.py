@@ -148,7 +148,7 @@ def main():
 
     # Register breed-local arrays and setup model (generates GPU kernels)
     model.register_breed_local_arrays()
-    model.setup(use_gpu=True)
+    model.setup()
 
     if rank == 0:
         print("Starting simulation...")

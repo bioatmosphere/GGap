@@ -385,7 +385,7 @@ model.connect_sites()
 model._verbose_timing = True
 
 # Run simulation
-model.setup(use_gpu=True)
+model.setup()
 model.simulate(ticks=args.years, sync_workers_every_n_ticks=1)
 
 # Export timing (rank 0 only)

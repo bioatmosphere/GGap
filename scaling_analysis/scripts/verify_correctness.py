@@ -49,7 +49,7 @@ def run_test():
 
     # Setup GPU
     print("Setting up GPU...")
-    model.setup(use_gpu=True)
+    model.setup()
 
     # Run simulation
     print("\nRunning 5 ticks...")

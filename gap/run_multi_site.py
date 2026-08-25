@@ -264,7 +264,7 @@ def main():
     model.register_breed_local_arrays()
     if rank == 0:
         print("\nSetting up GPU kernels...")
-    model.setup(use_gpu=True)
+    model.setup()
 
     t_setup_end = time.time()
     if rank == 0:

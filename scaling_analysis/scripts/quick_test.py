@@ -88,7 +88,7 @@ def main():
 
         # Setup GPU
         print("7. Setting up GPU...")
-        model.setup(use_gpu=True)
+        model.setup()
         print("   ✓ GPU setup complete")
 
         # Memory after setup
