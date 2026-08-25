@@ -18,6 +18,7 @@ Usage:
 
 import argparse
 import csv
+import json
 import math
 import os
 import sys
@@ -319,16 +320,49 @@ def build_network_and_partition(data_dir, prefix, dispersal_factor, num_parts):
     return partition_map, directed_edges, site_locations
 
 
-def initialize_simulation(model, partition_map, directed_edges, site_locations,
-                         num_gaps, maxtrees, data_dir, prefix):
+def load_rank_partition(partition_dir, my_rank, num_workers):
+    """Load only this rank's slice of the dispersal network.
+
+    Written by build_network_partition.py --write_partitions. Avoids every rank
+    rebuilding the full O(N^2) haversine graph and re-running METIS.
+
+    :return: (all_site_ids, local_site_ids, local_edges, remote_source_ranks)
     """
-    Initialize GGap simulation with partitioned sites.
+    manifest_path = os.path.join(partition_dir, "manifest.json")
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+
+    if manifest['num_ranks'] != num_workers:
+        raise RuntimeError(
+            f"Partition set in {partition_dir} was built for "
+            f"{manifest['num_ranks']} ranks but this job has {num_workers}. "
+            f"Regenerate with: build_network_partition.py --num_ranks {num_workers} "
+            f"--write_partitions {partition_dir}"
+        )
+
+    part_path = os.path.join(partition_dir, f"partition_{my_rank}.pkl")
+    with open(part_path, 'rb') as f:
+        part = pickle.load(f)
+
+    log(f"  Rank {my_rank}: loaded {len(part['local_site_ids'])} sites, "
+        f"{len(part['local_edges'])} local edges, "
+        f"{len(part['remote_source_ranks'])} remote sources", force=True)
+
+    return (part['all_site_ids'], part['local_site_ids'],
+            part['local_edges'], part['remote_source_ranks'])
+
+
+def initialize_simulation(model, all_site_ids, local_site_ids, local_edges,
+                         remote_source_ranks, num_gaps, maxtrees, data_dir, prefix):
+    """
+    Initialize GGap simulation from this rank's slice of the network.
 
     Args:
         model: GAPModel instance
-        partition_map: dict {site_id: partition_id}
-        directed_edges: list of (reader, source, distance) tuples
-        site_locations: dict {site_id: {'latitude': ..., 'longitude': ...}}
+        all_site_ids: sorted global site list (needed for the agent-ID layout)
+        local_site_ids: sites owned by this rank
+        local_edges: (reader, source, distance) tuples whose reader is local
+        remote_source_ranks: {source_site: owning_rank} for non-local sources
         num_gaps: gaps per site
         maxtrees: max trees per gap
         data_dir: input data directory
@@ -347,56 +381,30 @@ def initialize_simulation(model, partition_map, directed_edges, site_locations,
     log("  Loading global species and site data...")
     model.load_globals(data_dir=data_dir, prefix=prefix)
 
-    # Apply METIS partition map
-    all_site_ids = sorted(partition_map.keys())
-    model._site_partition = partition_map
+    log(f"  Rank {rank}: {len(local_site_ids)} sites, {len(local_edges)} dispersal edges",
+        force=True)
 
-    # Determine local sites for this rank
-    local_site_ids = [site_id for site_id in all_site_ids if partition_map[site_id] == rank]
-    log(f"  Rank {rank}: assigned {len(local_site_ids)} sites", force=True)
+    # Bulk-build this rank's sites with globally-unique, partition-independent
+    # agent IDs, wire the site/gap/tree hierarchy AND site->site dispersal, and
+    # hand it all to SAGESim in one build_from_local_data call. Cross-rank
+    # sources are declared as ghost neighbours so they are exchanged each tick.
+    log(f"  Rank {rank}: building sites with {num_gaps} gaps, {maxtrees} maxtrees each...",
+        force=True)
 
-    # Initialize local sites and collect site metadata
-    log(f"  Rank {rank}: initializing sites with {num_gaps} gaps, {maxtrees} maxtrees each...", force=True)
-
-    local_sites = []
-    site_to_agent = {}
-    for site_id in local_site_ids:
-        site = model.initialize_site_with_gaps(
-            site_id=site_id,
-            num_gaps=num_gaps,
-            maxtrees=maxtrees,
-            data_dir=data_dir,
-            prefix=prefix
-        )
-        local_sites.append(site)
-        site_to_agent[site_id] = site['site_agent_id']
+    local_sites = model.build_conus_local(
+        all_site_ids=all_site_ids,
+        local_site_ids=local_site_ids,
+        num_gaps=num_gaps,
+        maxtrees=maxtrees,
+        data_dir=data_dir,
+        prefix=prefix,
+        partition_map=remote_source_ranks,
+        directed_edges=local_edges,
+        rank=rank,
+    )
 
     t_init = time.time() - t_start
-    log(f"  Rank {rank}: site initialization completed in {t_init:.2f}s", force=True)
-
-    # Connect sites for dispersal
-    log("  Connecting sites for seed dispersal...")
-    t_start = time.time()
-
-    # directed_edges holds SITE ids, but connect_agents takes AGENT ids, so map
-    # through site_to_agent. Agent ids here are per-rank creation order, so a
-    # source living on another rank has no id nameable from here; count those
-    # rather than passing a site id through and silently wiring a wrong agent.
-    n_connected = 0
-    n_remote_skipped = 0
-    for reader_site, source_site, distance in directed_edges:
-        if reader_site not in site_to_agent:
-            continue  # this rank only owns edges whose reader lives here
-        if source_site not in site_to_agent:
-            n_remote_skipped += 1
-            continue
-        model.connect_agents(site_to_agent[reader_site],
-                             site_to_agent[source_site], directed=True)
-        n_connected += 1
-
-    t_connect = time.time() - t_start
-    log(f"  Rank {rank}: site connections completed in {t_connect:.2f}s "
-        f"({n_connected} wired, {n_remote_skipped} cross-rank skipped)", force=True)
+    log(f"  Rank {rank}: build_from_local_data completed in {t_init:.2f}s", force=True)
 
     # Register local arrays and setup GPU
     log("  Setting up GPU kernels...")
@@ -652,6 +660,12 @@ def main():
     parser.add_argument("--test", action="store_true",
                        help="Test mode: use smaller subset of sites")
 
+    parser.add_argument("--partition_dir", type=str, default=None,
+                       help="Directory of partition_{rank}.pkl files from "
+                            "build_network_partition.py --write_partitions. When set, each rank "
+                            "loads only its own slice instead of every rank rebuilding the full "
+                            "dispersal graph and re-running METIS.")
+
     parser.add_argument("--seed", type=int, default=42,
                        help="RNG seed (same on all ranks -> reproducible & partition-invariant). "
                             "SAGESim defaults to a random per-process seed if unset.")
@@ -664,13 +678,26 @@ def main():
         log("  For production run: use -n 160")
         log("  For testing: add --test flag")
 
-    # Build network and partition
-    partition_map, directed_edges, site_locations = build_network_and_partition(
-        data_dir=args.data_dir,
-        prefix=args.prefix,
-        dispersal_factor=args.dispersal_factor,
-        num_parts=num_workers  # Use actual MPI rank count
-    )
+    # Network: either load this rank's precomputed partition (distributed), or
+    # fall back to every rank rebuilding the whole graph (legacy path).
+    if args.partition_dir:
+        all_site_ids, local_site_ids, local_edges, remote_source_ranks = \
+            load_rank_partition(args.partition_dir, rank, num_workers)
+    else:
+        partition_map, directed_edges, _site_locations = build_network_and_partition(
+            data_dir=args.data_dir,
+            prefix=args.prefix,
+            dispersal_factor=args.dispersal_factor,
+            num_parts=num_workers  # Use actual MPI rank count
+        )
+        all_site_ids = sorted(partition_map.keys())
+        local_set = {s for s in all_site_ids if partition_map[s] == rank}
+        local_site_ids = [s for s in all_site_ids if s in local_set]
+        local_edges = [e for e in directed_edges if e[0] in local_set]
+        remote_source_ranks = {
+            src: int(partition_map[src]) for _r, src, _d in local_edges
+            if src not in local_set
+        }
 
     # Initialize GGap model
     model = GAPModel()
@@ -684,9 +711,10 @@ def main():
 
     local_sites = initialize_simulation(
         model=model,
-        partition_map=partition_map,
-        directed_edges=directed_edges,
-        site_locations=site_locations,
+        all_site_ids=all_site_ids,
+        local_site_ids=local_site_ids,
+        local_edges=local_edges,
+        remote_source_ranks=remote_source_ranks,
         num_gaps=args.num_gaps,
         maxtrees=args.maxtrees,
         data_dir=args.data_dir,

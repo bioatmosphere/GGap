@@ -2,6 +2,7 @@
 #SBATCH -A lrn088
 #SBATCH -J conus_ggap
 #SBATCH -N 20
+#SBATCH --gpus-per-node=8
 #SBATCH -q debug
 #SBATCH -t 2:00:00
 #SBATCH -o ../logs/conus_%j.out
@@ -30,13 +31,16 @@ unset SLURM_EXPORT_ENV
 
 # Load Frontier modules (matching working scaling_analysis configuration)
 echo "Loading modules..."
-module load PrgEnv-gnu/8.6.0
-module load rocm/6.4.1
+module load cpe/26.03
+module load PrgEnv-gnu
+module load miniforge3
+module load rocm/7.2.0
 module load craype-accel-amd-gfx90a
-module load metis/5.1.0
+module load metis/5.1.0   # gpmetis on PATH for run_conus.py partitioning
 
 # Activate conda environment
 source activate /lustre/orion/proj-shared/lrn088/objective3/envs/sagesim_env
+export LD_LIBRARY_PATH=$CRAY_LD_LIBRARY_PATH:$LD_LIBRARY_PATH
 
 # Enable GPU-aware MPI
 export MPICH_GPU_SUPPORT_ENABLED=1

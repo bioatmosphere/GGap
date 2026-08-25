@@ -23,8 +23,10 @@ Usage:
 
 import argparse
 import csv
+import json
 import math
 import os
+import pickle
 import sys
 import time
 from collections import defaultdict
@@ -493,6 +495,63 @@ def write_outputs(partition_map, directed_edges, site_max_dispersal, site_locati
     print(f"  {dispersal_file}")
 
 
+def write_rank_partitions(partition_map, directed_edges, num_ranks,
+                          dispersal_factor, prefix, out_dir):
+    """Write one partition file per rank for distributed loading.
+
+    Each rank needs only its own sites, the dispersal edges it reads, and the
+    owning rank of any source that lives elsewhere -- never the full O(N^2)
+    haversine graph. all_site_ids is kept global because the agent-ID layout
+    (GAPModel.compute_agent_id_layout) is a prefix sum over every site; it is a
+    plain list of ints, so it costs nothing to carry.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+
+    all_site_ids = sorted(partition_map.keys())
+    local_by_rank = defaultdict(list)
+    for site_id in all_site_ids:
+        local_by_rank[partition_map[site_id]].append(site_id)
+
+    edges_by_rank = defaultdict(list)
+    for reader, source, dist in directed_edges:
+        edges_by_rank[partition_map[reader]].append((reader, source, dist))
+
+    for rank in range(num_ranks):
+        local_site_ids = local_by_rank.get(rank, [])
+        local_set = set(local_site_ids)
+        local_edges = edges_by_rank.get(rank, [])
+        remote_source_ranks = {
+            source: int(partition_map[source])
+            for _reader, source, _dist in local_edges
+            if source not in local_set
+        }
+        payload = {
+            'all_site_ids': all_site_ids,
+            'local_site_ids': local_site_ids,
+            'local_edges': local_edges,
+            'remote_source_ranks': remote_source_ranks,
+        }
+        with open(os.path.join(out_dir, f"partition_{rank}.pkl"), 'wb') as f:
+            pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    manifest = {
+        'num_ranks': num_ranks,
+        'dispersal_factor': dispersal_factor,
+        'prefix': prefix,
+        'num_sites': len(all_site_ids),
+        'num_directed_edges': len(directed_edges),
+    }
+    with open(os.path.join(out_dir, "manifest.json"), 'w') as f:
+        json.dump(manifest, f, indent=2)
+
+    n_remote = sum(
+        1 for reader, source, _d in directed_edges
+        if partition_map[reader] != partition_map[source]
+    )
+    print(f"  {num_ranks} partition files -> {out_dir}")
+    print(f"  cross-rank edges: {n_remote} of {len(directed_edges)}")
+
+
 def print_statistics(stats, site_max_dispersal, num_parts):
     """Print partition statistics to console."""
     print("\nPartition Statistics:")
@@ -562,6 +621,21 @@ def main():
         default="../results",
         help="Output directory (default: ../results)"
     )
+    parser.add_argument("--min_lat", type=float, default=None,
+                        help="Region filter: minimum latitude (see tn_example for the TN box)")
+    parser.add_argument("--max_lat", type=float, default=None,
+                        help="Region filter: maximum latitude")
+    parser.add_argument("--min_lon", type=float, default=None,
+                        help="Region filter: minimum longitude")
+    parser.add_argument("--max_lon", type=float, default=None,
+                        help="Region filter: maximum longitude")
+    parser.add_argument(
+        "--write_partitions",
+        type=str,
+        default=None,
+        help="Also write per-rank partition_{rank}.pkl + manifest.json to this directory, "
+             "for run_conus.py --partition_dir (distributed loading)"
+    )
 
     args = parser.parse_args()
 
@@ -584,6 +658,25 @@ def main():
 
     t_start = time.time()
     site_locations = load_site_locations(args.data_dir, args.prefix)
+    all_site_ids_full = sorted(site_locations.keys())
+    if any(v is not None for v in (args.min_lat, args.max_lat, args.min_lon, args.max_lon)):
+        def _keep(sid):
+            loc = site_locations[sid]
+            lat, lon = loc['latitude'], loc['longitude']
+            if args.min_lat is not None and lat < args.min_lat:
+                return False
+            if args.max_lat is not None and lat > args.max_lat:
+                return False
+            if args.min_lon is not None and lon < args.min_lon:
+                return False
+            if args.max_lon is not None and lon > args.max_lon:
+                return False
+            return True
+        kept = [sid for sid in all_site_ids_full if _keep(sid)]
+        if not kept:
+            raise ValueError("Region filter selected 0 sites - widen the bounds.")
+        site_locations = {sid: site_locations[sid] for sid in kept}
+        print(f"  Region filter: {len(kept)} of {len(all_site_ids_full)} sites selected")
     all_site_ids = sorted(site_locations.keys())
     print(f"  Sites: {len(all_site_ids)} from {args.prefix}_site.csv")
 
@@ -658,6 +751,12 @@ def main():
         partition_map, directed_edges, site_max_dispersal,
         site_locations, rangelist, stats, args.results_dir
     )
+
+    if args.write_partitions:
+        write_rank_partitions(
+            partition_map, directed_edges, args.num_ranks,
+            args.dispersal_factor, args.prefix, args.write_partitions
+        )
 
     # Summary
     t_total = time.time() - t_total_start
