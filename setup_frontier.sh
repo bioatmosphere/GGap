@@ -1,14 +1,11 @@
 #!/bin/bash
 # Environment setup for GGap on OLCF Frontier
 #
-# Uses the shared sagesim_env directly.
+# Delegates to the project-wide runtime script (modules, ggap_dev conda env,
+# LD_LIBRARY_PATH, cache dirs, MPICH_GPU_SUPPORT_ENABLED). Edit that file, not this one.
 #
 # Usage: source setup_frontier.sh
 
-module load miniforge3/23.11.0-0
-module load cpe/25.09
-module load rocm/6.4.2
+source /lustre/orion/proj-shared/cli215/setup.sh
 
-source activate /lustre/orion/proj-shared/lrn088/objective3/envs/sagesim_env
-
-echo "GGap environment ready."
+echo "GGap environment ready: $(which python)"
